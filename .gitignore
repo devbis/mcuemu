@@ -1,0 +1,14 @@
+/build/
+/tmp/
+/vendor/
+/engine/unicorn/
+/firmware/*
+!/firmware/.gitkeep
+*.bin
+*.elf
+*.hex
+*.map
+*.o
+*.a
+*.dSYM/
+.DS_Store
