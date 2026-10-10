@@ -40,8 +40,10 @@ faulting PC and instruction word.
 
 The board adapter checks modeled interrupt state between Unicorn execution
 steps, banks IRQ state through the TC32 register API, and enters the vector at
-`0x10`. Timer and UART are the only modeled interrupt sources so far. The
-wrapper treats `0xcfxx` as a board-test semihosting stop marker; it is not
+`0x10`. TC32 `treti {pc}` consumes the saved return PC from the active IRQ
+stack, advances that stack, and restores CPSR from SPSR before resuming the
+interrupted mode. Timer and UART are the only modeled interrupt sources so far.
+The wrapper treats `0xcfxx` as a board-test semihosting stop marker; it is not
 claimed as a TC32 ISA instruction.
 
 Each executed instruction advances an estimated three modeled CPU cycles

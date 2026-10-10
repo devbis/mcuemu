@@ -23,8 +23,11 @@ Run a raw flash image from address zero:
 ./build/tc32-emu run --model TLSR8258F512 --firmware firmware/sample.bin --steps 100000
 ```
 
-The CLI can trace instructions and MMIO accesses to stderr. Ranges are
-inclusive, and each trace stream is capped at 10,000 events by default:
+The CLI can trace instructions, MMIO accesses, and stack or mode changes to
+stderr. Ranges are inclusive, and each trace stream is capped at 10,000 events
+by default. `--trace-after-step` delays traces until the selected instruction
+count; `--fault-trace` prints a ring buffer of recent instructions if the CPU
+faults. Network runs can restrict traces to one node with `--trace-node`:
 
 ```sh
 ./build/tc32-emu run --firmware firmware/sample.bin --steps 100000 \
@@ -32,9 +35,20 @@ inclusive, and each trace stream is capped at 10,000 events by default:
   --trace-limit 1000
 ```
 
+For example, to trace the IRQ vector on one node and retain recent instructions
+for a possible fault:
+
+```sh
+./build/tc32-emu network \
+  --node coordinator=firmware/coordinator.bin \
+  --node light=firmware/sampleLight.bin --steps 30000000 \
+  --trace-node light --trace-pc-range 0x220:0x250 \
+  --trace-stack --trace-after-step 1000000 --fault-trace 64
+```
+
 Run multiple raw images against one virtual Zigbee medium with a shared model
 and channel. Each node advances in short instruction batches, and the command
-prints the frames observed in the medium:
+prints transmitted frames and successful packet receptions:
 
 ```sh
 ./build/tc32-emu network \
@@ -42,6 +56,11 @@ prints the frames observed in the medium:
   --node light=firmware/sampleLight.bin \
   --model TLSR8258F512 --channel 15 --steps 1000000
 ```
+
+Add `--radio-payloads` to include raw frame bytes in the output when examining
+MAC discovery and commissioning traffic. `--dump-sram NAME=ADDRESS:LENGTH`
+prints a selected range from one node's SRAM after execution, which is useful
+for checking firmware state against local ELF symbols.
 
 `firmware/` is local-only. Images and build products are ignored by git.
 `tc32-emu models` lists the supported flash capacities.
@@ -66,14 +85,19 @@ prints the frames observed in the medium:
 
 This is an early emulator, not yet a complete vendor-firmware environment. TC32
 instruction coverage and TLSR8258 peripheral behavior still need validation
-against hardware. A local Zigbee `sampleLight` image ran 100 million
-instructions without a CPU fault after adding the instruction-fetch alias for
-its code in the SRAM cache window. This verifies continued execution, but does
-not yet verify firmware-driven packet exchange. In a two-node run the image
-emits 8-byte Zigbee frames on channels 11 and 12, then faults while returning
-from a task-queue function with its stack pointer at the end of mapped SRAM.
-The board models can also exchange a test MAC payload through RF DMA and
-virtual air.
+against hardware. A two-node run with local `sampleLight` and an SDK-built
+`sampleGW` coordinator executed 200 million instructions per node without a
+CPU fault; the medium recorded 47 Zigbee transmissions and 32 successful
+receptions. `--dump-sram` showed the SDK `zb_isDeviceJoinedNwk()` state as
+joined for the coordinator and not joined for the light. In the SDK context
+byte at offset `0x2d`, `0x96` means the coordinator is joined and has
+`permit_join` and `joinAccept` set; the light's `0x01` means it remains factory
+new. The capture has no MAC beacon response or association request. The TC32
+`treti {pc}` implementation restores its return address from the IRQ stack and
+switches back to the saved CPU mode, matching the vendor IRQ wrapper. SDK
+diagnostics show zero RX CRC failures and nonzero RX IRQ counts on both nodes,
+so the remaining issue is after RF DMA delivery. BLE is deferred while Zigbee
+discovery and association are being debugged.
 
 ## Project layout
 

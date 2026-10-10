@@ -40,12 +40,20 @@ does not decode or execute TC32 instructions itself. The wrapper currently
 provides a `0xcfxx` semihosting stop marker for board tests. That marker is a
 wrapper convention and is not claimed as a TC32 ISA instruction.
 
-This is an initial TC32 backend and board model. A local `sampleLight` image
-has run 100 million instructions without a CPU fault, but complete vendor ISA
-coverage and firmware-driven Zigbee packet exchange are not established. In
-the multi-node runner, `sampleLight` emits packets on channels 11 and 12, then
-faults on a stack read beyond `0x850000`; the local coordinator images did not
-transmit. Continue by comparing executed firmware instructions and peripheral
-accesses against the local architecture documents and Telink SDK behavior,
-then add only the required architectural or device semantics in the
-appropriate layer.
+This is an initial TC32 backend and board model. A two-node run with local
+`sampleLight` and an SDK-built `sampleGW` coordinator executed 200 million
+instructions on each node without a CPU fault. The packet-level medium recorded
+47 Zigbee transmissions and 32 successful receptions. The SDK
+`zb_isDeviceJoinedNwk()` reads bit 2 at `g_zbNwkCtx + 0x2d`; SRAM dumps showed
+the coordinator joined (`0x96`) and the light remains factory new (`0x01`). The
+coordinator's state byte also has `permit_join` and `joinAccept` set, but the
+capture has no MAC beacon response or association request.
+SDK diagnostics show zero RX CRC failures, 16 RX IRQs at the coordinator, 12
+at the light, and no coordinator join indication.
+Correct `treti {pc}` behavior fixed the earlier false return into a task-queue
+epilogue: it consumes the saved IRQ return address from the IRQ stack before
+restoring the saved CPU mode. This verifies firmware-driven RF DMA and
+bidirectional packet delivery. The coordinator formed a network and accepts
+joins, but the light did not join during this run. Complete vendor ISA coverage
+remains unestablished. Continue by inspecting Beacon Request handling and the
+corresponding radio behavior; keep BLE deferred.

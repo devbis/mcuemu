@@ -3,6 +3,7 @@
 #include "tc32emu/tlsr8258.hpp"
 #include "unicorn/unicorn.h"
 
+#include <algorithm>
 #include <array>
 #include <iomanip>
 #include <ostream>
@@ -123,6 +124,8 @@ void Cpu::reset(std::uint32_t pc_value) {
     previous_pc_ = 0;
     previous_instruction_ = 0;
     executed_instructions_ = 0;
+    recent_trace_head_ = 0;
+    recent_trace_count_ = 0;
     instruction_seen_ = false;
 }
 
@@ -196,6 +199,41 @@ void Cpu::set_mmio_trace(std::ostream *output,
     mmio_trace_limit_reported_ = false;
 }
 
+void Cpu::set_stack_trace(std::ostream *output) {
+    stack_trace_output_ = output;
+    stack_trace_count_ = 0;
+    stack_trace_limit_reported_ = false;
+    has_stack_snapshot_ = false;
+}
+
+void Cpu::set_trace_prefix(std::string prefix) {
+    trace_prefix_ = std::move(prefix);
+}
+
+void Cpu::set_recent_trace_capacity(std::size_t capacity) {
+    recent_trace_.assign(capacity, {});
+    recent_trace_head_ = 0;
+    recent_trace_count_ = 0;
+    has_stack_snapshot_ = false;
+}
+
+void Cpu::dump_recent_trace(std::ostream &output) const {
+    if (recent_trace_.empty())
+        return;
+    output << trace_prefix_ << "recent instructions (oldest first):\n";
+    const std::size_t oldest =
+        (recent_trace_head_ + recent_trace_.size() - recent_trace_count_) %
+        recent_trace_.size();
+    for (std::size_t i = 0; i < recent_trace_count_; ++i) {
+        const TraceSnapshot &entry =
+            recent_trace_[(oldest + i) % recent_trace_.size()];
+        output << trace_prefix_ << "  pc=0x" << std::hex << entry.pc
+               << " opcode=0x" << std::setw(4) << std::setfill('0')
+               << entry.instruction << " sp=0x" << entry.sp
+               << " cpsr=0x" << entry.cpsr << std::dec << '\n';
+    }
+}
+
 void Cpu::emit_trace(std::ostream *output,
                      const std::optional<AddressRange> &range,
                      std::size_t &event_count, bool &limit_reported,
@@ -232,6 +270,7 @@ std::uint64_t Cpu::mmio_read(uc_struct *opaque, std::uint64_t offset,
         }
         const auto trace_address = static_cast<std::uint32_t>(binding->base + offset);
         if (self->mmio_trace_output_ &&
+            self->executed_instructions_ >= self->trace_after_step_ &&
             (!self->mmio_trace_range_ ||
              self->mmio_trace_range_->contains(trace_address))) {
             std::string message;
@@ -270,6 +309,7 @@ void Cpu::mmio_write(uc_struct *opaque, std::uint64_t offset, unsigned size,
         }
         const auto trace_address = static_cast<std::uint32_t>(binding->base + offset);
         if (self->mmio_trace_output_ &&
+            self->executed_instructions_ >= self->trace_after_step_ &&
             (!self->mmio_trace_range_ ||
              self->mmio_trace_range_->contains(trace_address))) {
             std::string message;
@@ -304,6 +344,34 @@ void Cpu::code_hook(uc_struct *opaque, std::uint64_t address,
     self->current_pc_ = static_cast<std::uint32_t>(address);
     ++self->executed_instructions_;
 
+    if (self->stack_trace_output_ &&
+        self->executed_instructions_ >= self->trace_after_step_) {
+        std::uint32_t stack_pointer = 0;
+        std::uint32_t status = 0;
+        auto *engine = reinterpret_cast<uc_engine *>(opaque);
+        if (uc_reg_read(engine, UC_TC32_REG_SP, &stack_pointer) == UC_ERR_OK &&
+            uc_reg_read(engine, UC_TC32_REG_CPSR, &status) == UC_ERR_OK) {
+            if (self->has_stack_snapshot_ &&
+                (stack_pointer != self->last_stack_pointer_ ||
+                 (status & mode_mask) != (self->last_stack_cpsr_ & mode_mask))) {
+                std::ostringstream trace;
+                trace << self->trace_prefix_ << "stack pc=0x" << std::hex
+                      << address << " sp=0x" << stack_pointer << " cpsr=0x"
+                      << status << " previous_sp=0x"
+                      << self->last_stack_pointer_ << " previous_cpsr=0x"
+                      << self->last_stack_cpsr_;
+                self->emit_trace(self->stack_trace_output_, std::nullopt,
+                                 self->stack_trace_count_,
+                                 self->stack_trace_limit_reported_,
+                                 static_cast<std::uint32_t>(address),
+                                 trace.str());
+            }
+            self->last_stack_pointer_ = stack_pointer;
+            self->last_stack_cpsr_ = status;
+            self->has_stack_snapshot_ = true;
+        }
+    }
+
     std::array<std::uint8_t, 2> bytes{};
     bool have_instruction = false;
     const std::uint64_t flash_offset =
@@ -328,17 +396,45 @@ void Cpu::code_hook(uc_struct *opaque, std::uint64_t address,
         self->previous_pc_ = static_cast<std::uint32_t>(address);
         self->previous_instruction_ = self->current_instruction_;
         self->has_previous_instruction_ = true;
+        if (!self->recent_trace_.empty()) {
+            std::uint32_t stack_pointer = 0;
+            std::uint32_t status = 0;
+            auto *engine = reinterpret_cast<uc_engine *>(opaque);
+            if (uc_reg_read(engine, UC_TC32_REG_SP, &stack_pointer) ==
+                    UC_ERR_OK &&
+                uc_reg_read(engine, UC_TC32_REG_CPSR, &status) == UC_ERR_OK) {
+                self->recent_trace_[self->recent_trace_head_] = {
+                    static_cast<std::uint32_t>(address), stack_pointer, status,
+                    self->current_instruction_};
+                self->recent_trace_head_ =
+                    (self->recent_trace_head_ + 1) % self->recent_trace_.size();
+                self->recent_trace_count_ = std::min(
+                    self->recent_trace_count_ + 1, self->recent_trace_.size());
+            }
+        }
         const auto trace_address = static_cast<std::uint32_t>(address);
         if (self->pc_trace_output_ &&
+            self->executed_instructions_ >= self->trace_after_step_ &&
             (!self->pc_trace_range_ ||
              self->pc_trace_range_->contains(trace_address))) {
             std::string message;
             if (self->pc_trace_count_ < self->trace_limit_) {
                 std::ostringstream trace;
-                trace << "pc=0x" << std::hex << address << " opcode=0x"
+                trace << self->trace_prefix_ << "pc=0x" << std::hex << address
+                      << " opcode=0x"
                       << std::setw(4) << std::setfill('0')
                       << self->current_instruction_ << " size=" << std::dec
                       << size << " step=" << self->executed_instructions_;
+                std::uint32_t stack_pointer = 0;
+                std::uint32_t status = 0;
+                auto *engine = reinterpret_cast<uc_engine *>(opaque);
+                if (uc_reg_read(engine, UC_TC32_REG_SP, &stack_pointer) ==
+                        UC_ERR_OK &&
+                    uc_reg_read(engine, UC_TC32_REG_CPSR, &status) ==
+                        UC_ERR_OK) {
+                    trace << " sp=0x" << std::hex << stack_pointer
+                          << " cpsr=0x" << status;
+                }
                 if (has_previous_instruction) {
                     trace << " from=0x" << std::hex << previous_pc
                           << " previous_opcode=0x" << std::setw(4)

@@ -24,6 +24,11 @@ struct RadioFrame {
     std::vector<std::uint8_t> payload;
 };
 
+struct RadioReception {
+    std::uint64_t frame_id{0};
+    std::string receiver;
+};
+
 class VirtualAir {
 public:
     std::uint64_t transmit(std::string source, std::string destination,
@@ -36,10 +41,14 @@ public:
                                     std::uint8_t channel,
                                     std::uint64_t at_ns);
     const std::vector<RadioFrame> &frames() const noexcept { return frames_; }
+    const std::vector<RadioReception> &receptions() const noexcept {
+        return receptions_;
+    }
 
 private:
     std::uint64_t next_id_{1};
     std::vector<RadioFrame> frames_;
+    std::vector<RadioReception> receptions_;
     std::vector<std::pair<std::uint64_t, std::string>> delivered_;
 };
 

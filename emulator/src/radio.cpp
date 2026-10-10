@@ -82,8 +82,10 @@ std::vector<RadioFrame> VirtualAir::receive(const std::string &node,
                 return other.start_ns < frame.end_ns && frame.start_ns < other.end_ns;
             });
         delivered_.emplace_back(frame.id, node);
-        if (!collided)
+        if (!collided) {
+            receptions_.push_back({frame.id, node});
             received.push_back(frame);
+        }
     }
     std::sort(received.begin(), received.end(), [](const auto &left, const auto &right) {
         if (left.end_ns != right.end_ns)

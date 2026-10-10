@@ -21,9 +21,14 @@ void usage(std::ostream &out) {
     out << "Usage: tc32-emu run --firmware IMAGE [--model MODEL] [--steps N]\n"
            "       [--trace-pc | --trace-pc-range START:END]\n"
            "       [--trace-mmio | --trace-mmio-range START:END]\n"
-           "       [--trace-limit N]\n"
+           "       [--trace-stack] [--trace-after-step N]\n"
+           "       [--trace-limit N] [--fault-trace N]\n"
            "       tc32-emu network --node NAME=IMAGE --node NAME=IMAGE\n"
            "       [--model MODEL] [--channel 11..26] [--steps N]\n"
+           "       [--trace-pc-range START:END] [--trace-mmio-range START:END]\n"
+           "       [--trace-stack] [--trace-node NAME] [--trace-after-step N]\n"
+           "       [--trace-limit N] [--fault-trace N] [--radio-payloads]\n"
+           "       [--dump-sram NAME=ADDRESS:LENGTH]\n"
            "       tc32-emu models\n\n"
            "Models: TLSR8258F512, TLSR8258F1K\n"
            "Firmware is loaded as a raw image at flash address 0.\n"
@@ -71,8 +76,11 @@ int run_command(int argc, char **argv) {
     std::string model = "TLSR8258F512";
     std::size_t steps = 100000;
     std::size_t trace_limit = 10000;
+    std::size_t trace_after_step = 0;
+    std::size_t fault_trace = 0;
     bool trace_pc = false;
     bool trace_mmio = false;
+    bool trace_stack = false;
     std::optional<tc32emu::AddressRange> pc_range;
     std::optional<tc32emu::AddressRange> mmio_range;
     for (int i = 2; i < argc; ++i) {
@@ -90,11 +98,17 @@ int run_command(int argc, char **argv) {
             trace_pc = true;
         } else if (arg == "--trace-mmio")
             trace_mmio = true;
+        else if (arg == "--trace-stack")
+            trace_stack = true;
         else if (arg == "--trace-mmio-range" && i + 1 < argc) {
             mmio_range = parse_range(argv[++i]);
             trace_mmio = true;
         } else if (arg == "--trace-limit" && i + 1 < argc)
             trace_limit = parse_count(argv[++i]);
+        else if (arg == "--trace-after-step" && i + 1 < argc)
+            trace_after_step = parse_count(argv[++i]);
+        else if (arg == "--fault-trace" && i + 1 < argc)
+            fault_trace = parse_count(argv[++i]);
         else if (arg == "--help" || arg == "-h") {
             usage(std::cout);
             return 0;
@@ -115,10 +129,14 @@ int run_command(int argc, char **argv) {
 
     tc32emu::Cpu cpu(device);
     cpu.set_trace_limit(trace_limit);
+    cpu.set_trace_after_step(trace_after_step);
+    cpu.set_recent_trace_capacity(fault_trace);
     if (trace_pc)
         cpu.set_pc_trace(&std::cerr, pc_range);
     if (trace_mmio)
         cpu.set_mmio_trace(&std::cerr, mmio_range);
+    if (trace_stack)
+        cpu.set_stack_trace(&std::cerr);
     const tc32emu::RunResult result = cpu.run(steps);
     std::cout << "model: " << tc32emu::model_name(tc32emu::parse_model(model)) << '\n'
               << "flash image: " << image.size() << " bytes\n"
@@ -131,6 +149,7 @@ int run_command(int argc, char **argv) {
     }
     if (result.reason == tc32emu::StopReason::Fault) {
         std::cerr << "CPU fault: " << result.message << '\n';
+        cpu.dump_recent_trace(std::cerr);
         return 1;
     }
     if (result.reason == tc32emu::StopReason::Halted)
@@ -149,10 +168,25 @@ struct NetworkNode {
     bool stopped{false};
 };
 
+struct SramDump {
+    std::string node_name;
+    std::uint32_t address;
+    std::size_t length;
+};
+
 int network_command(int argc, char **argv) {
     std::string model = "TLSR8258F512";
     std::uint8_t channel = 11;
     std::size_t steps = 1000000;
+    std::size_t trace_limit = 10000;
+    std::size_t trace_after_step = 0;
+    std::size_t fault_trace = 0;
+    std::optional<std::string> trace_node;
+    std::optional<tc32emu::AddressRange> pc_range;
+    std::optional<tc32emu::AddressRange> mmio_range;
+    bool trace_stack = false;
+    bool radio_payloads = false;
+    std::vector<SramDump> sram_dumps;
     std::vector<std::pair<std::string, std::string>> node_specs;
     for (int i = 2; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -173,6 +207,45 @@ int network_command(int argc, char **argv) {
             channel = static_cast<std::uint8_t>(parsed);
         } else if (arg == "--steps" && i + 1 < argc) {
             steps = parse_count(argv[++i]);
+        } else if (arg == "--trace-pc-range" && i + 1 < argc) {
+            pc_range = parse_range(argv[++i]);
+        } else if (arg == "--trace-mmio-range" && i + 1 < argc) {
+            mmio_range = parse_range(argv[++i]);
+        } else if (arg == "--trace-stack") {
+            trace_stack = true;
+        } else if (arg == "--radio-payloads") {
+            radio_payloads = true;
+        } else if (arg == "--dump-sram" && i + 1 < argc) {
+            const std::string spec = argv[++i];
+            const std::size_t equals = spec.find('=');
+            const std::size_t colon = spec.find(':', equals == std::string::npos
+                                                         ? 0
+                                                         : equals + 1);
+            if (equals == std::string::npos || equals == 0 ||
+                colon == std::string::npos || colon == equals + 1 ||
+                colon + 1 == spec.size())
+                throw std::invalid_argument(
+                    "SRAM dump must be NAME=ADDRESS:LENGTH: " + spec);
+            const std::string name = spec.substr(0, equals);
+            const std::uint32_t address =
+                parse_address(spec.substr(equals + 1, colon - equals - 1));
+            const std::size_t length = parse_count(spec.substr(colon + 1));
+            if (length == 0 || address < tc32emu::Tlsr8258::RetainedSramBase ||
+                address >= tc32emu::Tlsr8258::RetainedSramBase +
+                               tc32emu::Tlsr8258::SramSize ||
+                length > tc32emu::Tlsr8258::RetainedSramBase +
+                             tc32emu::Tlsr8258::SramSize - address)
+                throw std::invalid_argument(
+                    "SRAM dump range must fit mapped TLSR8258 SRAM: " + spec);
+            sram_dumps.push_back({name, address, length});
+        } else if (arg == "--trace-limit" && i + 1 < argc) {
+            trace_limit = parse_count(argv[++i]);
+        } else if (arg == "--trace-after-step" && i + 1 < argc) {
+            trace_after_step = parse_count(argv[++i]);
+        } else if (arg == "--fault-trace" && i + 1 < argc) {
+            fault_trace = parse_count(argv[++i]);
+        } else if (arg == "--trace-node" && i + 1 < argc) {
+            trace_node = argv[++i];
         } else if (arg == "--help" || arg == "-h") {
             usage(std::cout);
             return 0;
@@ -206,7 +279,27 @@ int network_command(int argc, char **argv) {
         node.device->connect_radio(air, node.name);
         node.device->set_radio_channel(channel);
         node.cpu = std::make_unique<tc32emu::Cpu>(*node.device);
+        if (!trace_node || *trace_node == node.name) {
+            node.cpu->set_trace_prefix("[" + node.name + "] ");
+            node.cpu->set_trace_limit(trace_limit);
+            node.cpu->set_trace_after_step(trace_after_step);
+            node.cpu->set_recent_trace_capacity(fault_trace);
+            if (pc_range)
+                node.cpu->set_pc_trace(&std::cerr, pc_range);
+            if (mmio_range)
+                node.cpu->set_mmio_trace(&std::cerr, mmio_range);
+            if (trace_stack)
+                node.cpu->set_stack_trace(&std::cerr);
+        }
         nodes.push_back(std::move(node));
+    }
+
+    for (const SramDump &dump : sram_dumps) {
+        if (std::none_of(nodes.begin(), nodes.end(), [&](const NetworkNode &node) {
+                return node.name == dump.node_name;
+            }))
+            throw std::invalid_argument("unknown node in SRAM dump: " +
+                                        dump.node_name);
     }
 
     // Advance each CPU in short, equal instruction quanta. This keeps virtual
@@ -234,6 +327,7 @@ int network_command(int argc, char **argv) {
                 std::cerr << "  SP=0x" << std::hex << node.cpu->reg(13)
                           << " LR=0x" << node.cpu->reg(14)
                           << " CPSR=0x" << node.cpu->cpsr() << std::dec << '\n';
+                node.cpu->dump_recent_trace(std::cerr);
                 node.stopped = true;
                 fault = true;
                 break;
@@ -248,6 +342,23 @@ int network_command(int argc, char **argv) {
                   << " instructions, " << node.device->time_ns() << " ns, pc=0x"
                   << std::hex << node.cpu->reg(15) << std::dec << '\n';
     }
+    for (const SramDump &dump : sram_dumps) {
+        const auto node = std::find_if(nodes.begin(), nodes.end(),
+                                       [&](const NetworkNode &candidate) {
+                                           return candidate.name == dump.node_name;
+                                       });
+        if (node == nodes.end())
+            throw std::invalid_argument("unknown node in SRAM dump: " +
+                                        dump.node_name);
+        std::cout << "node " << dump.node_name << " SRAM 0x" << std::hex
+                  << dump.address << " =";
+        for (std::size_t i = 0; i < dump.length; ++i) {
+            const unsigned byte = node->device->read8(
+                dump.address + static_cast<std::uint32_t>(i));
+            std::cout << ' ' << (byte < 16 ? "0" : "") << byte;
+        }
+        std::cout << std::dec << '\n';
+    }
     std::cout << "radio frames: " << air.frames().size() << '\n';
     for (const tc32emu::RadioFrame &frame : air.frames()) {
         std::cout << "  " << frame.id << ' ' << frame.source << " -> "
@@ -256,6 +367,18 @@ int network_command(int argc, char **argv) {
                   << static_cast<unsigned>(frame.channel) << " bytes="
                   << frame.payload.size() << " t=" << frame.start_ns << ".."
                   << frame.end_ns << " ns\n";
+        if (radio_payloads) {
+            std::cout << "    payload=";
+            constexpr char hex[] = "0123456789abcdef";
+            for (std::uint8_t byte : frame.payload)
+                std::cout << hex[byte >> 4] << hex[byte & 0x0fu];
+            std::cout << '\n';
+        }
+    }
+    std::cout << "radio receptions: " << air.receptions().size() << '\n';
+    for (const tc32emu::RadioReception &reception : air.receptions()) {
+        std::cout << "  frame " << reception.frame_id << " -> "
+                  << reception.receiver << '\n';
     }
     return fault ? 1 : 0;
 }

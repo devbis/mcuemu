@@ -6,12 +6,12 @@ Unicorn C API. End-to-end vendor-firmware acceptance is still outstanding.
 
 | Work area | Current state |
 | --- | --- |
-| TC32 in Unicorn | Initial backend implements the covered instruction families, CPU state, CPSR/SPSR/SSR access, `tmrcs` CPSR reads, and C API dispatch. Ten backend tests pass, including an instruction-fetch alias test. Full TC32 vendor-binary coverage is not established. |
+| TC32 in Unicorn | Initial backend implements the covered instruction families, CPU state, CPSR/SPSR/SSR access, `tmrcs` CPSR reads, and C API dispatch. `treti {pc}` restores PC from the IRQ stack and restores the saved mode; 11 backend tests pass, including IRQ stack restoration and instruction-fetch alias tests. Full TC32 vendor-binary coverage is not established. |
 | TLSR8258 wrapper | Maps flash, board SRAM, the documented MMIO range, and a firmware-observed register alias into a TC32 `uc_engine`; configures Unicorn to fetch SRAM cache-alias instructions from flash while keeping data reads and writes on SRAM. Uses Unicorn's C API for registers and execution. Board code advances virtual time and injects modeled IRQs around Unicorn execution. |
 | TLSR8258 peripherals | GPIO, timer compare/status, fixed 16 MHz system timer, UART FIFOs and timing, IRQ masks/sources, analog access, MSPI JEDEC ID, AES-128 ECB encrypt/decrypt, and the SDK-used integer divider helper are modeled. AREG `0x40..0x43` exposes a 32 kHz RC or 32.768 kHz crystal counter. AES completion uses the datasheet's 1000-cycle duration; divider operations complete synchronously. RF TX/RX DMA, including the DMA high-byte offset from `0x800000`, basic RF IRQ status, and packet delivery to the virtual medium are connected. Sleep, general flash commands, SPI/I²C transfers, and DMA channels beyond the RF path remain incomplete. |
-| Virtual radio | BLE and Zigbee packet transport with channel matching, estimated duration, broadcast/unicast, and collision suppression. TLSR8258 bridges Zigbee RF TX/RX DMA to this medium and decodes Zigbee channel writes from the RF synthesizer frequency registers `0x801244..0x801245`. BLE is not connected to TLSR8258 RF. |
-| CLI | Selects F512/F1K, loads raw images at address zero, runs one node or a multi-node Zigbee scenario, prints CPU/time and radio frame state, and optionally traces PC or filtered MMIO accesses. It does not parse ELF. |
-| Zigbee `sampleLight` | Standalone, the local `samplelight_tb03f.bin` runs 100,000,000 instructions without a CPU fault after the instruction-fetch alias fix. In a two-node run it emits 8-byte frames on channels 11 and 12. It then faults at `PC=0xff8` on `tpop {r4-r7,pc}` with `SP=0x84fff8`, which reads 12 bytes beyond the mapped SRAM end. Two local `z03mmc_coord` images produced no frames, so firmware-driven packet reception and exchange remain unverified. SDK and binary artifacts remain outside this repository. |
+| Virtual radio | BLE and Zigbee packet transport with channel matching, estimated duration, broadcast/unicast, collision suppression, and successful-reception records. TLSR8258 bridges Zigbee RF TX/RX DMA to this medium and decodes Zigbee channel writes from the RF synthesizer frequency registers `0x801244..0x801245`. BLE is not connected to TLSR8258 RF. |
+| CLI | Selects F512/F1K, loads raw images at address zero, runs one node or a multi-node Zigbee scenario, prints CPU/time, transmitted frames and successful receptions, and supports PC, MMIO, stack/mode, recent-fault, raw radio-payload, and selected SRAM-range diagnostics. It does not parse ELF. |
+| Zigbee `sampleLight` + `sampleGW` | A two-node run executed 200,000,000 instructions per node without a CPU fault. The medium recorded 47 transmissions and 32 successful receptions. At `g_zbNwkCtx + 0x2d`, the coordinator state byte is `0x96` (joined, `permit_join`, and `joinAccept` set), while the light is `0x01` (factory new). `g_sysDiags` shows zero RX CRC failures, RX IRQ counts of 16 for the coordinator and 12 for the light, and no coordinator join indication. No MAC beacon response or association request appears in the capture. Source SDK and firmware artifacts remain outside this repository. |
 
 Two behaviors are explicit inferences. The datasheet documents the register
 window at `0x800000..0x83ffff`, while vendor `LoadTblCmdSet` code forms writes
@@ -25,7 +25,12 @@ The RF bridge test exchanges an 802.15.4 payload between two TLSR8258 board
 models through TX/RX DMA buffers and IRQ status. It also checks that firmware
 synthesizer writes override the initial host-selected channel and that DMA
 addresses use the vendor's high-byte encoding. The `network` CLI command loads
-multiple firmware images onto a shared medium. Next work is to diagnose the
-sample's stack overrun and obtain a coordinator image that responds on-air,
-then verify a Zigbee exchange and connect BLE firmware to the TLSR8258 radio
-model. Keep all CPU instruction decoding and execution inside Unicorn.
+multiple firmware images onto a shared medium and reports successful packet
+receptions; `--radio-payloads` includes each transmitted payload as hex, and
+`--dump-sram` exposes selected node memory ranges for checking firmware state.
+The IRQ return fix removes the sample's previous stack fault. The sampleLight
+and sampleGW pair exchange packets. The sampleGW is accepting joins, but the
+light remains factory new and sees no MAC beacon response. RX reaches the
+firmware IRQ handler without CRC errors, so continue by inspecting the stack's
+Beacon Request handling and corresponding radio behavior. Keep BLE deferred
+and all CPU instruction decoding and execution inside Unicorn.

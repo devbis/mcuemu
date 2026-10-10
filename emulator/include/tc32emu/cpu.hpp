@@ -8,6 +8,7 @@
 #include <iosfwd>
 #include <optional>
 #include <string>
+#include <vector>
 
 struct uc_struct;
 
@@ -63,7 +64,14 @@ public:
                       std::optional<AddressRange> range = std::nullopt);
     void set_mmio_trace(std::ostream *output,
                         std::optional<AddressRange> range = std::nullopt);
+    void set_stack_trace(std::ostream *output);
+    void set_trace_prefix(std::string prefix);
     void set_trace_limit(std::size_t limit) noexcept { trace_limit_ = limit; }
+    void set_trace_after_step(std::size_t step) noexcept {
+        trace_after_step_ = step;
+    }
+    void set_recent_trace_capacity(std::size_t capacity);
+    void dump_recent_trace(std::ostream &output) const;
 
     std::uint32_t reg(unsigned index) const;
     void set_reg(unsigned index, std::uint32_t value);
@@ -78,6 +86,13 @@ private:
     struct MmioBinding {
         Cpu *cpu;
         std::uint32_t base;
+    };
+
+    struct TraceSnapshot {
+        std::uint32_t pc;
+        std::uint32_t sp;
+        std::uint32_t cpsr;
+        std::uint16_t instruction;
     };
 
     static void code_hook(uc_struct *uc, std::uint64_t address,
@@ -111,13 +126,24 @@ private:
     std::string callback_fault_;
     std::ostream *pc_trace_output_{nullptr};
     std::ostream *mmio_trace_output_{nullptr};
+    std::ostream *stack_trace_output_{nullptr};
+    std::string trace_prefix_;
     std::optional<AddressRange> pc_trace_range_;
     std::optional<AddressRange> mmio_trace_range_;
     std::size_t trace_limit_{10000};
+    std::size_t trace_after_step_{0};
+    std::vector<TraceSnapshot> recent_trace_;
+    std::size_t recent_trace_head_{0};
+    std::size_t recent_trace_count_{0};
     std::size_t pc_trace_count_{0};
     std::size_t mmio_trace_count_{0};
+    std::size_t stack_trace_count_{0};
     bool pc_trace_limit_reported_{false};
     bool mmio_trace_limit_reported_{false};
+    bool stack_trace_limit_reported_{false};
+    bool has_stack_snapshot_{false};
+    std::uint32_t last_stack_pointer_{0};
+    std::uint32_t last_stack_cpsr_{0};
 };
 
 } // namespace tc32emu

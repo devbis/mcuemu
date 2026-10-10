@@ -153,12 +153,19 @@ void test_cpu_status_modes_and_exception_return() {
     CHECK(cpu.step());
     CHECK(cpu.reg(2) == 0x13);
     cpu.set_spsr(0x13); // exception return restores the IRQ bank's SPSR
-    cpu.set_reg(14, 0x24); // IRQ return PC
+    constexpr std::uint32_t irq_return_pc = 0x24;
+    constexpr std::uint32_t irq_stack = 0x840200;
+    for (unsigned byte = 0; byte != 4; ++byte) {
+        device.write8(irq_stack + byte,
+                      static_cast<std::uint8_t>(irq_return_pc >> (8u * byte)));
+    }
+    cpu.set_reg(13, irq_stack); // treti {pc} consumes the saved IRQ return PC
+    cpu.set_reg(14, 0xdeadbeef); // IRQ LR has been clobbered by nested calls
     CHECK(cpu.step());
     CHECK((cpu.cpsr() & 0x1fu) == 0x13u);
     CHECK(cpu.reg(13) == 0x840100);
     CHECK(cpu.reg(14) == 0x1234);
-    CHECK(cpu.pc() == 0x24);
+    CHECK(cpu.pc() == irq_return_pc);
 }
 
 } // namespace tc32emu_tests

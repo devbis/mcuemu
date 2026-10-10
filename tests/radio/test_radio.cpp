@@ -19,6 +19,9 @@ void test_virtual_air() {
         (std::uint64_t{3} + 6u) * 8u * 1000000000u / 250000u;
     CHECK(light_node.receive(tc32emu::RadioProtocol::Zigbee802154, 15,
                              frame_end).size() == 1);
+    CHECK(air.receptions().size() == 1);
+    CHECK(air.receptions()[0].frame_id == id);
+    CHECK(air.receptions()[0].receiver == "light");
     CHECK(light_node.receive(tc32emu::RadioProtocol::Zigbee802154, 15,
                              frame_end).empty());
     CHECK(light_node.receive(tc32emu::RadioProtocol::Zigbee802154, 14,
@@ -28,6 +31,7 @@ void test_virtual_air() {
     collided.transmit("a", "c", tc32emu::RadioProtocol::Ble, 37, 0, {1}, 1000000);
     collided.transmit("b", "c", tc32emu::RadioProtocol::Ble, 37, 0, {2}, 1000000);
     CHECK(collided.receive("c", tc32emu::RadioProtocol::Ble, 37, 1000000).empty());
+    CHECK(collided.receptions().empty());
 }
 
 void test_tlsr_radio_dma_packet_exchange() {
