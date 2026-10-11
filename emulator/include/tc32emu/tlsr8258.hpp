@@ -73,6 +73,7 @@ public:
     static constexpr std::uint32_t SystemTimer = 0x800740;
     static constexpr std::uint32_t SystemTimerMode = 0x80074c;
     static constexpr std::uint32_t SystemTimerControl = 0x80074f;
+    static constexpr std::uint8_t SystemTimerControlStrobeMask = 0x0b;
     static constexpr std::uint32_t IrqMask = 0x800640;
     static constexpr std::uint32_t IrqGlobalEnable = 0x800643;
     static constexpr std::uint32_t IrqSource = 0x800648;

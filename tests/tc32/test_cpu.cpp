@@ -69,6 +69,24 @@ void test_cpu_vendor_mmio_alias() {
           0x5a);
 }
 
+void test_cpu_pc_add_uses_word_aligned_pc() {
+    tc32emu::Tlsr8258 device;
+    device.load_firmware(words({
+        0x06c0, // nop; put tadd r1, pc at a halfword-only address.
+        0x0479, // tadd r1, pc
+        0x5888, // tloadr r0, [r1, #8]
+        0xcf00,
+        0x06c0,
+        0x06c0,
+        0x5678, // 32-bit table/literal at address 0x0c.
+        0x1234,
+    }));
+    tc32emu::Cpu cpu(device);
+    const auto result = cpu.run(8);
+    CHECK(result.reason == tc32emu::StopReason::Halted);
+    CHECK(cpu.reg(0) == 0x12345678u);
+}
+
 void test_cpu_suspend_wake_from_32k_timer() {
     tc32emu::Tlsr8258 device;
     device.load_firmware(words({

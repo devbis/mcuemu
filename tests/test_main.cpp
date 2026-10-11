@@ -4,6 +4,7 @@ namespace tc32emu_tests {
 void test_cpu_arithmetic_and_branch();
 void test_cpu_load_store();
 void test_cpu_vendor_mmio_alias();
+void test_cpu_pc_add_uses_word_aligned_pc();
 void test_cpu_suspend_wake_from_32k_timer();
 void test_cpu_sleep_stays_asleep_when_rc32k_is_powered_down();
 void test_cpu_deep_sleep_wake_resets_to_flash_vector();
@@ -29,6 +30,7 @@ int main() {
     test_cpu_arithmetic_and_branch();
     test_cpu_load_store();
     test_cpu_vendor_mmio_alias();
+    test_cpu_pc_add_uses_word_aligned_pc();
     test_cpu_suspend_wake_from_32k_timer();
     test_cpu_sleep_stays_asleep_when_rc32k_is_powered_down();
     test_cpu_deep_sleep_wake_resets_to_flash_vector();

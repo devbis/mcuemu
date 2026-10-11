@@ -809,10 +809,12 @@ void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
         return;
     }
     if (offset == 0x74f) {
-        // Writing bit 3 latches the 32 kHz compare value. Hardware clears the
-        // strobe after accepting the value; retain the arm state separately.
+        // Bits 0, 1, and 3 are command strobes used for 32 kHz calibration,
+        // timer setup, and compare programming. Hardware clears them after
+        // accepting each command; retain the wake timer arm separately.
         wake_timer_armed_ = (value & 0x08u) != 0;
-        registers_[offset] = value & static_cast<std::uint8_t>(~0x08u);
+        registers_[offset] = value &
+            static_cast<std::uint8_t>(~SystemTimerControlStrobeMask);
         if ((value & 0x01u) != 0 && registers_[0x74c] == 0x92u) {
             // Zephyr measures 16 MHz system ticks per 16 ticks of the selected
             // 32 kHz source. AREG 0x05 and the source selector determine the
