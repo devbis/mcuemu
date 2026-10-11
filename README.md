@@ -33,9 +33,14 @@ previously skipped this test. Python 3 is needed for this optional test.
 
 `firmware_zigbee_button_light` extends the same boot and join sequence. It
 presses sampleGW SW1 (active-low PD6) after the light joins, checks that the
-light receives the resulting Zigbee traffic, and verifies the sampleLight PWM
-enable register is set for the output. The sampleGW demo repeats On/Off every
-second, so this test stops after the first command turns the output on.
+light receives the resulting Zigbee traffic, and checks that the sampleLight
+PWM enable mask changes from `0x00` to `0x06` and back to `0x00`. A single SW1
+press starts the sampleGW demo's one-second On/Off sequence. Run this scenario
+with:
+
+```sh
+ctest --test-dir build -R firmware_zigbee_button_light --output-on-failure
+```
 
 Run a raw flash image from address zero:
 
@@ -81,7 +86,10 @@ Add `--radio-payloads` to include raw frame bytes in the output when examining
 MAC discovery and commissioning traffic. `--dump-sram NAME=ADDRESS:LENGTH`
 prints a selected range from one node's SRAM after execution, which is useful
 for checking firmware state against local ELF symbols. `--dump-mmio` prints a
-range from the TLSR8258 register window after execution.
+range from the TLSR8258 register window after execution. `--trace-outputs`
+prints changes to GPIO output latches and the PWM enable-channel mask with
+virtual timestamps. It reports register-level output state; PWM pulse waveforms
+are not yet simulated.
 
 Use `--start-at NAME=TIME` to power on a node at an absolute virtual time while
 all nodes and the radio share one timeline. `--steps` sets the overall run

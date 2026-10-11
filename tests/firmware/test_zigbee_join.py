@@ -9,8 +9,9 @@ import sys
 from typing import Optional
 
 
+TEST_NAME = "firmware_zigbee_join"
 STEPS = "180000000"
-BUTTON_STEPS = "200000000"
+BUTTON_STEPS = "220000000"
 JOIN_FLAG_ADDRESS = "0x84783d"
 JOIN_FLAG_MASK = 0x04
 PWM_ENABLE_ADDRESS = "0x800780"
@@ -27,6 +28,10 @@ JOIN_FLAG_RE = re.compile(
 )
 PWM_ENABLE_RE = re.compile(
     rf"^node light MMIO {PWM_ENABLE_ADDRESS} = ([0-9a-f]{{2}})$", re.MULTILINE
+)
+PWM_OUTPUT_EVENT_RE = re.compile(
+    r"^output: node light PWM enable-mask=0x([0-9a-f]{1,2}) at (\d+) ns$",
+    re.MULTILINE,
 )
 GPIO_EVENT_RE = re.compile(
     r"^gpio: node coordinator port D=0x([0-9a-f]+) at (\d+) ns$", re.MULTILINE
@@ -70,7 +75,7 @@ def mac_command_id(payload: bytes) -> Optional[int]:
 
 
 def fail(message: str, output: str) -> None:
-    print(f"firmware_zigbee_join: {message}", file=sys.stderr)
+    print(f"{TEST_NAME}: {message}", file=sys.stderr)
     if output:
         print("--- emulator output ---", file=sys.stderr)
         print(output, file=sys.stderr)
@@ -78,6 +83,8 @@ def fail(message: str, output: str) -> None:
 
 
 def main() -> int:
+    global TEST_NAME
+
     if len(sys.argv) not in (4, 5):
         print(
             "usage: test_zigbee_join.py EMULATOR SAMPLE_GW SAMPLE_LIGHT "
@@ -91,6 +98,11 @@ def main() -> int:
     if scenario not in ("join", "button"):
         print(f"unknown scenario: {scenario}", file=sys.stderr)
         return 2
+    TEST_NAME = (
+        "firmware_zigbee_button_light"
+        if scenario == "button"
+        else "firmware_zigbee_join"
+    )
 
     steps = STEPS if scenario == "join" else BUTTON_STEPS
     command = [
@@ -119,6 +131,7 @@ def main() -> int:
                 "coordinator=D:0xbf@11.3s",
                 "--gpio-event",
                 "coordinator=D:0xff@11.5s",
+                "--trace-outputs",
                 "--dump-mmio",
                 f"light={PWM_ENABLE_ADDRESS}:1",
             ]
@@ -254,18 +267,42 @@ def main() -> int:
         if not pwm_match:
             fail(f"could not find PWM enable register {PWM_ENABLE_ADDRESS}", output)
         pwm_enable = int(pwm_match.group(1), 16)
-        if pwm_enable & PWM_ENABLE_MASK != PWM_ENABLE_MASK:
+        if pwm_enable != 0:
             fail(
-                f"light PWM output channels are not enabled: "
+                f"light PWM output did not return to off: "
                 f"{PWM_ENABLE_ADDRESS}=0x{pwm_enable:02x}",
                 output,
             )
+        pwm_events = [
+            (int(mask, 16), int(time_ns))
+            for mask, time_ns in PWM_OUTPUT_EVENT_RE.findall(output)
+            if int(time_ns) >= 12_000_000_000
+        ]
+        transition_pair = next(
+            (
+                (index, next_index)
+                for index, (mask, _) in enumerate(pwm_events)
+                if mask == PWM_ENABLE_MASK
+                for next_index in range(index + 1, len(pwm_events))
+                if pwm_events[next_index][0] == 0
+            ),
+            None,
+        )
+        if transition_pair is None:
+            fail(
+                "light output did not transition from PWM enabled to disabled "
+                "after the button started the demo",
+                output,
+            )
+        on_event = pwm_events[transition_pair[0]]
+        off_event = pwm_events[transition_pair[1]]
         summary += (
             f", post-button frame {button_frames[0]['id']} received by light, "
-            f"PWM enable=0x{pwm_enable:02x}"
+            f"PWM output 0x{on_event[0]:02x} at {on_event[1]} ns -> "
+            f"0x{off_event[0]:02x} at {off_event[1]} ns"
         )
 
-    print(f"firmware_zigbee_{scenario}: passed; {summary}")
+    print(f"{TEST_NAME}: passed; {summary}")
     return 0
 
 

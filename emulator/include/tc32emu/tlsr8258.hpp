@@ -18,6 +18,18 @@ enum class Tlsr8258Model {
     F1K,
 };
 
+struct OutputEvent {
+    enum class Kind {
+        GpioPort,
+        PwmEnableMask,
+    };
+
+    Kind kind;
+    unsigned index;
+    std::uint8_t value;
+    std::uint64_t time_ns;
+};
+
 class Tlsr8258 final : public Bus {
 public:
     static constexpr std::uint32_t RegisterBase = 0x800000;
@@ -30,6 +42,8 @@ public:
     static constexpr std::uint32_t NonRetainedSramBase = 0x848000;
     static constexpr std::uint32_t SramSize = 0x10000;
     static constexpr std::uint32_t GpioBase = 0x800580;
+    static constexpr std::uint32_t PwmEnable = 0x800780;
+    static constexpr std::uint32_t Pwm0Enable = 0x800781;
     static constexpr std::uint32_t TimerControl = 0x800620;
     static constexpr std::uint32_t TimerCapture0 = 0x800624;
     static constexpr std::uint32_t TimerTick0 = 0x800630;
@@ -93,6 +107,12 @@ public:
     std::uint8_t *sram_data() noexcept { return sram_.data(); }
     void set_gpio_input(unsigned port, std::uint8_t value);
     std::uint8_t gpio_output(unsigned port) const;
+    void set_output_trace_enabled(bool enabled) noexcept {
+        output_trace_enabled_ = enabled;
+    }
+    const std::vector<OutputEvent> &output_events() const noexcept {
+        return output_events_;
+    }
     void connect_radio(VirtualAir &air, std::string node_name);
     void set_radio_time_offset(std::uint64_t offset_ns) noexcept {
         radio_time_offset_ns_ = offset_ns;
@@ -142,6 +162,8 @@ private:
     alignas(4096) std::array<std::uint8_t, SramSize> sram_{};
     std::array<std::uint8_t, 5> gpio_inputs_{};
     std::array<std::uint8_t, 5> gpio_outputs_{};
+    bool output_trace_enabled_{false};
+    std::vector<OutputEvent> output_events_;
     std::array<std::uint32_t, 3> timer_last_tick_{};
     std::array<bool, 3> timer_fired_{};
     std::deque<std::uint8_t> uart_rx_fifo_;
@@ -153,6 +175,9 @@ private:
 
     std::uint8_t read_register(std::uint32_t offset);
     void write_register(std::uint32_t offset, std::uint8_t value);
+    std::uint8_t pwm_enable_mask() const noexcept;
+    void record_output_event(OutputEvent::Kind kind, unsigned index,
+                             std::uint8_t value);
     std::uint32_t timer_tick(unsigned index) const;
     std::uint32_t analog_32k_tick() const noexcept;
     std::uint8_t analog_register_read(std::uint8_t address) const noexcept;

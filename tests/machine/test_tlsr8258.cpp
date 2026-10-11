@@ -9,6 +9,7 @@ namespace tc32emu_tests {
 
 void test_tlsr_memory_gpio_and_timer() {
     tc32emu::Tlsr8258 device(tc32emu::Tlsr8258Model::F512);
+    device.set_output_trace_enabled(true);
     CHECK(device.flash_size() == 512u * 1024u);
     device.write8(tc32emu::Tlsr8258::RegisterBase + 0x10, 0x5a);
     CHECK(device.read8(tc32emu::Tlsr8258::RegisterBase + 0x10) == 0x5a);
@@ -22,6 +23,19 @@ void test_tlsr_memory_gpio_and_timer() {
     CHECK(device.read8(tc32emu::Tlsr8258::GpioBase) == 0x05);
     device.write8(tc32emu::Tlsr8258::GpioBase + 3, 0x81);
     CHECK(device.gpio_output(0) == 0x81);
+    CHECK(device.output_events().size() == 1);
+    CHECK(device.output_events()[0].kind ==
+          tc32emu::OutputEvent::Kind::GpioPort);
+    CHECK(device.output_events()[0].index == 0);
+    CHECK(device.output_events()[0].value == 0x81);
+
+    device.write8(tc32emu::Tlsr8258::PwmEnable, 0x06);
+    device.write8(tc32emu::Tlsr8258::PwmEnable, 0x00);
+    CHECK(device.output_events().size() == 3);
+    CHECK(device.output_events()[1].kind ==
+          tc32emu::OutputEvent::Kind::PwmEnableMask);
+    CHECK(device.output_events()[1].value == 0x06);
+    CHECK(device.output_events()[2].value == 0x00);
 
     device.write32(tc32emu::Tlsr8258::TimerCapture0, 3);
     device.write32(tc32emu::Tlsr8258::TimerControl, 1);

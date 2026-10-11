@@ -31,6 +31,7 @@ void usage(std::ostream &out) {
            "       [--trace-stack] [--trace-node NAME] [--trace-after-step N]\n"
            "       [--trace-limit N] [--fault-trace N] [--radio-payloads]\n"
            "       [--gpio-event NAME=PORT:VALUE@TIME]\n"
+           "       [--trace-outputs]\n"
            "       [--start-at NAME=TIME]\n"
            "       [--dump-mmio NAME=ADDRESS:LENGTH]\n"
            "       [--dump-sram NAME=ADDRESS:LENGTH]\n"
@@ -323,6 +324,11 @@ struct MmioDump {
     std::size_t length;
 };
 
+struct OutputEventLine {
+    std::string node_name;
+    tc32emu::OutputEvent event;
+};
+
 int network_command(int argc, char **argv) {
     std::string model = "TLSR8258F512";
     std::uint8_t channel = 11;
@@ -335,6 +341,7 @@ int network_command(int argc, char **argv) {
     std::optional<tc32emu::AddressRange> mmio_range;
     bool trace_stack = false;
     bool radio_payloads = false;
+    bool trace_outputs = false;
     std::vector<SramDump> sram_dumps;
     std::vector<MmioDump> mmio_dumps;
     std::vector<std::pair<std::string, std::string>> node_specs;
@@ -367,6 +374,8 @@ int network_command(int argc, char **argv) {
             trace_stack = true;
         } else if (arg == "--radio-payloads") {
             radio_payloads = true;
+        } else if (arg == "--trace-outputs") {
+            trace_outputs = true;
         } else if (arg == "--gpio-event" && i + 1 < argc) {
             gpio_events.push_back(parse_gpio_event(argv[++i]));
         } else if (arg == "--start-at" && i + 1 < argc) {
@@ -466,6 +475,7 @@ int network_command(int argc, char **argv) {
         node.firmware = std::move(firmware);
         node.instruction_limit = steps;
         node.device = std::make_unique<tc32emu::Tlsr8258>(selected_model);
+        node.device->set_output_trace_enabled(trace_outputs);
         std::ifstream input(node.firmware, std::ios::binary);
         if (!input)
             throw std::runtime_error("cannot open firmware image: " + node.firmware);
@@ -643,6 +653,35 @@ int network_command(int argc, char **argv) {
             std::cout << ' ' << (byte < 16 ? "0" : "") << byte;
         }
         std::cout << std::dec << '\n';
+    }
+    if (trace_outputs) {
+        std::vector<OutputEventLine> output_events;
+        for (const NetworkNode &node : nodes) {
+            for (const tc32emu::OutputEvent &event :
+                 node.device->output_events())
+                output_events.push_back({node.name, event});
+        }
+        std::sort(output_events.begin(), output_events.end(),
+                  [](const OutputEventLine &lhs, const OutputEventLine &rhs) {
+                      if (lhs.event.time_ns != rhs.event.time_ns)
+                          return lhs.event.time_ns < rhs.event.time_ns;
+                      if (lhs.node_name != rhs.node_name)
+                          return lhs.node_name < rhs.node_name;
+                      return static_cast<unsigned>(lhs.event.kind) <
+                             static_cast<unsigned>(rhs.event.kind);
+                  });
+        for (const OutputEventLine &line : output_events) {
+            std::cout << "output: node " << line.node_name << ' ';
+            if (line.event.kind == tc32emu::OutputEvent::Kind::GpioPort) {
+                std::cout << "GPIO port "
+                          << static_cast<char>('A' + line.event.index)
+                          << " latch=0x";
+            } else {
+                std::cout << "PWM enable-mask=0x";
+            }
+            std::cout << std::hex << static_cast<unsigned>(line.event.value)
+                      << std::dec << " at " << line.event.time_ns << " ns\n";
+        }
     }
     std::cout << "radio frames: " << air.frames().size() << '\n';
     for (const tc32emu::RadioFrame &frame : air.frames()) {

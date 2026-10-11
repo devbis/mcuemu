@@ -455,6 +455,20 @@ std::uint8_t Tlsr8258::gpio_output(unsigned port) const {
     return gpio_outputs_[port];
 }
 
+std::uint8_t Tlsr8258::pwm_enable_mask() const noexcept {
+    const std::uint32_t pwm_enable_offset = PwmEnable - RegisterBase;
+    const std::uint32_t pwm0_enable_offset = Pwm0Enable - RegisterBase;
+    return static_cast<std::uint8_t>(
+        (registers_[pwm_enable_offset] & 0x3eu) |
+        (registers_[pwm0_enable_offset] & 0x01u));
+}
+
+void Tlsr8258::record_output_event(OutputEvent::Kind kind, unsigned index,
+                                  std::uint8_t value) {
+    if (output_trace_enabled_)
+        output_events_.push_back({kind, index, value, network_time_ns()});
+}
+
 std::uint32_t Tlsr8258::dma_address(std::uint32_t low_offset,
                                    std::uint32_t high_offset) const noexcept {
     const std::uint32_t low =
@@ -863,7 +877,10 @@ void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
         if (offset == base)
             return; // GPIO input pins are driven by the external environment.
         if (offset == base + 3) {
-            gpio_outputs_[port] = value;
+            if (gpio_outputs_[port] != value) {
+                gpio_outputs_[port] = value;
+                record_output_event(OutputEvent::Kind::GpioPort, port, value);
+            }
             registers_[offset] = value;
             return;
         }
@@ -871,7 +888,18 @@ void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
     if (offset >= 0x630 && offset <= 0x63b)
         return; // timer counters are read-only
 
+    const bool pwm_enable_write =
+        offset == PwmEnable - RegisterBase ||
+        offset == Pwm0Enable - RegisterBase;
+    const std::uint8_t previous_pwm_enable =
+        pwm_enable_write ? pwm_enable_mask() : 0;
     registers_[offset] = value;
+    if (pwm_enable_write) {
+        const std::uint8_t current_pwm_enable = pwm_enable_mask();
+        if (current_pwm_enable != previous_pwm_enable)
+            record_output_event(OutputEvent::Kind::PwmEnableMask, 0,
+                                current_pwm_enable);
+    }
     if (offset == 0x620 || offset == 0x621 || offset == 0x622) {
         for (unsigned timer = 0; timer != 3; ++timer) {
             const unsigned enable_bit = timer * 3u;
