@@ -289,6 +289,116 @@ std::uint32_t Tlsr8258::flash_size() const noexcept {
     return static_cast<std::uint32_t>(flash_.size());
 }
 
+std::uint32_t Tlsr8258::system_32k_compare() const noexcept {
+    const std::uint32_t offset = System32kTickCompare - RegisterBase;
+    return static_cast<std::uint32_t>(registers_[offset]) |
+           (static_cast<std::uint32_t>(registers_[offset + 1]) << 8) |
+           (static_cast<std::uint32_t>(registers_[offset + 2]) << 16) |
+           (static_cast<std::uint32_t>(registers_[offset + 3]) << 24);
+}
+
+bool Tlsr8258::selected_32k_clock_running() const noexcept {
+    const bool use_32k_xtal =
+        (registers_[Clock32kSelect - RegisterBase] & Clock32kSelectXtal) != 0;
+    const std::uint8_t power_down_mask = use_32k_xtal
+        ? AnalogClock32kXtalPowerDown
+        : AnalogClock32kRcPowerDown;
+    return (analog_registers_[AnalogClockPower] & power_down_mask) == 0;
+}
+
+bool Tlsr8258::advance_sleep_to_wakeup() {
+    if (power_state_ == Tlsr8258PowerState::Awake || !wake_timer_armed_ ||
+        (analog_registers_[AnalogWakeSource] & AnalogWakeTimerEnable) == 0 ||
+        !selected_32k_clock_running())
+        return false;
+
+    const std::uint32_t current = analog_32k_tick();
+    const std::uint32_t target = system_32k_compare();
+    const std::uint32_t delta = target - current;
+    if (delta > 0x7fffffffu)
+        return false; // Compare is already behind the counter; no match occurs.
+
+    const std::uint64_t source_hz =
+        (registers_[Clock32kSelect - RegisterBase] & Clock32kSelectXtal) != 0
+            ? 32768u
+            : 32000u;
+    const std::uint64_t whole_seconds = delta / source_hz;
+    const std::uint64_t remaining_ticks = delta % source_hz;
+    const std::uint64_t max_time = std::numeric_limits<std::uint64_t>::max();
+    const std::uint64_t whole_ns = whole_seconds * 1000000000u;
+    const std::uint64_t fractional_ns =
+        (remaining_ticks * 1000000000u + source_hz - 1u) / source_hz;
+    if (whole_ns > max_time - time_ns_ ||
+        fractional_ns > max_time - time_ns_ - whole_ns) {
+        time_ns_ = max_time;
+    } else {
+        time_ns_ += whole_ns + fractional_ns;
+    }
+    time_fraction_ = 0;
+    analog_32k_tick_count_ += delta;
+    analog_32k_fraction_ = 0;
+    analog_registers_[AnalogWakeStatus] |= AnalogWakeTimerStatus;
+    wake_timer_armed_ = false;
+    if (power_state_ == Tlsr8258PowerState::DeepSleep)
+        deep_sleep_wakeup_pending_ = true;
+    power_state_ = Tlsr8258PowerState::Awake;
+    return true;
+}
+
+bool Tlsr8258::consume_deep_sleep_wakeup() noexcept {
+    if (!deep_sleep_wakeup_pending_)
+        return false;
+
+    reset_volatile_state_after_deep_sleep();
+    deep_sleep_wakeup_pending_ = false;
+    return true;
+}
+
+void Tlsr8258::reset_volatile_state_after_deep_sleep() {
+    registers_.fill(0);
+    registers_[0x540] = aes_data_feed_bit;
+    registers_[Clock32kSelect - RegisterBase] = 0x04;
+    registers_[0x94] = 0xff;
+    registers_[0x95] = 0x0f;
+    registers_[0x96] = 0x0f;
+    registers_[0x97] = 0x0e;
+    registers_[0x98] = 0xa5;
+    registers_[0x99] = 0x44;
+    registers_[0x9a] = 0xc0;
+    registers_[0x9b] = 0x01;
+    registers_[0x9e] = uart_tx_done_bit;
+    system_timer_count_ = 0;
+    system_timer_fraction_ = 0;
+    timer_last_tick_.fill(0);
+    timer_fired_.fill(false);
+    gpio_outputs_.fill(0);
+    uart_rx_fifo_.clear();
+    uart_tx_fifo_.clear();
+    uart_tx_cycles_remaining_ = 0;
+    uart_tx_done_ = true;
+    uart_rx_error_ = false;
+    aes_cycles_remaining_ = 0;
+    aes_input_word_ = 0;
+    aes_input_word_count_ = 0;
+    aes_output_word_index_ = 0;
+    mspi_active_ = false;
+    mspi_command_seen_ = false;
+    radio_tx_busy_ = false;
+    wake_timer_armed_ = false;
+    power_state_ = Tlsr8258PowerState::Awake;
+    std::fill(sram_.begin(), sram_.end(), 0);
+    // The PM status analog register survives deep sleep and distinguishes a
+    // timer wake from the initial power-on path in the vendor SDK.
+    analog_registers_[0x7f] = 0;
+}
+
+void Tlsr8258::enter_sleep() {
+    const std::uint8_t mode = analog_registers_[0x7e];
+    power_state_ = (mode & 0x80u) != 0
+        ? Tlsr8258PowerState::DeepSleep
+        : Tlsr8258PowerState::Suspend;
+}
+
 void Tlsr8258::load_firmware(const std::vector<std::uint8_t> &image,
                             std::uint32_t offset) {
     if (offset > flash_.size() || image.size() > flash_.size() - offset)
@@ -693,6 +803,37 @@ std::uint8_t Tlsr8258::read_register(std::uint32_t offset) {
 }
 
 void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
+    if (offset >= System32kTickCompare - RegisterBase &&
+        offset < System32kTickCompare - RegisterBase + 4) {
+        registers_[offset] = value;
+        return;
+    }
+    if (offset == 0x74f) {
+        // Writing bit 3 latches the 32 kHz compare value. Hardware clears the
+        // strobe after accepting the value; retain the arm state separately.
+        wake_timer_armed_ = (value & 0x08u) != 0;
+        registers_[offset] = value & static_cast<std::uint8_t>(~0x08u);
+        if ((value & 0x01u) != 0 && registers_[0x74c] == 0x92u) {
+            // Zephyr measures 16 MHz system ticks per 16 ticks of the selected
+            // 32 kHz source. AREG 0x05 and the source selector determine the
+            // nominal result: 8000 for RC, 7812 for the 32.768 kHz crystal.
+            const std::uint16_t calibration =
+                (registers_[Clock32kSelect - RegisterBase] &
+                 Clock32kSelectXtal) != 0
+                    ? 7812u
+                    : 8000u;
+            registers_[0x750] = static_cast<std::uint8_t>(calibration);
+            registers_[0x751] = static_cast<std::uint8_t>(calibration >> 8);
+        }
+        return;
+    }
+    if (offset == PowerDownControl - RegisterBase) {
+        registers_[offset] = value;
+        if ((value & (PowerDownSleepEnable | PowerDownSleepTrigger)) ==
+            (PowerDownSleepEnable | PowerDownSleepTrigger))
+            enter_sleep();
+        return;
+    }
     if (offset == rf_frequency_high_offset) {
         registers_[offset] = value;
         std::uint8_t channel = 0;
@@ -836,7 +977,13 @@ void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
             const std::uint8_t address = registers_[0x0b8];
             if ((value & (1u << 5)) != 0) {
                 if (address < 0x40 || address > 0x43) {
-                    analog_registers_[address] = registers_[0x0b9];
+                    if (address == AnalogWakeStatus) {
+                        // AREG 0x44 wake status bits clear by writing one.
+                        analog_registers_[address] &=
+                            static_cast<std::uint8_t>(~registers_[0x0b9]);
+                    } else {
+                        analog_registers_[address] = registers_[0x0b9];
+                    }
                     // cpu_wakeup_init's RC24M calibration writes 0x0e then
                     // 0x0f to AREG 0xc7 and polls AREG 0xcf[7]. Complete that
                     // hardware calibration synchronously in the virtual model.

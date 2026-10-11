@@ -33,10 +33,11 @@ previously skipped this test. Python 3 is needed for this optional test.
 
 `firmware_zigbee_button_light` extends the same boot and join sequence. It
 presses sampleGW SW1 (active-low PD6) after the light joins, checks that the
-light receives the resulting Zigbee traffic, and checks that the sampleLight
-PWM enable mask changes from `0x00` to `0x06` and back to `0x00`. A single SW1
-press starts the sampleGW demo's one-second On/Off sequence. Run this scenario
-with:
+light receives the resulting Zigbee traffic, and checks one complete
+sampleLight PWM transition from off (`0x00`) to on (`0x07`) and back to off.
+The test accounts for the SDK's startup configuration, which turns the light
+on: the coordinator's first On command leaves it on, then later Off/On/Off
+commands exercise the full output cycle. Run this scenario with:
 
 ```sh
 ctest --test-dir build -R firmware_zigbee_button_light --output-on-failure
@@ -128,6 +129,13 @@ execution quantum.
   divider, MSPI flash identification, virtual time, and interrupt state to the
   board model. CPU timing uses a coarse estimate of three cycles per
   instruction.
+- The low-frequency tick counter follows the 32 kHz RC/crystal selector and
+  oscillator power-down bits. CPU suspend and deep sleep use the 32 kHz timer
+  compare and timer wake-source gate; suspend resumes at the next instruction,
+  while deep wake resets volatile state and restarts at the flash vector. If
+  the selected 32 kHz source is powered down, the node remains asleep and the
+  CLI reports that state. GPIO wake sources and selectable SRAM retention
+  modes are not modeled yet.
 - Zigbee RF TX/RX DMA is bridged to the packet-level virtual-air model, with
   RF completion flags and IRQ state. Firmware channel writes to the RF
   synthesizer registers select the Zigbee channel; the CLI channel remains the

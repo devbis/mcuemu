@@ -155,6 +155,10 @@ void test_tlsr_system_timer() {
     CHECK(device.read32(tc32emu::Tlsr8258::SystemTimer) == 0x120);
     device.tick(48);
     CHECK(device.read32(tc32emu::Tlsr8258::SystemTimer) == 0x130);
+
+    device.write8(tc32emu::Tlsr8258::SystemTimerMode, 0x92);
+    device.write8(tc32emu::Tlsr8258::SystemTimerControl, 0x01);
+    CHECK(device.read16(0x800750) == 8000);
 }
 
 void test_tlsr_mspi_jedec_id() {

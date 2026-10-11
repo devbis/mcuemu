@@ -18,6 +18,12 @@ enum class Tlsr8258Model {
     F1K,
 };
 
+enum class Tlsr8258PowerState {
+    Awake,
+    Suspend,
+    DeepSleep,
+};
+
 struct OutputEvent {
     enum class Kind {
         GpioPort,
@@ -83,6 +89,14 @@ public:
     static constexpr std::uint32_t MspiControl = 0x80000d;
     static constexpr std::uint32_t Clock32kSelect = 0x800073;
     static constexpr std::uint8_t Clock32kSelectXtal = 1u << 0;
+    static constexpr std::uint32_t PowerDownControl = 0x80006f;
+    static constexpr std::uint8_t PowerDownSleepEnable = 1u << 0;
+    static constexpr std::uint8_t PowerDownSleepTrigger = 1u << 7;
+    static constexpr std::uint32_t System32kTickCompare = 0x800754;
+    static constexpr std::uint32_t AnalogWakeSource = 0x26;
+    static constexpr std::uint8_t AnalogWakeTimerEnable = 1u << 6;
+    static constexpr std::uint32_t AnalogWakeStatus = 0x44;
+    static constexpr std::uint8_t AnalogWakeTimerStatus = 1u << 1;
     static constexpr std::uint32_t SystemTimerClockHz = 16000000;
     static constexpr std::uint32_t UartData = 0x800090;
     static constexpr std::uint32_t UartClockDivider = 0x800094;
@@ -102,6 +116,9 @@ public:
     void write8(std::uint32_t address, std::uint8_t value) override;
     void tick(std::uint32_t cycles) override;
     bool interrupt_pending() const noexcept override;
+    Tlsr8258PowerState power_state() const noexcept { return power_state_; }
+    bool advance_sleep_to_wakeup();
+    bool consume_deep_sleep_wakeup() noexcept;
 
     void load_firmware(const std::vector<std::uint8_t> &image,
                        std::uint32_t offset = 0);
@@ -138,6 +155,9 @@ private:
     std::uint64_t time_fraction_{0};
     std::uint64_t analog_32k_tick_count_{0};
     std::uint64_t analog_32k_fraction_{0};
+    Tlsr8258PowerState power_state_{Tlsr8258PowerState::Awake};
+    bool deep_sleep_wakeup_pending_{false};
+    bool wake_timer_armed_{false};
     std::uint32_t system_timer_count_{0};
     std::uint64_t system_timer_fraction_{0};
     std::uint8_t mspi_command_{0};
@@ -184,6 +204,10 @@ private:
                              std::uint8_t value);
     std::uint32_t timer_tick(unsigned index) const;
     std::uint32_t analog_32k_tick() const noexcept;
+    std::uint32_t system_32k_compare() const noexcept;
+    bool selected_32k_clock_running() const noexcept;
+    void enter_sleep();
+    void reset_volatile_state_after_deep_sleep();
     std::uint8_t analog_register_read(std::uint8_t address) const noexcept;
     std::uint32_t dma_address(std::uint32_t low_offset,
                               std::uint32_t high_offset) const noexcept;

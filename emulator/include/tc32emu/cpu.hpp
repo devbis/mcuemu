@@ -28,6 +28,7 @@ struct AddressRange {
 enum class StopReason {
     StepLimit,
     Halted,
+    Sleeping,
     Fault,
 };
 

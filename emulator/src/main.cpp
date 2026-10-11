@@ -19,6 +19,18 @@
 
 namespace {
 
+const char *power_state_name(tc32emu::Tlsr8258PowerState state) {
+    switch (state) {
+    case tc32emu::Tlsr8258PowerState::Awake:
+        return "awake";
+    case tc32emu::Tlsr8258PowerState::Suspend:
+        return "suspend";
+    case tc32emu::Tlsr8258PowerState::DeepSleep:
+        return "deep-sleep";
+    }
+    return "unknown";
+}
+
 void usage(std::ostream &out) {
     out << "Usage: tc32-emu run --firmware IMAGE [--model MODEL] [--steps N]\n"
            "       [--trace-pc | --trace-pc-range START:END]\n"
@@ -294,6 +306,10 @@ int run_command(int argc, char **argv) {
     }
     if (result.reason == tc32emu::StopReason::Halted)
         std::cout << "stopped on tserv software-service trap\n";
+    else if (result.reason == tc32emu::StopReason::Sleeping)
+        std::cout << "CPU remains in "
+                  << power_state_name(device.power_state()) << ": "
+                  << result.message << '\n';
     else
         std::cout << "instruction limit reached\n";
     return 0;
@@ -590,6 +606,11 @@ int network_command(int argc, char **argv) {
                                       node.device->network_time_ns());
             if (result.reason == tc32emu::StopReason::Halted) {
                 node.stopped = true;
+            } else if (result.reason == tc32emu::StopReason::Sleeping) {
+                std::cout << "node " << node.name << " remains in "
+                          << power_state_name(node.device->power_state())
+                          << ": " << result.message << '\n';
+                node.stopped = true;
             } else if (result.reason == tc32emu::StopReason::Fault) {
                 std::cerr << "node " << node.name << " CPU fault at 0x"
                           << std::hex << result.pc << std::dec << ": "
@@ -618,7 +639,9 @@ int network_command(int argc, char **argv) {
         std::cout << "node " << node.name << ": " << node.instructions
                   << " instructions, " << node.device->network_time_ns()
                   << " ns, pc=0x"
-                  << std::hex << node.cpu->reg(15) << std::dec << '\n';
+                  << std::hex << node.cpu->reg(15) << std::dec
+                  << ", power=" << power_state_name(node.device->power_state())
+                  << '\n';
     }
     for (const SramDump &dump : sram_dumps) {
         const auto node = std::find_if(nodes.begin(), nodes.end(),

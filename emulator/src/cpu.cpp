@@ -535,6 +535,20 @@ RunResult Cpu::run(std::size_t instruction_limit) {
             return result;
         }
 
+        if (device_.power_state() != Tlsr8258PowerState::Awake) {
+            if (!device_.advance_sleep_to_wakeup()) {
+                result.reason = StopReason::Sleeping;
+                result.pc = pc();
+                result.message =
+                    "32 kHz timer did not produce a wake event; check the "
+                    "wake-source enable, compare value, and selected clock power";
+                return result;
+            }
+            if (device_.consume_deep_sleep_wakeup())
+                reset();
+            continue;
+        }
+
         std::string fault;
         std::uint16_t instruction = 0;
         if (!step(&fault, &instruction)) {

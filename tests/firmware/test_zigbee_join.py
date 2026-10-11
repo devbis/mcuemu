@@ -11,11 +11,13 @@ from typing import Optional
 
 TEST_NAME = "firmware_zigbee_join"
 STEPS = "180000000"
-BUTTON_STEPS = "220000000"
+BUTTON_STEPS = "270000000"
 JOIN_FLAG_ADDRESS = "0x84783d"
 JOIN_FLAG_MASK = 0x04
-PWM_ENABLE_ADDRESS = "0x800780"
-PWM_ENABLE_MASK = 0x06
+PWM_ENABLE_ADDRESS = 0x800780
+PWM_ENABLE_MASK = 0x07
+COORDINATOR_BUTTON_NS = 12_150_000_000
+MIN_PWM_ON_NS = 500_000_000
 
 FRAME_RE = re.compile(
     r"^\s+(\d+) (\S+) -> (\S+) zigbee-802\.15\.4 ch=(\d+) "
@@ -27,14 +29,15 @@ JOIN_FLAG_RE = re.compile(
     rf"^node light SRAM {JOIN_FLAG_ADDRESS} = ([0-9a-f]{{2}})$", re.MULTILINE
 )
 PWM_ENABLE_RE = re.compile(
-    rf"^node light MMIO {PWM_ENABLE_ADDRESS} = ([0-9a-f]{{2}})$", re.MULTILINE
+    r"^node light MMIO 0x800780 = ((?:[0-9a-f]{2}(?: |$))+)\s*$",
+    re.MULTILINE,
 )
 PWM_OUTPUT_EVENT_RE = re.compile(
     r"^output: node light PWM enable-mask=0x([0-9a-f]{1,2}) at (\d+) ns$",
     re.MULTILINE,
 )
 GPIO_EVENT_RE = re.compile(
-    r"^gpio: node coordinator port D=0x([0-9a-f]+) at (\d+) ns$", re.MULTILINE
+    r"^gpio: node (\S+) port D=0x([0-9a-f]+) at (\d+) ns$", re.MULTILINE
 )
 
 
@@ -128,12 +131,12 @@ def main() -> int:
         command.extend(
             [
                 "--gpio-event",
-                "coordinator=D:0xbf@11.3s",
+                f"coordinator=D:0xbf@{COORDINATOR_BUTTON_NS / 1_000_000_000:.2f}s",
                 "--gpio-event",
-                "coordinator=D:0xff@11.5s",
+                "coordinator=D:0xff@12.35s",
                 "--trace-outputs",
                 "--dump-mmio",
-                f"light={PWM_ENABLE_ADDRESS}:1",
+                f"light=0x{PWM_ENABLE_ADDRESS:x}:2",
             ]
         )
 
@@ -242,14 +245,16 @@ def main() -> int:
 
     if scenario == "button":
         button_events = {
-            (int(value, 16), int(time_ns))
-            for value, time_ns in GPIO_EVENT_RE.findall(output)
+            (node, int(value, 16), int(time_ns))
+            for node, value, time_ns in GPIO_EVENT_RE.findall(output)
         }
-        if not any(value == 0xBF and time_ns >= 11_300_000_000
-                   for value, time_ns in button_events):
+        if not any(node == "coordinator" and value == 0xBF and
+                   time_ns >= COORDINATOR_BUTTON_NS
+                   for node, value, time_ns in button_events):
             fail("sampleGW SW1 press on PD6 was not applied", output)
-        if not any(value == 0xFF and time_ns >= 11_500_000_000
-                   for value, time_ns in button_events):
+        if not any(node == "coordinator" and value == 0xFF and
+                   time_ns >= 12_350_000_000
+                   for node, value, time_ns in button_events):
             fail("sampleGW SW1 release on PD6 was not applied", output)
 
         button_frames = [
@@ -263,28 +268,44 @@ def main() -> int:
         if not button_frames:
             fail("light did not receive the coordinator's post-button frame", output)
 
-        pwm_match = PWM_ENABLE_RE.search(output)
-        if not pwm_match:
-            fail(f"could not find PWM enable register {PWM_ENABLE_ADDRESS}", output)
-        pwm_enable = int(pwm_match.group(1), 16)
-        if pwm_enable != 0:
+        pwm_registers = {}
+        for values in PWM_ENABLE_RE.findall(output):
+            for offset, value in enumerate(values.split()):
+                pwm_registers[PWM_ENABLE_ADDRESS + offset] = int(value, 16)
+        if (pwm_registers.get(PWM_ENABLE_ADDRESS) != 0 or
+                pwm_registers.get(PWM_ENABLE_ADDRESS + 1) != 0):
             fail(
-                f"light PWM output did not return to off: "
-                f"{PWM_ENABLE_ADDRESS}=0x{pwm_enable:02x}",
+                "light PWM output did not return to off: "
+                f"0x{PWM_ENABLE_ADDRESS:06x}="
+                f"0x{pwm_registers.get(PWM_ENABLE_ADDRESS, -1):02x}, "
+                f"0x{PWM_ENABLE_ADDRESS + 1:06x}="
+                f"0x{pwm_registers.get(PWM_ENABLE_ADDRESS + 1, -1):02x}",
                 output,
             )
         pwm_events = [
             (int(mask, 16), int(time_ns))
             for mask, time_ns in PWM_OUTPUT_EVENT_RE.findall(output)
-            if int(time_ns) >= 12_000_000_000
         ]
+        baseline_off = next(
+            (
+                (index, time_ns)
+                for index, (mask, time_ns) in enumerate(pwm_events)
+                if mask == 0 and time_ns > COORDINATOR_BUTTON_NS
+            ),
+            None,
+        )
+        if baseline_off is None:
+            fail("sampleLight output did not turn off after the coordinator button", output)
         transition_pair = next(
             (
                 (index, next_index)
                 for index, (mask, _) in enumerate(pwm_events)
-                if mask == PWM_ENABLE_MASK
+                if mask == PWM_ENABLE_MASK and
+                   pwm_events[index][1] > baseline_off[1]
                 for next_index in range(index + 1, len(pwm_events))
                 if pwm_events[next_index][0] == 0
+                and pwm_events[next_index][1] - pwm_events[index][1] >=
+                    MIN_PWM_ON_NS
             ),
             None,
         )
@@ -298,7 +319,8 @@ def main() -> int:
         off_event = pwm_events[transition_pair[1]]
         summary += (
             f", post-button frame {button_frames[0]['id']} received by light, "
-            f"PWM output 0x{on_event[0]:02x} at {on_event[1]} ns -> "
+            f"PWM output 0x00 at {baseline_off[1]} ns -> "
+            f"0x{on_event[0]:02x} at {on_event[1]} ns -> "
             f"0x{off_event[0]:02x} at {off_event[1]} ns"
         )
 

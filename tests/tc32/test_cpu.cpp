@@ -69,6 +69,93 @@ void test_cpu_vendor_mmio_alias() {
           0x5a);
 }
 
+void test_cpu_suspend_wake_from_32k_timer() {
+    tc32emu::Tlsr8258 device;
+    device.load_firmware(words({
+        0x4008, // strb r0, [r1, #0] -- enter suspend through PM register.
+        0xa10b, // tmov r1, #11 -- executed after the timer wake.
+        0xcf00,
+    }));
+    auto write_analog = [&device](std::uint8_t address, std::uint8_t value) {
+        device.write8(tc32emu::Tlsr8258::AnalogAddress, address);
+        device.write8(tc32emu::Tlsr8258::AnalogData, value);
+        device.write8(tc32emu::Tlsr8258::AnalogControl, 0x60);
+    };
+    device.write32(tc32emu::Tlsr8258::System32kTickCompare, 32);
+    write_analog(tc32emu::Tlsr8258::AnalogWakeSource,
+                 tc32emu::Tlsr8258::AnalogWakeTimerEnable);
+    write_analog(0x7e, 0x00); // suspend, with CPU/SRAM retention.
+    device.write8(tc32emu::Tlsr8258::SystemTimerControl, 0x08);
+
+    tc32emu::Cpu cpu(device);
+    cpu.set_reg(0, tc32emu::Tlsr8258::PowerDownSleepEnable |
+                       tc32emu::Tlsr8258::PowerDownSleepTrigger);
+    cpu.set_reg(1, tc32emu::Tlsr8258::PowerDownControl);
+    const auto result = cpu.run(8);
+    CHECK(result.reason == tc32emu::StopReason::Halted);
+    CHECK(cpu.reg(1) == 11);
+    CHECK(device.time_ns() >= 1000000);
+    CHECK(device.power_state() == tc32emu::Tlsr8258PowerState::Awake);
+}
+
+void test_cpu_sleep_stays_asleep_when_rc32k_is_powered_down() {
+    tc32emu::Tlsr8258 device;
+    device.load_firmware(words({0x4008, 0xcf00}));
+    auto write_analog = [&device](std::uint8_t address, std::uint8_t value) {
+        device.write8(tc32emu::Tlsr8258::AnalogAddress, address);
+        device.write8(tc32emu::Tlsr8258::AnalogData, value);
+        device.write8(tc32emu::Tlsr8258::AnalogControl, 0x60);
+    };
+    device.write32(tc32emu::Tlsr8258::System32kTickCompare, 32);
+    write_analog(tc32emu::Tlsr8258::AnalogWakeSource,
+                 tc32emu::Tlsr8258::AnalogWakeTimerEnable);
+    write_analog(0x7e, 0x00);
+    write_analog(tc32emu::Tlsr8258::AnalogClockPower,
+                 tc32emu::Tlsr8258::AnalogClock32kRcPowerDown |
+                     tc32emu::Tlsr8258::AnalogClock32kXtalPowerDown);
+    device.write8(tc32emu::Tlsr8258::SystemTimerControl, 0x08);
+
+    tc32emu::Cpu cpu(device);
+    cpu.set_reg(0, tc32emu::Tlsr8258::PowerDownSleepEnable |
+                       tc32emu::Tlsr8258::PowerDownSleepTrigger);
+    cpu.set_reg(1, tc32emu::Tlsr8258::PowerDownControl);
+    const auto result = cpu.run(8);
+    CHECK(result.reason == tc32emu::StopReason::Sleeping);
+    CHECK(device.power_state() == tc32emu::Tlsr8258PowerState::Suspend);
+    CHECK(device.time_ns() < 1000000);
+}
+
+void test_cpu_deep_sleep_wake_resets_to_flash_vector() {
+    tc32emu::Tlsr8258 device;
+    device.load_firmware(words({
+        0xa10b, // Reset vector: tmov r1, #11.
+        0xcf00,
+        0xa125, // Code at PC 4 must be discarded by the deep-wake reset.
+    }));
+    auto write_analog = [&device](std::uint8_t address, std::uint8_t value) {
+        device.write8(tc32emu::Tlsr8258::AnalogAddress, address);
+        device.write8(tc32emu::Tlsr8258::AnalogData, value);
+        device.write8(tc32emu::Tlsr8258::AnalogControl, 0x60);
+    };
+    device.write8(tc32emu::Tlsr8258::RetainedSramBase, 0xa5);
+    device.write32(tc32emu::Tlsr8258::System32kTickCompare, 32);
+    write_analog(tc32emu::Tlsr8258::AnalogWakeSource,
+                 tc32emu::Tlsr8258::AnalogWakeTimerEnable);
+    write_analog(0x7e, 0x80); // deep sleep: wake starts at the reset vector.
+    device.write8(tc32emu::Tlsr8258::SystemTimerControl, 0x08);
+    device.write8(tc32emu::Tlsr8258::PowerDownControl,
+                  tc32emu::Tlsr8258::PowerDownSleepEnable |
+                      tc32emu::Tlsr8258::PowerDownSleepTrigger);
+
+    tc32emu::Cpu cpu(device);
+    cpu.reset(4);
+    const auto result = cpu.run(8);
+    CHECK(result.reason == tc32emu::StopReason::Halted);
+    CHECK(cpu.reg(1) == 11);
+    CHECK(device.read8(tc32emu::Tlsr8258::RetainedSramBase) == 0);
+    CHECK(device.power_state() == tc32emu::Tlsr8258PowerState::Awake);
+}
+
 void test_cpu_asr_by_32() {
     tc32emu::Tlsr8258 device;
     device.load_firmware(words({0xe001, 0xcf00})); // tasr r1, r0, #32
