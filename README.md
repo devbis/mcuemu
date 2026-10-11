@@ -17,6 +17,26 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+If `firmware/samplegw_tb03f.bin` and `firmware/samplelight_tb03f.bin` are
+present when CMake configures, CTest also registers firmware-level Zigbee
+scenarios. Run the join test directly with:
+
+```sh
+ctest --test-dir build -R firmware_zigbee_join --output-on-failure
+```
+
+It starts the light five seconds after the coordinator, then checks that the
+light's SDK joined flag is set and that both association MAC commands were
+successfully received by the other node. The images remain local and ignored by
+Git. Reconfigure with `cmake -S . -B build` after adding the images if CMake had
+previously skipped this test. Python 3 is needed for this optional test.
+
+`firmware_zigbee_button_light` extends the same boot and join sequence. It
+presses sampleGW SW1 (active-low PD6) after the light joins, checks that the
+light receives the resulting Zigbee traffic, and verifies the sampleLight PWM
+enable register is set for the output. The sampleGW demo repeats On/Off every
+second, so this test stops after the first command turns the output on.
+
 Run a raw flash image from address zero:
 
 ```sh

@@ -43,4 +43,42 @@ if(TC32EMU_BUILD_TESTS)
     )
     target_link_libraries(tc32emu-tests PRIVATE tc32emu)
     add_test(NAME tc32emu-tests COMMAND tc32emu-tests)
+
+    set(TC32EMU_SAMPLE_GW_FIRMWARE
+        "${CMAKE_CURRENT_SOURCE_DIR}/firmware/samplegw_tb03f.bin")
+    set(TC32EMU_SAMPLE_LIGHT_FIRMWARE
+        "${CMAKE_CURRENT_SOURCE_DIR}/firmware/samplelight_tb03f.bin")
+    if(EXISTS "${TC32EMU_SAMPLE_GW_FIRMWARE}" AND
+       EXISTS "${TC32EMU_SAMPLE_LIGHT_FIRMWARE}")
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            add_test(
+                NAME firmware_zigbee_join
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_zigbee_join.py"
+                        "$<TARGET_FILE:tc32-emu>"
+                        "${TC32EMU_SAMPLE_GW_FIRMWARE}"
+                        "${TC32EMU_SAMPLE_LIGHT_FIRMWARE}"
+                        join)
+            add_test(
+                NAME firmware_zigbee_button_light
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_zigbee_join.py"
+                        "$<TARGET_FILE:tc32-emu>"
+                        "${TC32EMU_SAMPLE_GW_FIRMWARE}"
+                        "${TC32EMU_SAMPLE_LIGHT_FIRMWARE}"
+                        button)
+            set_tests_properties(firmware_zigbee_join firmware_zigbee_button_light
+                PROPERTIES
+                TIMEOUT 600
+                LABELS "firmware;zigbee"
+            )
+        else()
+            message(STATUS
+                "Skipping firmware_zigbee_join: Python 3 interpreter not found")
+        endif()
+    else()
+        message(STATUS
+            "Skipping firmware_zigbee_join: local sampleGW/sampleLight images not found in firmware/")
+    endif()
 endif()
