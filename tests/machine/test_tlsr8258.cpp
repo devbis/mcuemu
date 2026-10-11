@@ -161,6 +161,21 @@ void test_tlsr_system_timer() {
     CHECK(device.read16(0x800750) == 8000);
     device.write8(tc32emu::Tlsr8258::SystemTimerControl, 0x02);
     CHECK(device.read8(tc32emu::Tlsr8258::SystemTimerControl) == 0);
+
+    device.write32(tc32emu::Tlsr8258::SystemTimerCompare, 0x150);
+    device.write8(tc32emu::Tlsr8258::SystemTimerMode,
+                  tc32emu::Tlsr8258::SystemTimerIrqEnable);
+    device.write8(tc32emu::Tlsr8258::IrqMask + 2, 1u << 4); // IRQ 20.
+    device.write8(tc32emu::Tlsr8258::IrqGlobalEnable, 1);
+    device.tick(48); // 0x140; compare has not fired yet.
+    CHECK(!device.interrupt_pending());
+    device.tick(48); // 0x150; IRQ 20 becomes pending.
+    CHECK(device.interrupt_pending());
+    CHECK((device.read8(tc32emu::Tlsr8258::IrqSource + 2) & (1u << 4)) != 0);
+    device.write32(tc32emu::Tlsr8258::IrqSource, 1u << 20);
+    CHECK(!device.interrupt_pending());
+    device.tick(48); // A one-shot compare does not reassert after its target.
+    CHECK(!device.interrupt_pending());
 }
 
 void test_tlsr_mspi_jedec_id() {

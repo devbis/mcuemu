@@ -71,7 +71,9 @@ public:
     static constexpr std::uint32_t RfIrqMask = 0x800f1c;
     static constexpr std::uint32_t RfIrqStatus = 0x800f20;
     static constexpr std::uint32_t SystemTimer = 0x800740;
+    static constexpr std::uint32_t SystemTimerCompare = 0x800744;
     static constexpr std::uint32_t SystemTimerMode = 0x80074c;
+    static constexpr std::uint8_t SystemTimerIrqEnable = 1u << 1;
     static constexpr std::uint32_t SystemTimerControl = 0x80074f;
     static constexpr std::uint8_t SystemTimerControlStrobeMask = 0x0b;
     static constexpr std::uint32_t IrqMask = 0x800640;
@@ -200,6 +202,7 @@ private:
 
     std::uint8_t read_register(std::uint32_t offset);
     void write_register(std::uint32_t offset, std::uint8_t value);
+    void update_system_timer_irq(std::uint32_t previous_count) noexcept;
     std::uint8_t pwm_enable_mask() const noexcept;
     void record_output_event(OutputEvent::Kind kind, unsigned index,
                              std::uint8_t value);

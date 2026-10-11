@@ -322,6 +322,15 @@ bool Tlsr8258::advance_sleep_to_wakeup() {
         (registers_[Clock32kSelect - RegisterBase] & Clock32kSelectXtal) != 0
             ? 32768u
             : 32000u;
+    std::uint32_t calibration =
+        static_cast<std::uint32_t>(registers_[0x750]) |
+        (static_cast<std::uint32_t>(registers_[0x751]) << 8);
+    if (calibration == 0)
+        calibration = source_hz == 32768u ? 7812u : 8000u;
+    const std::uint32_t previous_system_timer = system_timer_count_;
+    system_timer_count_ += static_cast<std::uint32_t>(
+        (static_cast<std::uint64_t>(delta) * calibration) / 16u);
+    update_system_timer_irq(previous_system_timer);
     const std::uint64_t whole_seconds = delta / source_hz;
     const std::uint64_t remaining_ticks = delta % source_hz;
     const std::uint64_t max_time = std::numeric_limits<std::uint64_t>::max();
@@ -440,12 +449,14 @@ void Tlsr8258::write8(std::uint32_t address, std::uint8_t value) {
 
 void Tlsr8258::tick(std::uint32_t cycles) {
     constexpr std::uint64_t nanos_per_second = 1000000000u;
+    const std::uint32_t previous_system_timer = system_timer_count_;
     const std::uint64_t system_timer_numerator =
         static_cast<std::uint64_t>(cycles) * SystemTimerClockHz +
         system_timer_fraction_;
     system_timer_count_ += static_cast<std::uint32_t>(
         system_timer_numerator / clock_hz_);
     system_timer_fraction_ = system_timer_numerator % clock_hz_;
+    update_system_timer_irq(previous_system_timer);
 
     const bool use_32k_xtal =
         (registers_[0x073] & Clock32kSelectXtal) != 0;
@@ -802,7 +813,32 @@ std::uint8_t Tlsr8258::read_register(std::uint32_t offset) {
     return registers_[offset];
 }
 
+void Tlsr8258::update_system_timer_irq(
+    std::uint32_t previous_count) noexcept {
+    if ((registers_[SystemTimerMode - RegisterBase] &
+         SystemTimerIrqEnable) == 0)
+        return;
+
+    const std::uint32_t compare =
+        static_cast<std::uint32_t>(registers_[0x744]) |
+        (static_cast<std::uint32_t>(registers_[0x745]) << 8) |
+        (static_cast<std::uint32_t>(registers_[0x746]) << 16) |
+        (static_cast<std::uint32_t>(registers_[0x747]) << 24);
+    const bool before_compare =
+        static_cast<std::int32_t>(previous_count - compare) < 0;
+    const bool at_or_after_compare =
+        static_cast<std::int32_t>(system_timer_count_ - compare) >= 0;
+    if (before_compare && at_or_after_compare)
+        registers_[0x64a] |= 1u << 4; // IRQ 20: system timer.
+}
+
 void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
+    if (offset >= 0x648 && offset <= 0x64a) {
+        // IRQ source bits are write-one-to-clear; in particular Zephyr's
+        // system timer ISR clears IRQ 20 with a 32-bit write at 0x800648.
+        registers_[offset] &= static_cast<std::uint8_t>(~value);
+        return;
+    }
     if (offset >= System32kTickCompare - RegisterBase &&
         offset < System32kTickCompare - RegisterBase + 4) {
         registers_[offset] = value;
