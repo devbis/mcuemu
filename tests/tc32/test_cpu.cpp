@@ -53,6 +53,29 @@ void test_cpu_load_store() {
           0x12345678u);
 }
 
+void test_cpu_load_multiple_preserves_loaded_base_register() {
+    tc32emu::Tlsr8258 device;
+    constexpr std::uint32_t table =
+        tc32emu::Tlsr8258::RetainedSramBase + 0x100u;
+    device.load_firmware(words({
+        0xdb0f, // tloadm r3!, {r0, r1, r2, r3}
+        0xcf00,
+    }));
+    device.write32(table + 0, 0x11223344u);
+    device.write32(table + 4, 0x55667788u);
+    device.write32(table + 8, 0x99aabbccu);
+    device.write32(table + 12, 0x00005d49u);
+
+    tc32emu::Cpu cpu(device);
+    cpu.set_reg(3, table);
+    CHECK(cpu.step());
+    CHECK(cpu.reg(0) == 0x11223344u);
+    CHECK(cpu.reg(1) == 0x55667788u);
+    CHECK(cpu.reg(2) == 0x99aabbccu);
+    // TC32 toolchains use the base as the final loaded register in this form.
+    CHECK(cpu.reg(3) == 0x00005d49u);
+}
+
 void test_cpu_vendor_mmio_alias() {
     tc32emu::Tlsr8258 device;
     device.load_firmware(words({
