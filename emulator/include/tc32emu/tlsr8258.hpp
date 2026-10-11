@@ -74,6 +74,7 @@ public:
     static constexpr std::uint32_t SystemTimerCompare = 0x800744;
     static constexpr std::uint32_t SystemTimerMode = 0x80074c;
     static constexpr std::uint8_t SystemTimerIrqEnable = 1u << 1;
+    static constexpr std::uint8_t SystemTimer32kCalibrationEnable = 1u << 7;
     static constexpr std::uint32_t SystemTimerControl = 0x80074f;
     static constexpr std::uint8_t SystemTimerControlStrobeMask = 0x0b;
     static constexpr std::uint32_t IrqMask = 0x800640;
@@ -85,6 +86,10 @@ public:
     static constexpr std::uint8_t AnalogClockPower = 0x05;
     static constexpr std::uint8_t AnalogClock32kRcPowerDown = 1u << 0;
     static constexpr std::uint8_t AnalogClock32kXtalPowerDown = 1u << 1;
+    static constexpr std::uint8_t AnalogRc32kCalibrationControl = 0xc6;
+    static constexpr std::uint8_t AnalogRcCalibrationStatus = 0xcf;
+    static constexpr std::uint8_t AnalogRc32kCalibrationReady = 1u << 6;
+    static constexpr std::uint32_t Rc32kCalibrationTimeNs = 3000000;
     static constexpr std::uint32_t AesControl = 0x800540;
     static constexpr std::uint32_t AesData = 0x800548;
     static constexpr std::uint32_t AesKey = 0x800550;
@@ -156,8 +161,12 @@ private:
     std::uint32_t clock_hz_;
     std::uint64_t time_ns_{0};
     std::uint64_t time_fraction_{0};
+    std::uint64_t rc32k_calibration_ready_at_ns_{0};
+    bool rc32k_calibration_pending_{false};
     std::uint64_t analog_32k_tick_count_{0};
     std::uint64_t analog_32k_fraction_{0};
+    std::uint64_t system_timer_calibration_target_tick_{0};
+    bool system_timer_calibration_pending_{false};
     Tlsr8258PowerState power_state_{Tlsr8258PowerState::Awake};
     bool deep_sleep_wakeup_pending_{false};
     bool wake_timer_armed_{false};
@@ -203,6 +212,8 @@ private:
     std::uint8_t read_register(std::uint32_t offset);
     void write_register(std::uint32_t offset, std::uint8_t value);
     void update_system_timer_irq(std::uint32_t previous_count) noexcept;
+    void update_system_timer_calibration() noexcept;
+    void update_analog_calibration() noexcept;
     std::uint8_t pwm_enable_mask() const noexcept;
     void record_output_event(OutputEvent::Kind kind, unsigned index,
                              std::uint8_t value);
@@ -212,7 +223,7 @@ private:
     bool selected_32k_clock_running() const noexcept;
     void enter_sleep();
     void reset_volatile_state_after_deep_sleep();
-    std::uint8_t analog_register_read(std::uint8_t address) const noexcept;
+    std::uint8_t analog_register_read(std::uint8_t address) noexcept;
     std::uint32_t dma_address(std::uint32_t low_offset,
                               std::uint32_t high_offset) const noexcept;
     void start_radio_transmit();

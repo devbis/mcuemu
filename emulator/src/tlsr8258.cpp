@@ -252,6 +252,9 @@ Tlsr8258::Tlsr8258(Tlsr8258Model model, std::uint32_t clock_hz)
         throw std::invalid_argument("TLSR8258 clock must be nonzero");
     registers_.fill(0);
     registers_[0x540] = aes_data_feed_bit; // Datasheet AES_CTRL reset value.
+    // Datasheet SYS_TIMER_CTRL0 reset value enables 32 kHz calibration and
+    // the system-timer subsystem.
+    registers_[0x74c] = 0x90;
     analog_registers_.fill(0);
     // Datasheet AREG 0x05 reset state: the RC 32 kHz clock is powered, while
     // the optional 32 kHz crystal is powered down.
@@ -344,8 +347,10 @@ bool Tlsr8258::advance_sleep_to_wakeup() {
         time_ns_ += whole_ns + fractional_ns;
     }
     time_fraction_ = 0;
+    update_analog_calibration();
     analog_32k_tick_count_ += delta;
     analog_32k_fraction_ = 0;
+    update_system_timer_calibration();
     analog_registers_[AnalogWakeStatus] |= AnalogWakeTimerStatus;
     wake_timer_armed_ = false;
     if (power_state_ == Tlsr8258PowerState::DeepSleep)
@@ -367,6 +372,7 @@ void Tlsr8258::reset_volatile_state_after_deep_sleep() {
     registers_.fill(0);
     registers_[0x540] = aes_data_feed_bit;
     registers_[Clock32kSelect - RegisterBase] = 0x04;
+    registers_[0x74c] = 0x90;
     registers_[0x94] = 0xff;
     registers_[0x95] = 0x0f;
     registers_[0x96] = 0x0f;
@@ -378,6 +384,8 @@ void Tlsr8258::reset_volatile_state_after_deep_sleep() {
     registers_[0x9e] = uart_tx_done_bit;
     system_timer_count_ = 0;
     system_timer_fraction_ = 0;
+    system_timer_calibration_target_tick_ = 0;
+    system_timer_calibration_pending_ = false;
     timer_last_tick_.fill(0);
     timer_fired_.fill(false);
     gpio_outputs_.fill(0);
@@ -395,9 +403,15 @@ void Tlsr8258::reset_volatile_state_after_deep_sleep() {
     radio_tx_busy_ = false;
     wake_timer_armed_ = false;
     power_state_ = Tlsr8258PowerState::Awake;
-    std::fill(sram_.begin(), sram_.end(), 0);
-    // The PM status analog register survives deep sleep and distinguishes a
-    // timer wake from the initial power-on path in the vendor SDK.
+    // The TLSR8258 has 32 KB of SRAM retained in deep sleep at 0x840000..
+    // 0x847fff and 32 KB that loses state at 0x848000..0x84ffff. Firmware
+    // keeps its wake continuation in the retained range; startup clears its
+    // normal BSS ranges after reset.
+    constexpr std::size_t non_retained_offset =
+        NonRetainedSramBase - RetainedSramBase;
+    std::fill(sram_.begin() + non_retained_offset, sram_.end(), 0);
+    // The PM status analog register also survives and distinguishes a timer
+    // wake from the initial power-on path in the vendor SDK.
     analog_registers_[0x7f] = 0;
 }
 
@@ -473,6 +487,7 @@ void Tlsr8258::tick(std::uint32_t cycles) {
     } else {
         analog_32k_fraction_ = 0;
     }
+    update_system_timer_calibration();
 
     const std::uint64_t whole_seconds = cycles / clock_hz_;
     const std::uint64_t remainder_cycles = cycles % clock_hz_;
@@ -490,6 +505,7 @@ void Tlsr8258::tick(std::uint32_t cycles) {
             time_ns_ += fractional_ns;
         time_fraction_ = fractional_numerator % clock_hz_;
     }
+    update_analog_calibration();
 
     if (aes_cycles_remaining_ != 0) {
         if (cycles >= aes_cycles_remaining_) {
@@ -749,7 +765,20 @@ std::uint32_t Tlsr8258::analog_32k_tick() const noexcept {
     return static_cast<std::uint32_t>(analog_32k_tick_count_);
 }
 
-std::uint8_t Tlsr8258::analog_register_read(std::uint8_t address) const noexcept {
+void Tlsr8258::update_analog_calibration() noexcept {
+    if (!rc32k_calibration_pending_ ||
+        time_ns_ < rc32k_calibration_ready_at_ns_)
+        return;
+
+    rc32k_calibration_pending_ = false;
+    if ((analog_registers_[AnalogClockPower] &
+         AnalogClock32kRcPowerDown) == 0)
+        analog_registers_[AnalogRcCalibrationStatus] |=
+            AnalogRc32kCalibrationReady;
+}
+
+std::uint8_t Tlsr8258::analog_register_read(std::uint8_t address) noexcept {
+    update_analog_calibration();
     if (address >= 0x40 && address <= 0x43) {
         const unsigned byte = address - 0x40;
         return static_cast<std::uint8_t>(analog_32k_tick() >> (byte * 8u));
@@ -832,6 +861,20 @@ void Tlsr8258::update_system_timer_irq(
         registers_[0x64a] |= 1u << 4; // IRQ 20: system timer.
 }
 
+void Tlsr8258::update_system_timer_calibration() noexcept {
+    if (!system_timer_calibration_pending_ ||
+        analog_32k_tick_count_ < system_timer_calibration_target_tick_)
+        return;
+
+    system_timer_calibration_pending_ = false;
+    const std::uint16_t calibration =
+        (registers_[Clock32kSelect - RegisterBase] & Clock32kSelectXtal) != 0
+            ? 7812u
+            : 8000u;
+    registers_[0x750] = static_cast<std::uint8_t>(calibration);
+    registers_[0x751] = static_cast<std::uint8_t>(calibration >> 8);
+}
+
 void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
     if (offset >= 0x648 && offset <= 0x64a) {
         // IRQ source bits are write-one-to-clear; in particular Zephyr's
@@ -851,17 +894,20 @@ void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
         wake_timer_armed_ = (value & 0x08u) != 0;
         registers_[offset] = value &
             static_cast<std::uint8_t>(~SystemTimerControlStrobeMask);
-        if ((value & 0x01u) != 0 && registers_[0x74c] == 0x92u) {
-            // Zephyr measures 16 MHz system ticks per 16 ticks of the selected
-            // 32 kHz source. AREG 0x05 and the source selector determine the
-            // nominal result: 8000 for RC, 7812 for the 32.768 kHz crystal.
-            const std::uint16_t calibration =
-                (registers_[Clock32kSelect - RegisterBase] &
-                 Clock32kSelectXtal) != 0
-                    ? 7812u
-                    : 8000u;
-            registers_[0x750] = static_cast<std::uint8_t>(calibration);
-            registers_[0x751] = static_cast<std::uint8_t>(calibration >> 8);
+        if ((value & 0x01u) != 0 &&
+            (registers_[0x74c] & SystemTimer32kCalibrationEnable) != 0) {
+            // SYS_TIMER_CTRL1 starts a measurement over 16 cycles of the
+            // selected 32 kHz source. Firmware can change other SYS_TIMER_CTRL0
+            // bits while the measurement is in flight.
+            registers_[0x750] = 0;
+            registers_[0x751] = 0;
+            if (selected_32k_clock_running()) {
+                system_timer_calibration_target_tick_ =
+                    analog_32k_tick_count_ + 16u;
+                system_timer_calibration_pending_ = true;
+            } else {
+                system_timer_calibration_pending_ = false;
+            }
         }
         return;
     }
@@ -1026,7 +1072,37 @@ void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
                     // 0x0f to AREG 0xc7 and polls AREG 0xcf[7]. Complete that
                     // hardware calibration synchronously in the virtual model.
                     if (address == 0xc7 && registers_[0x0b9] == 0x0f)
-                        analog_registers_[0xcf] |= 0x80;
+                        analog_registers_[AnalogRcCalibrationStatus] |= 0x80;
+
+                    // The vendor rc_32k_cal routine writes 0xf6 then 0xf7 to
+                    // AREG 0xc6 and polls AREG 0xcf[6]. The datasheet gives a
+                    // 3 ms RC 32 kHz calibration time but not these internal
+                    // register semantics, so model the observed SDK handshake
+                    // with a virtual-time completion event.
+                    if (address == AnalogRc32kCalibrationControl) {
+                        if (registers_[0x0b9] == 0xf6) {
+                            analog_registers_[AnalogRcCalibrationStatus] &=
+                                static_cast<std::uint8_t>(
+                                    ~AnalogRc32kCalibrationReady);
+                            rc32k_calibration_pending_ = false;
+                        } else if (registers_[0x0b9] == 0xf7) {
+                            analog_registers_[AnalogRcCalibrationStatus] &=
+                                static_cast<std::uint8_t>(
+                                    ~AnalogRc32kCalibrationReady);
+                            if ((analog_registers_[AnalogClockPower] &
+                                 AnalogClock32kRcPowerDown) == 0) {
+                                const auto max_time =
+                                    std::numeric_limits<std::uint64_t>::max();
+                                rc32k_calibration_ready_at_ns_ =
+                                    time_ns_ > max_time - Rc32kCalibrationTimeNs
+                                        ? max_time
+                                        : time_ns_ + Rc32kCalibrationTimeNs;
+                                rc32k_calibration_pending_ = true;
+                            } else {
+                                rc32k_calibration_pending_ = false;
+                            }
+                        }
+                    }
                 }
             } else {
                 registers_[0x0b9] = analog_register_read(address);

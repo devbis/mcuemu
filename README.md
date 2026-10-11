@@ -52,6 +52,16 @@ after copying the image into `firmware/`, then run:
 ctest --test-dir build -R firmware_zephyr_pm_wake --output-on-failure
 ```
 
+If `firmware/vendor_sleep_1s.bin` is present when CMake configures, CTest also
+registers `firmware_vendor_sleep_1s`. It runs the local Telink firmware through
+repeated RC32k timer sleeps and checks that each observed sleep averages about
+one second of virtual time. Firmware stays local and is not committed. Run it
+with:
+
+```sh
+ctest --test-dir build -R firmware_vendor_sleep_1s --output-on-failure
+```
+
 Run a raw flash image from address zero:
 
 ```sh

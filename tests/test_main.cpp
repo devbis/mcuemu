@@ -15,6 +15,8 @@ void test_cpu_long_branches_and_call();
 void test_cpu_status_modes_and_exception_return();
 void test_tlsr_memory_gpio_and_timer();
 void test_tlsr_analog_registers_and_32k_tick();
+void test_tlsr_rc32k_calibration_ready_after_virtual_time();
+void test_tlsr_deep_sleep_sram_retention();
 void test_tlsr_system_timer();
 void test_tlsr_mspi_jedec_id();
 void test_tlsr_aes128_encrypt_decrypt();
@@ -42,6 +44,8 @@ int main() {
     test_cpu_status_modes_and_exception_return();
     test_tlsr_memory_gpio_and_timer();
     test_tlsr_analog_registers_and_32k_tick();
+    test_tlsr_rc32k_calibration_ready_after_virtual_time();
+    test_tlsr_deep_sleep_sram_retention();
     test_tlsr_system_timer();
     test_tlsr_mspi_jedec_id();
     test_tlsr_aes128_encrypt_decrypt();

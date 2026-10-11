@@ -179,6 +179,7 @@ void test_cpu_deep_sleep_wake_resets_to_flash_vector() {
         device.write8(tc32emu::Tlsr8258::AnalogControl, 0x60);
     };
     device.write8(tc32emu::Tlsr8258::RetainedSramBase, 0xa5);
+    device.write8(tc32emu::Tlsr8258::NonRetainedSramBase, 0x5a);
     device.write32(tc32emu::Tlsr8258::System32kTickCompare, 32);
     write_analog(tc32emu::Tlsr8258::AnalogWakeSource,
                  tc32emu::Tlsr8258::AnalogWakeTimerEnable);
@@ -193,7 +194,8 @@ void test_cpu_deep_sleep_wake_resets_to_flash_vector() {
     const auto result = cpu.run(8);
     CHECK(result.reason == tc32emu::StopReason::Halted);
     CHECK(cpu.reg(1) == 11);
-    CHECK(device.read8(tc32emu::Tlsr8258::RetainedSramBase) == 0);
+    CHECK(device.read8(tc32emu::Tlsr8258::RetainedSramBase) == 0xa5);
+    CHECK(device.read8(tc32emu::Tlsr8258::NonRetainedSramBase) == 0);
     CHECK(device.power_state() == tc32emu::Tlsr8258PowerState::Awake);
 }
 

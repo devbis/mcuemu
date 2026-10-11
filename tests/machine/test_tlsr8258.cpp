@@ -142,6 +142,65 @@ void test_tlsr_analog_registers_and_32k_tick() {
     CHECK(read_tick() == 96768);
 }
 
+void test_tlsr_rc32k_calibration_ready_after_virtual_time() {
+    tc32emu::Tlsr8258 device;
+    auto write_analog = [&device](std::uint8_t address, std::uint8_t value) {
+        device.write8(tc32emu::Tlsr8258::AnalogAddress, address);
+        device.write8(tc32emu::Tlsr8258::AnalogData, value);
+        device.write8(tc32emu::Tlsr8258::AnalogControl, 0x60);
+    };
+    auto read_analog = [&device](std::uint8_t address) {
+        device.write8(tc32emu::Tlsr8258::AnalogAddress, address);
+        device.write8(tc32emu::Tlsr8258::AnalogControl, 0x40);
+        return device.read8(tc32emu::Tlsr8258::AnalogData);
+    };
+
+    write_analog(tc32emu::Tlsr8258::AnalogRc32kCalibrationControl, 0xf6);
+    write_analog(tc32emu::Tlsr8258::AnalogRc32kCalibrationControl, 0xf7);
+    CHECK((read_analog(tc32emu::Tlsr8258::AnalogRcCalibrationStatus) &
+           tc32emu::Tlsr8258::AnalogRc32kCalibrationReady) == 0);
+
+    device.tick(tc32emu::Tlsr8258::Rc32kCalibrationTimeNs * 48 / 1000 - 1);
+    CHECK((read_analog(tc32emu::Tlsr8258::AnalogRcCalibrationStatus) &
+           tc32emu::Tlsr8258::AnalogRc32kCalibrationReady) == 0);
+    device.tick(1);
+    CHECK((read_analog(tc32emu::Tlsr8258::AnalogRcCalibrationStatus) &
+           tc32emu::Tlsr8258::AnalogRc32kCalibrationReady) != 0);
+    CHECK(device.time_ns() == tc32emu::Tlsr8258::Rc32kCalibrationTimeNs);
+
+    write_analog(tc32emu::Tlsr8258::AnalogRc32kCalibrationControl, 0xf6);
+    CHECK((read_analog(tc32emu::Tlsr8258::AnalogRcCalibrationStatus) &
+           tc32emu::Tlsr8258::AnalogRc32kCalibrationReady) == 0);
+}
+
+void test_tlsr_deep_sleep_sram_retention() {
+    tc32emu::Tlsr8258 device;
+    device.write32(tc32emu::Tlsr8258::RetainedSramBase + 0x100,
+                   0x12345678);
+    device.write32(tc32emu::Tlsr8258::NonRetainedSramBase, 0x9abcdef0);
+
+    auto write_analog = [&device](std::uint8_t address, std::uint8_t value) {
+        device.write8(tc32emu::Tlsr8258::AnalogAddress, address);
+        device.write8(tc32emu::Tlsr8258::AnalogData, value);
+        device.write8(tc32emu::Tlsr8258::AnalogControl, 0x60);
+    };
+    write_analog(tc32emu::Tlsr8258::AnalogWakeSource,
+                 tc32emu::Tlsr8258::AnalogWakeTimerEnable);
+    write_analog(0x7e, 0x80); // Deep-sleep mode.
+    device.write32(tc32emu::Tlsr8258::System32kTickCompare, 1);
+    device.write8(tc32emu::Tlsr8258::SystemTimerControl, 0x08);
+    device.write8(tc32emu::Tlsr8258::PowerDownControl,
+                  tc32emu::Tlsr8258::PowerDownSleepEnable |
+                      tc32emu::Tlsr8258::PowerDownSleepTrigger);
+
+    CHECK(device.power_state() == tc32emu::Tlsr8258PowerState::DeepSleep);
+    CHECK(device.advance_sleep_to_wakeup());
+    CHECK(device.consume_deep_sleep_wakeup());
+    CHECK(device.read32(tc32emu::Tlsr8258::RetainedSramBase + 0x100) ==
+          0x12345678);
+    CHECK(device.read32(tc32emu::Tlsr8258::NonRetainedSramBase) == 0);
+}
+
 void test_tlsr_system_timer() {
     tc32emu::Tlsr8258 device;
     CHECK(device.read32(tc32emu::Tlsr8258::SystemTimer) == 0);
@@ -158,7 +217,7 @@ void test_tlsr_system_timer() {
 
     device.write8(tc32emu::Tlsr8258::SystemTimerMode, 0x92);
     device.write8(tc32emu::Tlsr8258::SystemTimerControl, 0x01);
-    CHECK(device.read16(0x800750) == 8000);
+    CHECK(device.read16(0x800750) == 0);
     device.write8(tc32emu::Tlsr8258::SystemTimerControl, 0x02);
     CHECK(device.read8(tc32emu::Tlsr8258::SystemTimerControl) == 0);
 
@@ -176,6 +235,15 @@ void test_tlsr_system_timer() {
     CHECK(!device.interrupt_pending());
     device.tick(48); // A one-shot compare does not reassert after its target.
     CHECK(!device.interrupt_pending());
+
+    tc32emu::Tlsr8258 calibration_device;
+    CHECK(calibration_device.read8(tc32emu::Tlsr8258::SystemTimerMode) == 0x90);
+    calibration_device.write8(tc32emu::Tlsr8258::SystemTimerControl, 0x01);
+    CHECK(calibration_device.read16(0x800750) == 0);
+    calibration_device.tick(23999); // Just short of 16 RC 32 kHz ticks.
+    CHECK(calibration_device.read16(0x800750) == 0);
+    calibration_device.tick(1);
+    CHECK(calibration_device.read16(0x800750) == 8000);
 }
 
 void test_tlsr_mspi_jedec_id() {

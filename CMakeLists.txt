@@ -102,4 +102,28 @@ if(TC32EMU_BUILD_TESTS)
                 "Skipping firmware_zephyr_pm_wake: Python 3 interpreter not found")
         endif()
     endif()
+
+    set(TC32EMU_VENDOR_SLEEP_1S_FIRMWARE
+        "${CMAKE_CURRENT_SOURCE_DIR}/firmware/vendor_sleep_1s.bin")
+    if(EXISTS "${TC32EMU_VENDOR_SLEEP_1S_FIRMWARE}")
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            add_test(
+                NAME firmware_vendor_sleep_1s
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_vendor_sleep_1s.py"
+                        "$<TARGET_FILE:tc32-emu>"
+                        "${TC32EMU_VENDOR_SLEEP_1S_FIRMWARE}")
+            set_tests_properties(firmware_vendor_sleep_1s PROPERTIES
+                TIMEOUT 60
+                LABELS "firmware;power"
+            )
+        else()
+            message(STATUS
+                "Skipping firmware_vendor_sleep_1s: Python 3 interpreter not found")
+        endif()
+    else()
+        message(STATUS
+            "Skipping firmware_vendor_sleep_1s: local vendor_sleep_1s.bin not found in firmware/")
+    endif()
 endif()
