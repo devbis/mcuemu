@@ -16,6 +16,7 @@ void test_tlsr_memory_gpio_and_timer() {
     CHECK(device.read8(tc32emu::Tlsr8258::RegisterBase + 0x12d2) == 0x6b);
     device.write32(tc32emu::Tlsr8258::RetainedSramBase + 0x24, 0xaabbccddu);
     CHECK(device.read32(tc32emu::Tlsr8258::RetainedSramBase + 0x24) == 0xaabbccddu);
+    CHECK(device.read8(tc32emu::Tlsr8258::GpioBase) == 0xff);
 
     device.set_gpio_input(0, 0x05);
     CHECK(device.read8(tc32emu::Tlsr8258::GpioBase) == 0x05);

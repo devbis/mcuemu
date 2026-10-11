@@ -260,7 +260,10 @@ Tlsr8258::Tlsr8258(Tlsr8258Model model, std::uint32_t clock_hz)
     analog_registers_[0x7f] = 1;
     registers_[0x073] = 0x04; // Datasheet reset value: RC_32k selected.
     sram_.fill(0);
-    gpio_inputs_.fill(0);
+    // Board buttons on the TLSR8258 dongle are pulled high and become active
+    // low. Start input pads in the idle state; tests and network stimuli can
+    // drive individual port values explicitly.
+    gpio_inputs_.fill(0xff);
     gpio_outputs_.fill(0);
     timer_last_tick_.fill(0);
     timer_fired_.fill(false);
@@ -431,6 +434,7 @@ void Tlsr8258::connect_radio(VirtualAir &air, std::string node_name) {
     radio_air_ = &air;
     radio_node_name_ = std::move(node_name);
     radio_next_poll_ns_ = time_ns_;
+    radio_last_poll_ns_ = time_ns_;
 }
 
 void Tlsr8258::set_radio_channel(std::uint8_t zigbee_channel) {
@@ -478,7 +482,8 @@ void Tlsr8258::start_radio_transmit() {
     if (radio_air_ && payload_size != 0 && payload_size <= 125u &&
         (registers_[0xf02] & 0x10u) != 0) {
         radio_air_->transmit(radio_node_name_, {}, RadioProtocol::Zigbee802154,
-                             radio_channel_, time_ns_, std::move(payload));
+                             radio_channel_, network_time_ns(),
+                             std::move(payload));
         radio_tx_finish_ns_ = radio_air_->frames().back().end_ns;
         radio_tx_busy_ = true;
         registers_[0xf20] &= static_cast<std::uint8_t>(~0x02u);
@@ -487,12 +492,12 @@ void Tlsr8258::start_radio_transmit() {
 
     // Complete locally when no shared medium is attached or this is not a
     // supported Zigbee TX configuration, so firmware polling can still run.
-    radio_tx_finish_ns_ = time_ns_;
+    radio_tx_finish_ns_ = network_time_ns();
     radio_tx_busy_ = true;
 }
 
 void Tlsr8258::poll_radio() {
-    if (radio_tx_busy_ && time_ns_ >= radio_tx_finish_ns_) {
+    if (radio_tx_busy_ && network_time_ns() >= radio_tx_finish_ns_) {
         radio_tx_busy_ = false;
         registers_[0xc24] &= static_cast<std::uint8_t>(~0x08u);
         registers_[0xf20] |= 0x02u; // RF_TX complete.
@@ -501,16 +506,30 @@ void Tlsr8258::poll_radio() {
 
     if (!radio_air_ || time_ns_ < radio_next_poll_ns_)
         return;
+    const std::uint64_t previous_poll_local_ns = radio_last_poll_ns_;
+    const std::uint64_t poll_lag_ns = time_ns_ - previous_poll_local_ns;
+    const std::uint64_t current_network_ns = network_time_ns();
+    const std::uint64_t previous_poll_network_ns =
+        current_network_ns >= poll_lag_ns ? current_network_ns - poll_lag_ns : 0;
+    radio_last_poll_ns_ = time_ns_;
     radio_next_poll_ns_ = time_ns_ + 10000u; // Poll at 10 us intervals.
+    // RF mode and the DMA channel are separate enables on the 8258. 0x428
+    // enables the RF receiver; DMA channel 2 (0xc20 bit 2) must also be on
+    // before an arriving packet can reach the firmware's RX buffer.
     if ((registers_[0xf02] & 0x20u) == 0 ||
-        (registers_[0x428] & 0x01u) == 0)
+        (registers_[0x428] & 0x01u) == 0 ||
+        (registers_[0xc20] & 0x04u) == 0)
         return;
 
     for (const RadioFrame &frame : radio_air_->receive(
              radio_node_name_, RadioProtocol::Zigbee802154,
-             radio_channel_, time_ns_)) {
+             radio_channel_, current_network_ns, previous_poll_network_ns)) {
         const std::uint32_t address = dma_address(0x0c08, 0x0c42);
-        const std::size_t required_size = frame.payload.size() + 13u;
+        // The 8258 DMA length includes the two on-air FCS bytes. The MAC
+        // parser subtracts them before interpreting the frame, just as the
+        // TX path removes the DMA-only FCS count before putting a packet on
+        // the virtual air.
+        const std::size_t required_size = frame.payload.size() + 15u;
         if (address < RetainedSramBase ||
             address >= RetainedSramBase + SramSize ||
             required_size > RetainedSramBase + SramSize - address ||
@@ -518,20 +537,27 @@ void Tlsr8258::poll_radio() {
             continue;
 
         const std::uint8_t packet_length =
-            static_cast<std::uint8_t>(frame.payload.size() + 9u);
+            static_cast<std::uint8_t>(frame.payload.size() + 11u);
         write8(address, packet_length);
         write8(address + 1u, 0);
         write8(address + 2u, 0);
         write8(address + 3u, 0);
-        write8(address + 4u, static_cast<std::uint8_t>(frame.payload.size()));
+        write8(address + 4u,
+               static_cast<std::uint8_t>(frame.payload.size() + 2u));
         for (std::size_t i = 0; i != frame.payload.size(); ++i)
             write8(address + 5u + static_cast<std::uint32_t>(i), frame.payload[i]);
+        // VirtualAir carries the MAC frame without the generated FCS. Reserve
+        // the two bytes present in the real DMA buffer; firmware excludes
+        // them from the MAC PDU using p[4] - 2.
+        write8(address + 5u + static_cast<std::uint32_t>(frame.payload.size()), 0);
+        write8(address + 6u + static_cast<std::uint32_t>(frame.payload.size()), 0);
         const std::uint32_t timestamp_offset = packet_length - 4u;
         for (unsigned byte = 0; byte != 4; ++byte)
             write8(address + timestamp_offset + byte,
                    static_cast<std::uint8_t>(system_timer_count_ >> (byte * 8u)));
-        write8(address + packet_length + 2u,
-               static_cast<std::uint8_t>(-50)); // modeled RSSI in dBm
+        // The SDK subtracts 110 from this raw byte to produce dBm. Encode a
+        // modeled -50 dBm signal as 60 rather than storing -50 directly.
+        write8(address + packet_length + 2u, 60u);
         write8(address + packet_length + 3u, 0x10u); // CRC valid
         registers_[0xf20] |= 0x01u; // RF_RX complete.
         update_radio_irq();

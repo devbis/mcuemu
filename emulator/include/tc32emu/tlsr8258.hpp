@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,9 @@ public:
     static constexpr std::uint32_t RfRxDmaAddressHigh = 0x800c42;
     static constexpr std::uint32_t RfTxDmaAddressHigh = 0x800c43;
     static constexpr std::uint32_t RfDmaControl = 0x800428;
+    static constexpr std::uint32_t DmaChannelEnable = 0x800c20;
+    static constexpr std::uint8_t DmaRfRxEnable = 1u << 2;
+    static constexpr std::uint8_t DmaRfTxEnable = 1u << 3;
     static constexpr std::uint32_t DmaTxReady0 = 0x800c24;
     static constexpr std::uint32_t RfMode = 0x800f02;
     static constexpr std::uint32_t RfSynthFrequencyLow = 0x801244;
@@ -90,6 +94,15 @@ public:
     void set_gpio_input(unsigned port, std::uint8_t value);
     std::uint8_t gpio_output(unsigned port) const;
     void connect_radio(VirtualAir &air, std::string node_name);
+    void set_radio_time_offset(std::uint64_t offset_ns) noexcept {
+        radio_time_offset_ns_ = offset_ns;
+    }
+    std::uint64_t network_time_ns() const noexcept {
+        if (radio_time_offset_ns_ >
+            std::numeric_limits<std::uint64_t>::max() - time_ns_)
+            return std::numeric_limits<std::uint64_t>::max();
+        return time_ns_ + radio_time_offset_ns_;
+    }
     void set_radio_channel(std::uint8_t zigbee_channel);
     bool inject_uart_rx(std::uint8_t value);
     std::vector<std::uint8_t> take_uart_transmitted();
@@ -119,6 +132,8 @@ private:
     std::string radio_node_name_;
     std::uint8_t radio_channel_{11};
     std::uint64_t radio_next_poll_ns_{0};
+    std::uint64_t radio_last_poll_ns_{0};
+    std::uint64_t radio_time_offset_ns_{0};
     std::uint64_t radio_tx_finish_ns_{0};
     bool radio_tx_busy_{false};
     std::vector<std::uint8_t> flash_;

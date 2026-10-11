@@ -4,10 +4,12 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cctype>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -28,6 +30,9 @@ void usage(std::ostream &out) {
            "       [--trace-pc-range START:END] [--trace-mmio-range START:END]\n"
            "       [--trace-stack] [--trace-node NAME] [--trace-after-step N]\n"
            "       [--trace-limit N] [--fault-trace N] [--radio-payloads]\n"
+           "       [--gpio-event NAME=PORT:VALUE@TIME]\n"
+           "       [--start-at NAME=TIME]\n"
+           "       [--dump-mmio NAME=ADDRESS:LENGTH]\n"
            "       [--dump-sram NAME=ADDRESS:LENGTH]\n"
            "       tc32-emu models\n\n"
            "Models: TLSR8258F512, TLSR8258F1K\n"
@@ -69,6 +74,140 @@ tc32emu::AddressRange parse_range(const std::string &text) {
     if (range.first > range.last)
         throw std::invalid_argument("address range start exceeds end: " + text);
     return range;
+}
+
+std::uint64_t parse_duration_ns(const std::string &text) {
+    std::uint64_t unit_scale = 0;
+    std::size_t suffix_length = 0;
+    if (text.ends_with("ns")) {
+        unit_scale = 1;
+        suffix_length = 2;
+    } else if (text.ends_with("us")) {
+        unit_scale = 1000;
+        suffix_length = 2;
+    } else if (text.ends_with("ms")) {
+        unit_scale = 1000000;
+        suffix_length = 2;
+    } else if (text.ends_with('s')) {
+        unit_scale = 1000000000;
+        suffix_length = 1;
+    } else {
+        throw std::invalid_argument("time must end in ns, us, ms, or s: " + text);
+    }
+
+    const std::string number = text.substr(0, text.size() - suffix_length);
+    const std::size_t point = number.find('.');
+    if (number.empty() ||
+        (point != std::string::npos && number.find('.', point + 1) !=
+                                           std::string::npos))
+        throw std::invalid_argument("invalid time: " + text);
+    const std::string whole_text = number.substr(0, point);
+    const std::string fraction_text = point == std::string::npos
+                                          ? std::string{}
+                                          : number.substr(point + 1);
+    if (whole_text.empty() ||
+        (point != std::string::npos && fraction_text.empty()))
+        throw std::invalid_argument("invalid time: " + text);
+
+    std::uint64_t whole = 0;
+    const auto whole_result = std::from_chars(
+        whole_text.data(), whole_text.data() + whole_text.size(), whole);
+    if (whole_result.ec != std::errc{} ||
+        whole_result.ptr != whole_text.data() + whole_text.size())
+        throw std::invalid_argument("invalid time: " + text);
+    if (whole > std::numeric_limits<std::uint64_t>::max() / unit_scale)
+        throw std::invalid_argument("time is too large: " + text);
+    std::uint64_t result = whole * unit_scale;
+
+    std::size_t precision = 0;
+    while (precision < fraction_text.size() &&
+           fraction_text[fraction_text.size() - precision - 1] == '0')
+        ++precision;
+    const std::size_t significant_length = fraction_text.size() - precision;
+    const std::size_t max_precision = unit_scale == 1000000000
+                                          ? 9
+                                          : unit_scale == 1000000 ? 6
+                                          : unit_scale == 1000  ? 3
+                                                                : 0;
+    if (significant_length > max_precision)
+        throw std::invalid_argument("time has sub-nanosecond precision: " + text);
+    if (significant_length != 0) {
+        std::uint64_t fraction = 0;
+        const auto fraction_result = std::from_chars(
+            fraction_text.data(), fraction_text.data() + significant_length,
+            fraction);
+        if (fraction_result.ec != std::errc{} ||
+            fraction_result.ptr != fraction_text.data() + significant_length)
+            throw std::invalid_argument("invalid time: " + text);
+        for (std::size_t i = significant_length; i < max_precision; ++i)
+            fraction *= 10;
+        if (fraction > std::numeric_limits<std::uint64_t>::max() - result)
+            throw std::invalid_argument("time is too large: " + text);
+        result += fraction;
+    }
+    return result;
+}
+
+std::uint64_t instructions_for_time(std::uint64_t time_ns,
+                                   std::uint32_t clock_hz) {
+    constexpr std::uint64_t nanoseconds_per_instruction_denominator =
+        3u * 1000000000u;
+    const std::uint64_t whole_periods =
+        time_ns / nanoseconds_per_instruction_denominator;
+    const std::uint64_t remainder_ns =
+        time_ns % nanoseconds_per_instruction_denominator;
+    if (clock_hz != 0 &&
+        whole_periods > std::numeric_limits<std::uint64_t>::max() / clock_hz)
+        return std::numeric_limits<std::uint64_t>::max();
+    const std::uint64_t whole_instructions = whole_periods * clock_hz;
+    const std::uint64_t remainder_cycles = remainder_ns * clock_hz;
+    const std::uint64_t partial_instructions =
+        remainder_cycles / nanoseconds_per_instruction_denominator +
+        (remainder_cycles % nanoseconds_per_instruction_denominator != 0);
+    if (partial_instructions >
+        std::numeric_limits<std::uint64_t>::max() - whole_instructions)
+        return std::numeric_limits<std::uint64_t>::max();
+    return whole_instructions + partial_instructions;
+}
+
+struct GpioEvent {
+    std::string node_name;
+    unsigned port;
+    std::uint8_t value;
+    std::uint64_t time_ns;
+    bool applied{false};
+};
+
+GpioEvent parse_gpio_event(const std::string &text) {
+    const std::size_t equals = text.find('=');
+    const std::size_t colon = text.find(':', equals == std::string::npos
+                                                 ? 0
+                                                 : equals + 1);
+    const std::size_t at = text.find('@', colon == std::string::npos
+                                             ? 0
+                                             : colon + 1);
+    if (equals == std::string::npos || equals == 0 || colon != equals + 2 ||
+        at == std::string::npos || at == colon + 1 || at + 1 == text.size())
+        throw std::invalid_argument(
+            "GPIO event must be NAME=PORT:VALUE@TIME: " + text);
+
+    const std::string port_text = text.substr(equals + 1, 1);
+    unsigned port = 0;
+    const char port_char = static_cast<char>(
+        std::toupper(static_cast<unsigned char>(port_text[0])));
+    if (port_char >= 'A' && port_char <= 'E')
+        port = static_cast<unsigned>(port_char - 'A');
+    else if (port_char >= '0' && port_char <= '4')
+        port = static_cast<unsigned>(port_char - '0');
+    else
+        throw std::invalid_argument("GPIO port must be A..E or 0..4: " + text);
+
+    const std::uint32_t value = parse_address(text.substr(colon + 1,
+                                                          at - colon - 1));
+    if (value > 0xff)
+        throw std::invalid_argument("GPIO value must fit in one byte: " + text);
+    return {text.substr(0, equals), port, static_cast<std::uint8_t>(value),
+            parse_duration_ns(text.substr(at + 1))};
 }
 
 int run_command(int argc, char **argv) {
@@ -166,9 +305,19 @@ struct NetworkNode {
     std::unique_ptr<tc32emu::Cpu> cpu;
     std::size_t instructions{0};
     bool stopped{false};
+    std::uint64_t start_at_ns{0};
+    bool started{true};
+    bool start_time_set{false};
+    std::size_t instruction_limit{0};
 };
 
 struct SramDump {
+    std::string node_name;
+    std::uint32_t address;
+    std::size_t length;
+};
+
+struct MmioDump {
     std::string node_name;
     std::uint32_t address;
     std::size_t length;
@@ -187,7 +336,10 @@ int network_command(int argc, char **argv) {
     bool trace_stack = false;
     bool radio_payloads = false;
     std::vector<SramDump> sram_dumps;
+    std::vector<MmioDump> mmio_dumps;
     std::vector<std::pair<std::string, std::string>> node_specs;
+    std::vector<GpioEvent> gpio_events;
+    std::vector<std::pair<std::string, std::uint64_t>> node_start_times;
     for (int i = 2; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--node" && i + 1 < argc) {
@@ -215,6 +367,17 @@ int network_command(int argc, char **argv) {
             trace_stack = true;
         } else if (arg == "--radio-payloads") {
             radio_payloads = true;
+        } else if (arg == "--gpio-event" && i + 1 < argc) {
+            gpio_events.push_back(parse_gpio_event(argv[++i]));
+        } else if (arg == "--start-at" && i + 1 < argc) {
+            const std::string spec = argv[++i];
+            const std::size_t equals = spec.find('=');
+            if (equals == std::string::npos || equals == 0 ||
+                equals + 1 == spec.size())
+                throw std::invalid_argument("node start must be NAME=TIME: " +
+                                            spec);
+            node_start_times.emplace_back(spec.substr(0, equals),
+                                          parse_duration_ns(spec.substr(equals + 1)));
         } else if (arg == "--dump-sram" && i + 1 < argc) {
             const std::string spec = argv[++i];
             const std::size_t equals = spec.find('=');
@@ -238,6 +401,38 @@ int network_command(int argc, char **argv) {
                 throw std::invalid_argument(
                     "SRAM dump range must fit mapped TLSR8258 SRAM: " + spec);
             sram_dumps.push_back({name, address, length});
+        } else if (arg == "--dump-mmio" && i + 1 < argc) {
+            const std::string spec = argv[++i];
+            const std::size_t equals = spec.find('=');
+            const std::size_t colon = spec.find(':', equals == std::string::npos
+                                                         ? 0
+                                                         : equals + 1);
+            if (equals == std::string::npos || equals == 0 ||
+                colon == std::string::npos || colon == equals + 1 ||
+                colon + 1 == spec.size())
+                throw std::invalid_argument(
+                    "MMIO dump must be NAME=ADDRESS:LENGTH: " + spec);
+            const std::string name = spec.substr(0, equals);
+            const std::uint32_t address =
+                parse_address(spec.substr(equals + 1, colon - equals - 1));
+            const std::size_t length = parse_count(spec.substr(colon + 1));
+            const bool documented_range =
+                address >= tc32emu::Tlsr8258::RegisterBase &&
+                address < tc32emu::Tlsr8258::RegisterBase +
+                              tc32emu::Tlsr8258::RegisterSize &&
+                length <= tc32emu::Tlsr8258::RegisterBase +
+                              tc32emu::Tlsr8258::RegisterSize - address;
+            const bool vendor_alias_range =
+                address >= tc32emu::Tlsr8258::VendorRegisterAliasBase &&
+                address < tc32emu::Tlsr8258::VendorRegisterAliasBase +
+                              tc32emu::Tlsr8258::RegisterSize &&
+                length <= tc32emu::Tlsr8258::VendorRegisterAliasBase +
+                              tc32emu::Tlsr8258::RegisterSize - address;
+            if (length == 0 || (!documented_range && !vendor_alias_range))
+                throw std::invalid_argument(
+                    "MMIO dump range must fit the TLSR8258 register window: " +
+                    spec);
+            mmio_dumps.push_back({name, address, length});
         } else if (arg == "--trace-limit" && i + 1 < argc) {
             trace_limit = parse_count(argv[++i]);
         } else if (arg == "--trace-after-step" && i + 1 < argc) {
@@ -269,6 +464,7 @@ int network_command(int argc, char **argv) {
         NetworkNode node;
         node.name = std::move(name);
         node.firmware = std::move(firmware);
+        node.instruction_limit = steps;
         node.device = std::make_unique<tc32emu::Tlsr8258>(selected_model);
         std::ifstream input(node.firmware, std::ios::binary);
         if (!input)
@@ -301,23 +497,87 @@ int network_command(int argc, char **argv) {
             throw std::invalid_argument("unknown node in SRAM dump: " +
                                         dump.node_name);
     }
+    for (const MmioDump &dump : mmio_dumps) {
+        if (std::none_of(nodes.begin(), nodes.end(), [&](const NetworkNode &node) {
+                return node.name == dump.node_name;
+            }))
+            throw std::invalid_argument("unknown node in MMIO dump: " +
+                                        dump.node_name);
+    }
+    for (const GpioEvent &event : gpio_events) {
+        if (std::none_of(nodes.begin(), nodes.end(), [&](const NetworkNode &node) {
+                return node.name == event.node_name;
+            }))
+            throw std::invalid_argument("unknown node in GPIO event: " +
+                                        event.node_name);
+    }
+    for (const auto &[node_name, start_at_ns] : node_start_times) {
+        auto node = std::find_if(nodes.begin(), nodes.end(),
+                                 [&](const NetworkNode &candidate) {
+                                     return candidate.name == node_name;
+                                 });
+        if (node == nodes.end())
+            throw std::invalid_argument("unknown node in start time: " +
+                                        node_name);
+        if (node->start_time_set)
+            throw std::invalid_argument("duplicate start time for node: " +
+                                        node_name);
+        node->start_time_set = true;
+        node->start_at_ns = start_at_ns;
+        node->started = (start_at_ns == 0);
+        const std::uint64_t skipped_instructions = instructions_for_time(
+            start_at_ns, node->device->clock_hz());
+        node->instruction_limit =
+            skipped_instructions >= steps
+                ? 0
+                : steps - static_cast<std::size_t>(skipped_instructions);
+        node->device->set_radio_time_offset(start_at_ns);
+    }
 
     // Advance each CPU in short, equal instruction quanta. This keeps virtual
     // clocks close enough that packet airtime and collisions are meaningful.
     constexpr std::size_t quantum = 256;
     bool fault = false;
+    std::uint64_t global_time_ns = 0;
     std::cout << "network: model=" << tc32emu::model_name(selected_model)
               << " zigbee-channel=" << static_cast<unsigned>(channel) << '\n';
     while (true) {
         bool any_running = false;
+        std::optional<std::uint64_t> next_start_ns;
         for (NetworkNode &node : nodes) {
-            if (node.stopped || node.instructions >= steps)
+            if (node.stopped || node.instructions >= node.instruction_limit)
                 continue;
+            if (!node.started) {
+                if (global_time_ns < node.start_at_ns) {
+                    if (!next_start_ns || node.start_at_ns < *next_start_ns)
+                        next_start_ns = node.start_at_ns;
+                    continue;
+                }
+                node.started = true;
+                std::cout << "node " << node.name << " starts at "
+                          << node.start_at_ns << " ns\n";
+            }
             any_running = true;
+            const std::uint64_t node_time_ns = node.device->network_time_ns();
+            for (GpioEvent &event : gpio_events) {
+                if (!event.applied && event.node_name == node.name &&
+                    node_time_ns >= event.time_ns) {
+                    node.device->set_gpio_input(event.port, event.value);
+                    event.applied = true;
+                    std::cout << "gpio: node " << node.name << " port "
+                              << static_cast<char>('A' + event.port) << "=0x"
+                              << std::hex << static_cast<unsigned>(event.value)
+                              << std::dec << " at " << node_time_ns
+                              << " ns\n";
+                }
+            }
             const std::size_t count =
-                std::min(quantum, steps - node.instructions);
+                std::min(quantum,
+                         node.instruction_limit - node.instructions);
             const tc32emu::RunResult result = node.cpu->run(count);
             node.instructions += result.instructions;
+            global_time_ns = std::max(global_time_ns,
+                                      node.device->network_time_ns());
             if (result.reason == tc32emu::StopReason::Halted) {
                 node.stopped = true;
             } else if (result.reason == tc32emu::StopReason::Fault) {
@@ -333,13 +593,21 @@ int network_command(int argc, char **argv) {
                 break;
             }
         }
-        if (!any_running || fault)
+        if (fault)
             break;
+        if (!any_running) {
+            if (next_start_ns) {
+                global_time_ns = *next_start_ns;
+                continue;
+            }
+            break;
+        }
     }
 
     for (const NetworkNode &node : nodes) {
         std::cout << "node " << node.name << ": " << node.instructions
-                  << " instructions, " << node.device->time_ns() << " ns, pc=0x"
+                  << " instructions, " << node.device->network_time_ns()
+                  << " ns, pc=0x"
                   << std::hex << node.cpu->reg(15) << std::dec << '\n';
     }
     for (const SramDump &dump : sram_dumps) {
@@ -351,6 +619,23 @@ int network_command(int argc, char **argv) {
             throw std::invalid_argument("unknown node in SRAM dump: " +
                                         dump.node_name);
         std::cout << "node " << dump.node_name << " SRAM 0x" << std::hex
+                  << dump.address << " =";
+        for (std::size_t i = 0; i < dump.length; ++i) {
+            const unsigned byte = node->device->read8(
+                dump.address + static_cast<std::uint32_t>(i));
+            std::cout << ' ' << (byte < 16 ? "0" : "") << byte;
+        }
+        std::cout << std::dec << '\n';
+    }
+    for (const MmioDump &dump : mmio_dumps) {
+        const auto node = std::find_if(nodes.begin(), nodes.end(),
+                                       [&](const NetworkNode &candidate) {
+                                           return candidate.name == dump.node_name;
+                                       });
+        if (node == nodes.end())
+            throw std::invalid_argument("unknown node in MMIO dump: " +
+                                        dump.node_name);
+        std::cout << "node " << dump.node_name << " MMIO 0x" << std::hex
                   << dump.address << " =";
         for (std::size_t i = 0; i < dump.length; ++i) {
             const unsigned byte = node->device->read8(

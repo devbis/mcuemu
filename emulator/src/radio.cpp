@@ -59,10 +59,12 @@ std::uint64_t VirtualAir::transmit(std::string source, std::string destination,
 std::vector<RadioFrame> VirtualAir::receive(const std::string &node,
                                            RadioProtocol protocol,
                                            std::uint8_t channel,
-                                           std::uint64_t at_ns) {
+                                           std::uint64_t at_ns,
+                                           std::uint64_t after_ns) {
     std::vector<RadioFrame> received;
     for (const RadioFrame &frame : frames_) {
-        if (frame.end_ns > at_ns || frame.source == node ||
+        if (frame.end_ns > at_ns || frame.end_ns <= after_ns ||
+            frame.source == node ||
             frame.protocol != protocol || frame.channel != channel ||
             (!frame.destination.empty() && frame.destination != node))
             continue;
@@ -111,8 +113,9 @@ std::uint64_t VirtualRadioNode::transmit(
 
 std::vector<RadioFrame> VirtualRadioNode::receive(RadioProtocol protocol,
                                                    std::uint8_t channel,
-                                                   std::uint64_t at_ns) {
-    return air_.receive(name_, protocol, channel, at_ns);
+                                                   std::uint64_t at_ns,
+                                                   std::uint64_t after_ns) {
+    return air_.receive(name_, protocol, channel, at_ns, after_ns);
 }
 
 const char *protocol_name(RadioProtocol protocol) noexcept {

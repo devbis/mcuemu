@@ -60,7 +60,30 @@ prints transmitted frames and successful packet receptions:
 Add `--radio-payloads` to include raw frame bytes in the output when examining
 MAC discovery and commissioning traffic. `--dump-sram NAME=ADDRESS:LENGTH`
 prints a selected range from one node's SRAM after execution, which is useful
-for checking firmware state against local ELF symbols.
+for checking firmware state against local ELF symbols. `--dump-mmio` prints a
+range from the TLSR8258 register window after execution.
+
+Use `--start-at NAME=TIME` to power on a node at an absolute virtual time while
+all nodes and the radio share one timeline. `--steps` sets the overall run
+horizon; a delayed node receives only the remaining time after it starts. For
+example, start the coordinator first and the light at 5 seconds:
+
+```sh
+./build/tc32-emu network \
+  --node coordinator=firmware/samplegw_tb03f.bin \
+  --node light=firmware/samplelight_tb03f.bin \
+  --model TLSR8258F512 --channel 15 --steps 200000000 \
+  --start-at light=5s --radio-payloads \
+  --dump-sram coordinator=0x84801d:4 \
+  --dump-sram light=0x84783d:4
+```
+
+Use `--gpio-event NAME=PORT:VALUE@TIME` to drive an input port at a virtual
+time. Ports accept `A`..`E` (or `0`..`4`), byte values accept decimal or `0x`
+hex, and time accepts `ns`, `us`, `ms`, or `s`. On the sampleGW 8258 dongle,
+SW2 is active low on port D bit 5. The board model starts inputs high for the
+sample's pulled-up idle buttons; GPIO events take effect before the next
+execution quantum.
 
 `firmware/` is local-only. Images and build products are ignored by git.
 `tc32-emu models` lists the supported flash capacities.
@@ -86,18 +109,17 @@ for checking firmware state against local ELF symbols.
 This is an early emulator, not yet a complete vendor-firmware environment. TC32
 instruction coverage and TLSR8258 peripheral behavior still need validation
 against hardware. A two-node run with local `sampleLight` and an SDK-built
-`sampleGW` coordinator executed 200 million instructions per node without a
-CPU fault; the medium recorded 47 Zigbee transmissions and 32 successful
-receptions. `--dump-sram` showed the SDK `zb_isDeviceJoinedNwk()` state as
-joined for the coordinator and not joined for the light. In the SDK context
-byte at offset `0x2d`, `0x96` means the coordinator is joined and has
-`permit_join` and `joinAccept` set; the light's `0x01` means it remains factory
-new. The capture has no MAC beacon response or association request. The TC32
-`treti {pc}` implementation restores its return address from the IRQ stack and
-switches back to the saved CPU mode, matching the vendor IRQ wrapper. SDK
-diagnostics show zero RX CRC failures and nonzero RX IRQ counts on both nodes,
-so the remaining issue is after RF DMA delivery. BLE is deferred while Zigbee
-discovery and association are being debugged.
+`sampleGW` coordinator executed without a CPU fault. With the light started at
+5 seconds, the medium recorded 70 Zigbee transmissions and 36 successful
+receptions. It delivered a coordinator Beacon Response, the light's association
+request, the coordinator's association response, and subsequent bidirectional
+traffic. At 11.25 seconds, the SDK `zb_isDeviceJoinedNwk()` flag was set for
+both nodes: the light's `g_zbNwkCtx + 0x2d` byte was `0x04` and the
+coordinator's was `0x96` (`permit_join` and `joinAccept` are also set there).
+The RX DMA model now includes the two FCS bytes counted by the vendor SDK's
+DMA length field; omitting them caused the firmware to reject its Beacon
+Response. This verifies joining for this firmware pair and channel, not every
+commissioning path or peripheral. BLE remains deferred.
 
 ## Project layout
 

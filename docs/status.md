@@ -11,7 +11,7 @@ Unicorn C API. End-to-end vendor-firmware acceptance is still outstanding.
 | TLSR8258 peripherals | GPIO, timer compare/status, fixed 16 MHz system timer, UART FIFOs and timing, IRQ masks/sources, analog access, MSPI JEDEC ID, AES-128 ECB encrypt/decrypt, and the SDK-used integer divider helper are modeled. AREG `0x40..0x43` exposes a 32 kHz RC or 32.768 kHz crystal counter. AES completion uses the datasheet's 1000-cycle duration; divider operations complete synchronously. RF TX/RX DMA, including the DMA high-byte offset from `0x800000`, basic RF IRQ status, and packet delivery to the virtual medium are connected. Sleep, general flash commands, SPI/I²C transfers, and DMA channels beyond the RF path remain incomplete. |
 | Virtual radio | BLE and Zigbee packet transport with channel matching, estimated duration, broadcast/unicast, collision suppression, and successful-reception records. TLSR8258 bridges Zigbee RF TX/RX DMA to this medium and decodes Zigbee channel writes from the RF synthesizer frequency registers `0x801244..0x801245`. BLE is not connected to TLSR8258 RF. |
 | CLI | Selects F512/F1K, loads raw images at address zero, runs one node or a multi-node Zigbee scenario, prints CPU/time, transmitted frames and successful receptions, and supports PC, MMIO, stack/mode, recent-fault, raw radio-payload, and selected SRAM-range diagnostics. It does not parse ELF. |
-| Zigbee `sampleLight` + `sampleGW` | A two-node run executed 200,000,000 instructions per node without a CPU fault. The medium recorded 47 transmissions and 32 successful receptions. At `g_zbNwkCtx + 0x2d`, the coordinator state byte is `0x96` (joined, `permit_join`, and `joinAccept` set), while the light is `0x01` (factory new). `g_sysDiags` shows zero RX CRC failures, RX IRQ counts of 16 for the coordinator and 12 for the light, and no coordinator join indication. No MAC beacon response or association request appears in the capture. Source SDK and firmware artifacts remain outside this repository. |
+| Zigbee `sampleLight` + `sampleGW` | With the light starting at 5 seconds, the run recorded 70 transmissions and 36 successful receptions. The capture includes the coordinator's Beacon Response, the light's association request, the coordinator's association response, and subsequent bidirectional traffic. At 11.25 seconds, `zb_isDeviceJoinedNwk()` is true for the light (`g_zbNwkCtx + 0x2d` is `0x04`) and the coordinator (`0x96`, also with `permit_join` and `joinAccept` set). The RX DMA layout now counts the two FCS bytes expected by the SDK MAC parser; without them it discarded the Beacon Response. This confirms joining for this firmware pair on channel 15. Source SDK and firmware artifacts remain outside this repository. |
 
 Two behaviors are explicit inferences. The datasheet documents the register
 window at `0x800000..0x83ffff`, while vendor `LoadTblCmdSet` code forms writes
@@ -29,8 +29,8 @@ multiple firmware images onto a shared medium and reports successful packet
 receptions; `--radio-payloads` includes each transmitted payload as hex, and
 `--dump-sram` exposes selected node memory ranges for checking firmware state.
 The IRQ return fix removes the sample's previous stack fault. The sampleLight
-and sampleGW pair exchange packets. The sampleGW is accepting joins, but the
-light remains factory new and sees no MAC beacon response. RX reaches the
-firmware IRQ handler without CRC errors, so continue by inspecting the stack's
-Beacon Request handling and corresponding radio behavior. Keep BLE deferred
-and all CPU instruction decoding and execution inside Unicorn.
+and sampleGW pair now complete joining when the light starts at 5 seconds. The
+medium records the Beacon Response, association request and response, then
+bidirectional Zigbee traffic; the SDK joined flag is set on the light. The
+specific RX DMA/FCS mismatch and verified run are described above. Keep BLE
+deferred and all CPU instruction decoding and execution inside Unicorn.

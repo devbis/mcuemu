@@ -41,19 +41,20 @@ provides a `0xcfxx` semihosting stop marker for board tests. That marker is a
 wrapper convention and is not claimed as a TC32 ISA instruction.
 
 This is an initial TC32 backend and board model. A two-node run with local
-`sampleLight` and an SDK-built `sampleGW` coordinator executed 200 million
-instructions on each node without a CPU fault. The packet-level medium recorded
-47 Zigbee transmissions and 32 successful receptions. The SDK
-`zb_isDeviceJoinedNwk()` reads bit 2 at `g_zbNwkCtx + 0x2d`; SRAM dumps showed
-the coordinator joined (`0x96`) and the light remains factory new (`0x01`). The
-coordinator's state byte also has `permit_join` and `joinAccept` set, but the
-capture has no MAC beacon response or association request.
-SDK diagnostics show zero RX CRC failures, 16 RX IRQs at the coordinator, 12
-at the light, and no coordinator join indication.
-Correct `treti {pc}` behavior fixed the earlier false return into a task-queue
-epilogue: it consumes the saved IRQ return address from the IRQ stack before
-restoring the saved CPU mode. This verifies firmware-driven RF DMA and
-bidirectional packet delivery. The coordinator formed a network and accepts
-joins, but the light did not join during this run. Complete vendor ISA coverage
-remains unestablished. Continue by inspecting Beacon Request handling and the
-corresponding radio behavior; keep BLE deferred.
+`sampleLight` and an SDK-built `sampleGW` coordinator executed without a CPU
+fault. Starting the light at 5 seconds produced 70 Zigbee transmissions and 36
+successful receptions. The packet capture contains a coordinator Beacon
+Response, the light's association request, the coordinator's association
+response, and subsequent bidirectional traffic. SRAM inspection at 11.25
+seconds showed `zb_isDeviceJoinedNwk()` true on both nodes: the light's
+`g_zbNwkCtx + 0x2d` byte is `0x04`; the coordinator byte is `0x96` and also has
+`permit_join` and `joinAccept` set.
+
+The join blocker was an RX DMA layout mismatch. The TLSR8258 DMA length field
+includes the two FCS bytes, and the SDK subtracts them before parsing the MAC
+frame. The model now reserves and counts those bytes while the virtual medium
+continues to carry the MAC frame without generated FCS. The earlier
+`treti {pc}` correction also remains required: it consumes the saved IRQ
+return address from the IRQ stack before restoring the saved CPU mode. Joining
+is now verified for this firmware pair on channel 15; complete vendor ISA and
+peripheral coverage remain unestablished. BLE stays deferred.

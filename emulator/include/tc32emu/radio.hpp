@@ -39,7 +39,8 @@ public:
     std::vector<RadioFrame> receive(const std::string &node,
                                     RadioProtocol protocol,
                                     std::uint8_t channel,
-                                    std::uint64_t at_ns);
+                                    std::uint64_t at_ns,
+                                    std::uint64_t after_ns = 0);
     const std::vector<RadioFrame> &frames() const noexcept { return frames_; }
     const std::vector<RadioReception> &receptions() const noexcept {
         return receptions_;
@@ -62,7 +63,8 @@ public:
                            std::uint32_t bit_rate = 0);
     std::vector<RadioFrame> receive(RadioProtocol protocol,
                                     std::uint8_t channel,
-                                    std::uint64_t at_ns);
+                                    std::uint64_t at_ns,
+                                    std::uint64_t after_ns = 0);
     const std::string &name() const noexcept { return name_; }
 
 private:

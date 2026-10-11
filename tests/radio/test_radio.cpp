@@ -32,6 +32,13 @@ void test_virtual_air() {
     collided.transmit("b", "c", tc32emu::RadioProtocol::Ble, 37, 0, {2}, 1000000);
     CHECK(collided.receive("c", tc32emu::RadioProtocol::Ble, 37, 1000000).empty());
     CHECK(collided.receptions().empty());
+
+    tc32emu::VirtualAir delayed_start;
+    delayed_start.transmit("coordinator", "", tc32emu::RadioProtocol::Zigbee802154,
+                           15, 100000, {0x07});
+    CHECK(delayed_start.receive("late-node", tc32emu::RadioProtocol::Zigbee802154,
+                                15, 1000000, 500000).empty());
+    CHECK(delayed_start.receptions().empty());
 }
 
 void test_tlsr_radio_dma_packet_exchange() {
@@ -40,6 +47,8 @@ void test_tlsr_radio_dma_packet_exchange() {
     tc32emu::Tlsr8258 receiver;
     sender.connect_radio(air, "sender");
     receiver.connect_radio(air, "receiver");
+    sender.set_radio_time_offset(5000000000u);
+    receiver.set_radio_time_offset(5000000000u);
     sender.set_radio_channel(11);
     receiver.set_radio_channel(11);
     // Firmware rf_set_channel() programs the synthesizer directly. A channel
@@ -76,6 +85,8 @@ void test_tlsr_radio_dma_packet_exchange() {
                     tc32emu::Tlsr8258::RfRxDmaAddressHigh, rx_buffer);
 
     receiver.write8(tc32emu::Tlsr8258::RfDmaControl, 0x01);
+    receiver.write8(tc32emu::Tlsr8258::DmaChannelEnable,
+                    tc32emu::Tlsr8258::DmaRfRxEnable);
     receiver.write8(tc32emu::Tlsr8258::RfMode, 0x65); // RF RX enable.
     receiver.write8(tc32emu::Tlsr8258::RfIrqMask, 0x03);
     sender.write8(tc32emu::Tlsr8258::RfIrqMask, 0x03);
@@ -83,7 +94,8 @@ void test_tlsr_radio_dma_packet_exchange() {
     sender.write8(tc32emu::Tlsr8258::DmaTxReady0, 0x08);
 
     sender.tick(20000);
-    receiver.tick(20000);
+    for (unsigned poll = 0; poll != 42; ++poll)
+        receiver.tick(480); // Poll at 10 us intervals through the full frame.
     CHECK(air.frames().size() == 1);
     CHECK(air.frames()[0].channel == 20);
     CHECK((receiver.read8(tc32emu::Tlsr8258::RfIrqStatus) & 0x01u) == 0);
@@ -92,7 +104,8 @@ void test_tlsr_radio_dma_packet_exchange() {
     sender.write8(tc32emu::Tlsr8258::RfSynthFrequencyHigh, 0x25);
     sender.write8(tc32emu::Tlsr8258::DmaTxReady0, 0x08);
     sender.tick(20000);
-    receiver.tick(20000);
+    for (unsigned poll = 0; poll != 42; ++poll)
+        receiver.tick(480);
     CHECK(air.frames().size() == 2);
     CHECK(air.frames()[1].channel == 11);
     CHECK(air.frames()[0].payload ==
@@ -102,8 +115,8 @@ void test_tlsr_radio_dma_packet_exchange() {
     CHECK((sender.read8(tc32emu::Tlsr8258::DmaTxReady0) & 0x08u) == 0);
     CHECK(sender.read8(0x800649) & 0x20u);
     CHECK(receiver.read8(0x800649) & 0x20u);
-    CHECK(receiver.read8(rx_buffer) == mac_frame.size() + 9);
-    CHECK(receiver.read8(rx_buffer + 4) == mac_frame.size());
+    CHECK(receiver.read8(rx_buffer) == mac_frame.size() + 11);
+    CHECK(receiver.read8(rx_buffer + 4) == mac_frame.size() + 2);
     for (std::size_t i = 0; i != mac_frame.size(); ++i)
         CHECK(receiver.read8(rx_buffer + 5 + static_cast<std::uint32_t>(i)) ==
               mac_frame[i]);
