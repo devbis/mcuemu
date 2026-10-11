@@ -43,6 +43,15 @@ commands exercise the full output cycle. Run this scenario with:
 ctest --test-dir build -R firmware_zigbee_button_light --output-on-failure
 ```
 
+If `firmware/zephyr-pmtest.bin` is present when CMake configures, CTest also
+registers `firmware_zephyr_pm_wake`. It checks four repeated Zephyr deep-sleep
+entries and timer wakeups, using the local firmware image. Configure again
+after copying the image into `firmware/`, then run:
+
+```sh
+ctest --test-dir build -R firmware_zephyr_pm_wake --output-on-failure
+```
+
 Run a raw flash image from address zero:
 
 ```sh

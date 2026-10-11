@@ -81,4 +81,25 @@ if(TC32EMU_BUILD_TESTS)
         message(STATUS
             "Skipping firmware_zigbee_join: local sampleGW/sampleLight images not found in firmware/")
     endif()
+
+    set(TC32EMU_ZEPHYR_PM_FIRMWARE
+        "${CMAKE_CURRENT_SOURCE_DIR}/firmware/zephyr-pmtest.bin")
+    if(EXISTS "${TC32EMU_ZEPHYR_PM_FIRMWARE}")
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            add_test(
+                NAME firmware_zephyr_pm_wake
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_zephyr_pm_wake.py"
+                        "$<TARGET_FILE:tc32-emu>"
+                        "${TC32EMU_ZEPHYR_PM_FIRMWARE}")
+            set_tests_properties(firmware_zephyr_pm_wake PROPERTIES
+                TIMEOUT 180
+                LABELS "firmware;power"
+            )
+        else()
+            message(STATUS
+                "Skipping firmware_zephyr_pm_wake: Python 3 interpreter not found")
+        endif()
+    endif()
 endif()
