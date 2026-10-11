@@ -73,12 +73,16 @@ public:
     static constexpr std::uint32_t AnalogAddress = 0x8000b8;
     static constexpr std::uint32_t AnalogData = 0x8000b9;
     static constexpr std::uint32_t AnalogControl = 0x8000ba;
+    static constexpr std::uint8_t AnalogClockPower = 0x05;
+    static constexpr std::uint8_t AnalogClock32kRcPowerDown = 1u << 0;
+    static constexpr std::uint8_t AnalogClock32kXtalPowerDown = 1u << 1;
     static constexpr std::uint32_t AesControl = 0x800540;
     static constexpr std::uint32_t AesData = 0x800548;
     static constexpr std::uint32_t AesKey = 0x800550;
     static constexpr std::uint32_t MspiData = 0x80000c;
     static constexpr std::uint32_t MspiControl = 0x80000d;
     static constexpr std::uint32_t Clock32kSelect = 0x800073;
+    static constexpr std::uint8_t Clock32kSelectXtal = 1u << 0;
     static constexpr std::uint32_t SystemTimerClockHz = 16000000;
     static constexpr std::uint32_t UartData = 0x800090;
     static constexpr std::uint32_t UartClockDivider = 0x800094;

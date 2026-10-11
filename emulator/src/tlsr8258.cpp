@@ -253,6 +253,9 @@ Tlsr8258::Tlsr8258(Tlsr8258Model model, std::uint32_t clock_hz)
     registers_.fill(0);
     registers_[0x540] = aes_data_feed_bit; // Datasheet AES_CTRL reset value.
     analog_registers_.fill(0);
+    // Datasheet AREG 0x05 reset state: the RC 32 kHz clock is powered, while
+    // the optional 32 kHz crystal is powered down.
+    analog_registers_[AnalogClockPower] = AnalogClock32kXtalPowerDown;
     // The 8258 SDK treats AREG 0x7f[0] == 1 as the cold-boot path. The
     // datasheet does not list this project-local PM status register's reset
     // value; this default is inferred from cpu_wakeup_init(), which otherwise
@@ -334,13 +337,21 @@ void Tlsr8258::tick(std::uint32_t cycles) {
         system_timer_numerator / clock_hz_);
     system_timer_fraction_ = system_timer_numerator % clock_hz_;
 
-    const std::uint64_t analog_clock_hz =
-        (registers_[0x073] & 1u) != 0 ? 32768u : 32000u;
-    const std::uint64_t analog_tick_numerator =
-        static_cast<std::uint64_t>(cycles) * analog_clock_hz +
-        analog_32k_fraction_;
-    analog_32k_tick_count_ += analog_tick_numerator / clock_hz_;
-    analog_32k_fraction_ = analog_tick_numerator % clock_hz_;
+    const bool use_32k_xtal =
+        (registers_[0x073] & Clock32kSelectXtal) != 0;
+    const std::uint8_t clock_power_down_mask = use_32k_xtal
+        ? AnalogClock32kXtalPowerDown
+        : AnalogClock32kRcPowerDown;
+    if ((analog_registers_[AnalogClockPower] & clock_power_down_mask) == 0) {
+        const std::uint64_t analog_clock_hz = use_32k_xtal ? 32768u : 32000u;
+        const std::uint64_t analog_tick_numerator =
+            static_cast<std::uint64_t>(cycles) * analog_clock_hz +
+            analog_32k_fraction_;
+        analog_32k_tick_count_ += analog_tick_numerator / clock_hz_;
+        analog_32k_fraction_ = analog_tick_numerator % clock_hz_;
+    } else {
+        analog_32k_fraction_ = 0;
+    }
 
     const std::uint64_t whole_seconds = cycles / clock_hz_;
     const std::uint64_t remainder_cycles = cycles % clock_hz_;

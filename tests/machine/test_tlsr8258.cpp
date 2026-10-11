@@ -65,6 +65,11 @@ void test_tlsr_analog_registers_and_32k_tick() {
     device.write8(tc32emu::Tlsr8258::AnalogAddress, 0x7f);
     device.write8(tc32emu::Tlsr8258::AnalogControl, 0x40);
     CHECK(device.read8(tc32emu::Tlsr8258::AnalogData) == 1);
+    device.write8(tc32emu::Tlsr8258::AnalogAddress,
+                  tc32emu::Tlsr8258::AnalogClockPower);
+    device.write8(tc32emu::Tlsr8258::AnalogControl, 0x40);
+    CHECK(device.read8(tc32emu::Tlsr8258::AnalogData) ==
+          tc32emu::Tlsr8258::AnalogClock32kXtalPowerDown);
 
     device.write8(tc32emu::Tlsr8258::AnalogAddress, 0x22);
     device.write8(tc32emu::Tlsr8258::AnalogData, 0xa5);
@@ -100,14 +105,41 @@ void test_tlsr_analog_registers_and_32k_tick() {
         }
         return tick;
     };
+    auto write_analog = [&device](std::uint8_t address, std::uint8_t value) {
+        device.write8(tc32emu::Tlsr8258::AnalogAddress, address);
+        device.write8(tc32emu::Tlsr8258::AnalogData, value);
+        device.write8(tc32emu::Tlsr8258::AnalogControl, 0x60);
+    };
 
     device.tick(48000); // 1 ms at 48 MHz; 32 ticks from the RC source.
     CHECK(read_tick() == 32);
     device.tick(47952000);
     CHECK(read_tick() == 32000);
-    device.write8(tc32emu::Tlsr8258::Clock32kSelect, 0x05); // select XTAL
+
+    write_analog(tc32emu::Tlsr8258::AnalogClockPower,
+                 tc32emu::Tlsr8258::AnalogClock32kRcPowerDown |
+                     tc32emu::Tlsr8258::AnalogClock32kXtalPowerDown);
     device.tick(48000000);
-    CHECK(read_tick() == 64768);
+    CHECK(read_tick() == 32000);
+
+    write_analog(tc32emu::Tlsr8258::AnalogClockPower,
+                 tc32emu::Tlsr8258::AnalogClock32kXtalPowerDown);
+    device.tick(48000000);
+    CHECK(read_tick() == 64000);
+
+    device.write8(tc32emu::Tlsr8258::Clock32kSelect,
+                  tc32emu::Tlsr8258::Clock32kSelectXtal);
+    device.tick(48000000);
+    CHECK(read_tick() == 64000); // XTAL remains powered down.
+
+    write_analog(tc32emu::Tlsr8258::AnalogClockPower, 0);
+    device.tick(48000000);
+    CHECK(read_tick() == 96768);
+
+    write_analog(tc32emu::Tlsr8258::AnalogClockPower,
+                 tc32emu::Tlsr8258::AnalogClock32kXtalPowerDown);
+    device.tick(48000000);
+    CHECK(read_tick() == 96768);
 }
 
 void test_tlsr_system_timer() {
