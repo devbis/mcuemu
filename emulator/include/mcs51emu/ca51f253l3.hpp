@@ -4,6 +4,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <iosfwd>
 #include <string>
 
@@ -68,6 +69,9 @@ private:
     void check_error(int error, const char *operation) const;
     void rebase_timer0() noexcept;
     void advance_timer0(std::uint64_t cycle_delta) noexcept;
+    void start_uart1_transmit(std::uint8_t byte, uc_struct *uc) noexcept;
+    void advance_uart1(uc_struct *uc) noexcept;
+    std::uint64_t uart1_frame_cycles() const noexcept;
     void update_uart1_interrupt(uc_struct *uc) noexcept;
 
     uc_struct *uc_{};
@@ -81,6 +85,11 @@ private:
     std::uint8_t data_flash_command_{};
     bool data_flash_unlocked_{};
     std::uint64_t timer0_last_cycles_{};
+    std::uint64_t uart1_last_cycles_{};
+    std::uint64_t uart1_tx_cycles_remaining_{};
+    std::uint8_t uart1_tx_byte_{};
+    bool uart1_tx_active_{};
+    std::deque<std::uint8_t> uart1_tx_waiting_;
     bool uart1_irq_requested_{};
     std::string uart0_output_;
     std::string uart1_output_;

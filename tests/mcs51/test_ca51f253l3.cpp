@@ -290,7 +290,7 @@ void test_ca51_uart1_transmit_interrupt_clears_flag() {
     program[2] = 0x40; // LJMP main at 0x0040
     program[0x33] = 0x02;
     program[0x34] = 0x00;
-    program[0x35] = 0x50; // UART1 interrupt vector
+    program[0x35] = 0x51; // UART1 interrupt vector
     program[0x40] = 0x75;
     program[0x41] = 0xa8;
     program[0x42] = 0xc0; // MOV IE,#(EA|ES1)
@@ -298,26 +298,88 @@ void test_ca51_uart1_transmit_interrupt_clears_flag() {
     program[0x44] = 0x9a;
     program[0x45] = 0xd0; // MOV S1CON,#UART1 mode
     program[0x46] = 0x75;
-    program[0x47] = 0x9b;
-    program[0x48] = 'A'; // MOV S1BUF,#'A'
-    program[0x49] = 0x80;
-    program[0x4a] = 0xfe; // SJMP $
-    program[0x50] = 0x75;
-    program[0x51] = 0x9a;
-    program[0x52] = 0xd2; // W1C TI1
-    program[0x53] = 0x75;
-    program[0x54] = 0x40;
-    program[0x55] = 0x77; // MOV 0x40,#0x77
-    program[0x56] = 0x32; // RETI
+    program[0x47] = 0x9d;
+    program[0x48] = 0x03; // UART1 reload high
+    program[0x49] = 0x75;
+    program[0x4a] = 0x9c;
+    program[0x4b] = 0xff; // reload=0x3ff -> 115200 baud at 3.6864 MHz
+    program[0x4c] = 0x75;
+    program[0x4d] = 0x9b;
+    program[0x4e] = 'A'; // MOV S1BUF,#'A'
+    program[0x4f] = 0x80;
+    program[0x50] = 0xfe; // SJMP $
+    program[0x51] = 0x75;
+    program[0x52] = 0x9a;
+    program[0x53] = 0xd2; // W1C TI1
+    program[0x54] = 0x75;
+    program[0x55] = 0x40;
+    program[0x56] = 0x77; // MOV 0x40,#0x77
+    program[0x57] = 0x32; // RETI
     write_binary(path, program.data(), program.size());
 
     mcs51emu::Ca51F253L3 device;
     device.load_firmware(path.string());
-    const mcs51emu::RunResult run = device.run(20);
+    const mcs51emu::RunResult run = device.run(1000);
     CHECK(run.error.empty());
     CHECK(device.uart1_output() == "A");
     CHECK((device.read_sfr(0x9a) & 0x02) == 0);
     CHECK(device.read_idata(0x40) == 0x77);
+    std::filesystem::remove(path);
+}
+
+void test_ca51_uart1_transmits_queued_byte_after_frame_time() {
+    const auto path = temp_file("mcs51-uart1-queue.bin");
+    std::array<std::uint8_t, 0x90> program{};
+    program.fill(0x00);
+    program[0] = 0x02;
+    program[1] = 0x00;
+    program[2] = 0x40; // LJMP main at 0x0040
+    program[0x33] = 0x02;
+    program[0x34] = 0x00;
+    program[0x35] = 0x80; // UART1 interrupt vector
+    program[0x40] = 0x75;
+    program[0x41] = 0xa8;
+    program[0x42] = 0xc0; // MOV IE,#(EA|ES1)
+    program[0x43] = 0x75;
+    program[0x44] = 0x9a;
+    program[0x45] = 0xd0; // MOV S1CON,#UART1 mode
+    program[0x46] = 0x75;
+    program[0x47] = 0x9d;
+    program[0x48] = 0x03;
+    program[0x49] = 0x75;
+    program[0x4a] = 0x9c;
+    program[0x4b] = 0xff;
+    program[0x4c] = 0x75;
+    program[0x4d] = 0x9b;
+    program[0x4e] = 'A'; // Start first byte.
+    program[0x4f] = 0x75;
+    program[0x50] = 0x40;
+    program[0x51] = 0x01; // Firmware marks the queued byte after writing S1BUF.
+    program[0x52] = 0x80;
+    program[0x53] = 0xfe; // SJMP $
+    // ISR: acknowledge TI1, send B if the firmware queue has a byte, RETI.
+    program[0x80] = 0x75;
+    program[0x81] = 0x9a;
+    program[0x82] = 0xd2; // W1C TI1
+    program[0x83] = 0xe5;
+    program[0x84] = 0x40; // MOV A,0x40
+    program[0x85] = 0x60;
+    program[0x86] = 0x05; // JZ RETI
+    program[0x87] = 0x15;
+    program[0x88] = 0x40; // DEC 0x40
+    program[0x89] = 0x75;
+    program[0x8a] = 0x9b;
+    program[0x8b] = 'B'; // MOV S1BUF,#'B'
+    program[0x8c] = 0x32; // RETI
+    write_binary(path, program.data(), program.size());
+
+    mcs51emu::Ca51F253L3 device;
+    device.load_firmware(path.string());
+    const mcs51emu::RunResult run = device.run(2000);
+    CHECK(run.error.empty());
+    CHECK(device.uart1_output() == "AB");
+    CHECK((device.read_sfr(0x9a) & 0x02) == 0);
+    CHECK(device.read_idata(0x40) == 0);
     std::filesystem::remove(path);
 }
 
@@ -465,6 +527,7 @@ int main() {
     test_ca51_sdk_data_flash_read_write_and_erase();
     test_ca51_uart0_sbuf_emits_bytes_and_sets_ti0();
     test_ca51_uart1_transmit_interrupt_clears_flag();
+    test_ca51_uart1_transmits_queued_byte_after_frame_time();
     test_ca51_pwm_update_request_self_clears();
     test_ca51_timer0_overflow_enters_isr_and_reti_returns();
     test_ca51_timer0_can_be_enabled_during_fast_run();

@@ -18,20 +18,22 @@ The CA51F253L3 shell currently provides:
   commands at XDATA `0xFC01..0xFC06`.
 - UART0 transmit capture from `S0BUF`, with immediate `TI0` completion so
   firmware using a polled UART debug routine can continue.
-- UART1 transmit capture from `S1BUF`, with immediate `TI1` completion,
-  write-one-to-clear status flags, and interrupt dispatch to the CA51F253L3
-  vector `0x0033`.
+- UART1 transmit capture from `S1BUF`, with frame timing derived from `S1REL`,
+  `TI1` raised at transmit completion, write-one-to-clear status flags, and
+  interrupt dispatch to the CA51F253L3 vector `0x0033`.
 - `PWMUPD` write requests clear immediately after the modeled PWM shadow
   register update.
 - Timer0 mode 1 counting from MCS-51 core cycles, setting `TF0`, and dispatching
   vector `0x000B` when `EA` and `ET0` are enabled. Timer0 counts only when
   `TR0=1`, `C/T0=0`, `GATE0=0`, and mode 1 is selected.
 
-Most SFR bytes currently behave as storage. UART transmit and PWM updates
-complete immediately; baud-rate and PWM timing are not modeled. UART receive,
-other interrupt sources, other timer modes, GPIO electrical behavior, and sleep
-are not modeled yet. The CPU backend accepts a part-specific interrupt vector
-from its SoC wrapper while retaining the standard Timer0 vector. Timer0
+Most SFR bytes currently behave as storage. UART0 transmit and PWM updates
+complete immediately; UART1 uses the documented-by-firmware `FOSC/32` reload
+formula for its 8N1 frame duration. This timing is driven by emulated core
+cycles, not calibrated wall time. UART receive, other interrupt sources, other
+timer modes, GPIO electrical behavior, and sleep are not modeled yet. The CPU
+backend accepts a part-specific interrupt vector from its SoC wrapper while
+retaining the standard Timer0 vector. Timer0
 receives one increment per MCS-51 core cycle, which
 matches the firmware's timer setup assumptions but is not a calibrated wall
 clock. Other reset values and peripheral semantics still need CA51F253L3

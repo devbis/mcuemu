@@ -28,7 +28,11 @@ constexpr std::uint8_t SfrUart0Buffer = 0x99;
 constexpr std::uint8_t UartTransmitInterruptFlag = 0x02;
 constexpr std::uint8_t SfrUart1Control = 0x9a;
 constexpr std::uint8_t SfrUart1Buffer = 0x9b;
+constexpr std::uint8_t SfrUart1ReloadLow = 0x9c;
+constexpr std::uint8_t SfrUart1ReloadHigh = 0x9d;
 constexpr std::uint8_t Uart1InterruptFlags = 0x03;
+constexpr std::uint64_t Uart1BitClockDivider = 32;
+constexpr std::uint64_t Uart1FrameBits = 10;
 constexpr std::uint8_t SfrInterruptEnable = 0xa8;
 constexpr std::uint8_t InterruptEnableGlobal = 0x80;
 constexpr std::uint8_t InterruptEnableUart1 = 0x40;
@@ -244,6 +248,11 @@ void Ca51F253L3::reset() {
     data_flash_unlocked_ = false;
     data_flash_address_ = 0;
     timer0_last_cycles_ = 0;
+    uart1_last_cycles_ = 0;
+    uart1_tx_cycles_remaining_ = 0;
+    uart1_tx_byte_ = 0;
+    uart1_tx_active_ = false;
+    uart1_tx_waiting_.clear();
     uart1_irq_requested_ = false;
 
     // 8051-compatible reset values. CA51-specific SFR reset behavior and
@@ -390,9 +399,7 @@ void Ca51F253L3::sfr_mmio_write(uc_struct *opaque_uc, std::uint64_t offset,
             // Complete transmit immediately; baud-rate timing is not modeled.
             self->sfr_[SfrUart0Control] |= UartTransmitInterruptFlag;
         } else if (address == SfrUart1Buffer) {
-            self->uart1_output_.push_back(static_cast<char>(byte));
-            // Complete transmit immediately; TI1 raises the UART1 interrupt.
-            self->sfr_[SfrUart1Control] |= UartTransmitInterruptFlag;
+            self->start_uart1_transmit(byte, opaque_uc);
         } else if (address == SfrPwmUpdate) {
             // PWMUPD is a write-one update request. The peripheral clears it
             // after applying the shadow values; completion is immediate here.
@@ -405,8 +412,74 @@ void Ca51F253L3::sfr_mmio_write(uc_struct *opaque_uc, std::uint64_t offset,
     const bool timer0_active =
         (self->sfr_[SfrTimer0Control] & Timer0Run) != 0 &&
         (self->sfr_[SfrTimerMode] & 0x0f) == 0x01;
-    if (self->fast_mode_ && (timer0_active || self->uart1_irq_requested_))
+    if (self->fast_mode_ &&
+        (timer0_active || self->uart1_irq_requested_ ||
+         self->uart1_tx_active_))
         (void)uc_emu_stop(reinterpret_cast<uc_engine *>(opaque_uc));
+}
+
+std::uint64_t Ca51F253L3::uart1_frame_cycles() const noexcept {
+    const std::uint16_t reload = static_cast<std::uint16_t>(
+        (static_cast<std::uint16_t>(sfr_[SfrUart1ReloadHigh]) << 8) |
+        sfr_[SfrUart1ReloadLow]);
+    const std::uint64_t reload_count = reload & 0x03ffu;
+    const std::uint64_t timer_period = 0x400u - reload_count;
+    // UART1's baud counter advances at FOSC/32. Mode 1 sends 8 data bits,
+    // a start bit, and a stop bit; TI1 is raised when the stop bit completes.
+    return timer_period * Uart1BitClockDivider * Uart1FrameBits;
+}
+
+void Ca51F253L3::start_uart1_transmit(std::uint8_t byte,
+                                      uc_struct *opaque_uc) noexcept {
+    if (uart1_tx_active_) {
+        uart1_tx_waiting_.push_back(byte);
+        return;
+    }
+
+    uart1_tx_byte_ = byte;
+    uart1_tx_cycles_remaining_ = uart1_frame_cycles();
+    uart1_tx_active_ = true;
+    std::uint64_t cycles = 0;
+    if (uc_reg_read(reinterpret_cast<uc_engine *>(opaque_uc),
+                    UC_MCS51_REG_CYCLES, &cycles) == UC_ERR_OK)
+        uart1_last_cycles_ = cycles;
+}
+
+void Ca51F253L3::advance_uart1(uc_struct *opaque_uc) noexcept {
+    if (!uart1_tx_active_)
+        return;
+
+    auto *engine = reinterpret_cast<uc_engine *>(opaque_uc);
+    std::uint64_t cycles = 0;
+    if (uc_reg_read(engine, UC_MCS51_REG_CYCLES, &cycles) != UC_ERR_OK)
+        return;
+    if (cycles < uart1_last_cycles_) {
+        uart1_last_cycles_ = cycles;
+        return;
+    }
+
+    std::uint64_t elapsed = cycles - uart1_last_cycles_;
+    uart1_last_cycles_ = cycles;
+    bool completed = false;
+    while (uart1_tx_active_ && elapsed >= uart1_tx_cycles_remaining_) {
+        elapsed -= uart1_tx_cycles_remaining_;
+        uart1_output_.push_back(static_cast<char>(uart1_tx_byte_));
+        sfr_[SfrUart1Control] |= UartTransmitInterruptFlag;
+        completed = true;
+
+        if (uart1_tx_waiting_.empty()) {
+            uart1_tx_active_ = false;
+            uart1_tx_cycles_remaining_ = 0;
+        } else {
+            uart1_tx_byte_ = uart1_tx_waiting_.front();
+            uart1_tx_waiting_.pop_front();
+            uart1_tx_cycles_remaining_ = uart1_frame_cycles();
+        }
+    }
+    if (uart1_tx_active_)
+        uart1_tx_cycles_remaining_ -= elapsed;
+    if (completed)
+        update_uart1_interrupt(opaque_uc);
 }
 
 void Ca51F253L3::update_uart1_interrupt(uc_struct *opaque_uc) noexcept {
@@ -452,6 +525,7 @@ void Ca51F253L3::code_hook(uc_struct *opaque_uc, std::uint64_t address,
                            std::uint32_t size, void *user_data) {
     auto *self = static_cast<Ca51F253L3 *>(user_data);
     auto *engine = reinterpret_cast<uc_engine *>(opaque_uc);
+    self->advance_uart1(opaque_uc);
     const bool timer0_active = (self->sfr_[SfrTimer0Control] & Timer0Run) != 0 &&
                                (self->sfr_[SfrTimerMode] & 0x0f) == 0x01;
     if (timer0_active) {
@@ -469,7 +543,7 @@ void Ca51F253L3::code_hook(uc_struct *opaque_uc, std::uint64_t address,
         self->update_uart1_interrupt(opaque_uc);
     }
     if (!self->trace_output_ && !timer0_active &&
-        !self->uart1_irq_requested_) {
+        !self->uart1_irq_requested_ && !self->uart1_tx_active_) {
         (void)uc_emu_stop(engine);
         return;
     }
@@ -520,7 +594,7 @@ RunResult Ca51F253L3::run(std::size_t instruction_limit) {
             (sfr_[SfrTimer0Control] & Timer0Run) != 0 &&
             (sfr_[SfrTimerMode] & 0x0f) == 0x01;
         const bool hook_needed = trace_output_ || timer0_active ||
-                                 uart1_irq_requested_;
+                                 uart1_irq_requested_ || uart1_tx_active_;
         set_code_hook_enabled(hook_needed);
         fast_mode_ = !hook_needed;
 
