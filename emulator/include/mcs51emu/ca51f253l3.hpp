@@ -64,13 +64,16 @@ private:
                                void *user_data);
     static void code_hook(uc_struct *uc, std::uint64_t address,
                           std::uint32_t size, void *user_data);
+    void set_code_hook_enabled(bool enabled);
     void check_error(int error, const char *operation) const;
     void rebase_timer0() noexcept;
     void advance_timer0(std::uint64_t cycle_delta) noexcept;
+    void update_uart1_interrupt(uc_struct *uc) noexcept;
 
     uc_struct *uc_{};
     std::size_t code_hook_{};
-    std::size_t executed_instructions_{};
+    bool code_hook_installed_{};
+    bool fast_mode_{};
     std::array<std::uint8_t, 256> sfr_{};
     std::array<std::uint8_t, XdataFlashPageSize> xdata_flash_page_{};
     std::array<std::uint8_t, DataFlashSize> data_flash_{};
@@ -78,6 +81,7 @@ private:
     std::uint8_t data_flash_command_{};
     bool data_flash_unlocked_{};
     std::uint64_t timer0_last_cycles_{};
+    bool uart1_irq_requested_{};
     std::string uart0_output_;
     std::string uart1_output_;
     std::ostream *trace_output_{};

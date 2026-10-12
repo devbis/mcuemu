@@ -365,6 +365,45 @@ void test_ca51_timer0_overflow_enters_isr_and_reti_returns() {
     std::filesystem::remove(path);
 }
 
+void test_ca51_timer0_can_be_enabled_during_fast_run() {
+    const auto path = temp_file("mcs51-timer0-fast-to-hook.bin");
+    std::array<std::uint8_t, 0x40> program{};
+    program.fill(0x00);
+    program[0] = 0x02;
+    program[1] = 0x00;
+    program[2] = 0x20; // LJMP main at 0x0020
+    program[0x0b] = 0x75;
+    program[0x0c] = 0x40;
+    program[0x0d] = 0x77; // Timer0 ISR: MOV 0x40,#0x77
+    program[0x0e] = 0x32; // RETI
+    program[0x20] = 0x75;
+    program[0x21] = 0x89;
+    program[0x22] = 0x01; // MOV TMOD,#mode 1
+    program[0x23] = 0x75;
+    program[0x24] = 0x8c;
+    program[0x25] = 0xff; // MOV TH0,#0xff
+    program[0x26] = 0x75;
+    program[0x27] = 0x8a;
+    program[0x28] = 0xfe; // MOV TL0,#0xfe
+    program[0x29] = 0x75;
+    program[0x2a] = 0xa8;
+    program[0x2b] = 0x82; // MOV IE,#(EA|ET0)
+    program[0x2c] = 0x75;
+    program[0x2d] = 0x88;
+    program[0x2e] = 0x10; // Start Timer0 while executing the fast path
+    program[0x2f] = 0x80;
+    program[0x30] = 0xfe; // SJMP $
+    write_binary(path, program.data(), program.size());
+
+    mcs51emu::Ca51F253L3 device;
+    device.load_firmware(path.string());
+    const mcs51emu::RunResult run = device.run(20);
+    CHECK(run.error.empty());
+    CHECK(device.read_idata(0x40) == 0x77);
+    CHECK((device.read_sfr(0x88) & 0x20) == 0);
+    std::filesystem::remove(path);
+}
+
 void test_ca51_llvm_delay_loop_finishes() {
     const auto path = temp_file("mcs51-llvm-delay-loop.bin");
     std::array<std::uint8_t, 0x38> program{};
@@ -428,6 +467,7 @@ int main() {
     test_ca51_uart1_transmit_interrupt_clears_flag();
     test_ca51_pwm_update_request_self_clears();
     test_ca51_timer0_overflow_enters_isr_and_reti_returns();
+    test_ca51_timer0_can_be_enabled_during_fast_run();
     test_ca51_llvm_delay_loop_finishes();
     test_ca51_rejects_oversized_raw_image();
     if (failures != 0) {

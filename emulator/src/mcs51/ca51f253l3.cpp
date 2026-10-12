@@ -202,12 +202,6 @@ Ca51F253L3::Ca51F253L3() {
         check_error(uc_mmio_map(engine, SfrBase, MappedInternalSize,
                                 sfr_mmio_read, this, sfr_mmio_write, this),
                     "map SFR and UART");
-        check_error(uc_hook_add(engine, reinterpret_cast<uc_hook *>(&code_hook_),
-                                UC_HOOK_CODE,
-                                reinterpret_cast<void *>(
-                                    static_cast<uc_cb_hookcode_t>(Ca51F253L3::code_hook)),
-                                this, 1, 0),
-                    "install code hook");
         data_flash_.fill(0xff);
         reset();
     } catch (...) {
@@ -250,6 +244,7 @@ void Ca51F253L3::reset() {
     data_flash_unlocked_ = false;
     data_flash_address_ = 0;
     timer0_last_cycles_ = 0;
+    uart1_irq_requested_ = false;
 
     // 8051-compatible reset values. CA51-specific SFR reset behavior and
     // peripherals are added as their register documentation is modeled.
@@ -259,11 +254,17 @@ void Ca51F253L3::reset() {
     write_sfr(SfrPort2, 0xff);
     write_sfr(SfrPort3, 0xff);
     std::uint16_t pc = 0;
+    std::uint16_t interrupt_vector = 0;
     std::uint64_t cycles = 0;
     check_error(uc_reg_write(engine, UC_MCS51_REG_PC, &pc), "reset PC");
+    check_error(uc_reg_write(engine, UC_MCS51_REG_IRQ_VECTOR,
+                             &interrupt_vector),
+                "reset pending interrupt");
     check_error(uc_reg_write(engine, UC_MCS51_REG_CYCLES, &cycles),
                 "reset cycle counter");
-    executed_instructions_ = 0;
+    std::uint64_t instructions = 0;
+    check_error(uc_reg_write(engine, UC_MCS51_REG_INSTRUCTIONS, &instructions),
+                "reset instruction counter");
 }
 
 std::uint64_t Ca51F253L3::xdata_flash_read(uc_struct *opaque_uc,
@@ -400,6 +401,27 @@ void Ca51F253L3::sfr_mmio_write(uc_struct *opaque_uc, std::uint64_t offset,
             self->rebase_timer0();
         }
     }
+    self->update_uart1_interrupt(opaque_uc);
+    const bool timer0_active =
+        (self->sfr_[SfrTimer0Control] & Timer0Run) != 0 &&
+        (self->sfr_[SfrTimerMode] & 0x0f) == 0x01;
+    if (self->fast_mode_ && (timer0_active || self->uart1_irq_requested_))
+        (void)uc_emu_stop(reinterpret_cast<uc_engine *>(opaque_uc));
+}
+
+void Ca51F253L3::update_uart1_interrupt(uc_struct *opaque_uc) noexcept {
+    const bool pending =
+        (sfr_[SfrInterruptEnable] &
+         (InterruptEnableGlobal | InterruptEnableUart1)) ==
+            (InterruptEnableGlobal | InterruptEnableUart1) &&
+        (sfr_[SfrUart1Control] & Uart1InterruptFlags) != 0;
+    if (pending == uart1_irq_requested_)
+        return;
+
+    const std::uint16_t vector = pending ? Uart1InterruptVector : 0;
+    auto *engine = reinterpret_cast<uc_engine *>(opaque_uc);
+    if (uc_reg_write(engine, UC_MCS51_REG_IRQ_VECTOR, &vector) == UC_ERR_OK)
+        uart1_irq_requested_ = pending;
 }
 
 void Ca51F253L3::rebase_timer0() noexcept {
@@ -429,7 +451,6 @@ void Ca51F253L3::advance_timer0(std::uint64_t cycle_delta) noexcept {
 void Ca51F253L3::code_hook(uc_struct *opaque_uc, std::uint64_t address,
                            std::uint32_t size, void *user_data) {
     auto *self = static_cast<Ca51F253L3 *>(user_data);
-    ++self->executed_instructions_;
     auto *engine = reinterpret_cast<uc_engine *>(opaque_uc);
     const bool timer0_active = (self->sfr_[SfrTimer0Control] & Timer0Run) != 0 &&
                                (self->sfr_[SfrTimerMode] & 0x0f) == 0x01;
@@ -441,14 +462,17 @@ void Ca51F253L3::code_hook(uc_struct *opaque_uc, std::uint64_t address,
             self->timer0_last_cycles_ = cycles;
         }
     }
-    const bool uart1_interrupt_pending =
-        (self->sfr_[SfrInterruptEnable] &
-         (InterruptEnableGlobal | InterruptEnableUart1)) ==
-            (InterruptEnableGlobal | InterruptEnableUart1) &&
-        (self->sfr_[SfrUart1Control] & Uart1InterruptFlags) != 0;
-    const std::uint16_t interrupt_vector =
-        uart1_interrupt_pending ? Uart1InterruptVector : 0;
-    (void)uc_reg_write(engine, UC_MCS51_REG_IRQ_VECTOR, &interrupt_vector);
+    if (address == Uart1InterruptVector) {
+        // The CPU consumed the pending vector. Re-arm it if the device flag
+        // remains set, such as when an ISR has not acknowledged the source.
+        self->uart1_irq_requested_ = false;
+        self->update_uart1_interrupt(opaque_uc);
+    }
+    if (!self->trace_output_ && !timer0_active &&
+        !self->uart1_irq_requested_) {
+        (void)uc_emu_stop(engine);
+        return;
+    }
     if (!self->trace_output_)
         return;
     auto &out = *self->trace_output_;
@@ -464,18 +488,66 @@ void Ca51F253L3::code_hook(uc_struct *opaque_uc, std::uint64_t address,
     out << std::dec << std::setfill(' ') << '\n';
 }
 
+void Ca51F253L3::set_code_hook_enabled(bool enabled) {
+    auto *engine = reinterpret_cast<uc_engine *>(uc_);
+    if (enabled == code_hook_installed_)
+        return;
+    if (enabled) {
+        check_error(uc_hook_add(engine, reinterpret_cast<uc_hook *>(&code_hook_),
+                                UC_HOOK_CODE,
+                                reinterpret_cast<void *>(
+                                    static_cast<uc_cb_hookcode_t>(Ca51F253L3::code_hook)),
+                                this, 1, 0),
+                    "install code hook");
+        code_hook_installed_ = true;
+    } else {
+        check_error(uc_hook_del(engine, static_cast<uc_hook>(code_hook_)),
+                    "remove code hook");
+        code_hook_ = 0;
+        code_hook_installed_ = false;
+    }
+}
+
 RunResult Ca51F253L3::run(std::size_t instruction_limit) {
     RunResult result;
     auto *engine = reinterpret_cast<uc_engine *>(uc_);
-    const std::uint16_t start_pc = [&] {
-        std::uint16_t value = 0;
-        check_error(uc_reg_read(engine, UC_MCS51_REG_PC, &value), "read PC");
-        return value;
-    }();
-    const std::size_t before = executed_instructions_;
-    const uc_err error = uc_emu_start(engine, start_pc, CodeSize, 0,
-                                      instruction_limit);
-    result.instructions = executed_instructions_ - before;
+    std::uint64_t before = 0;
+    check_error(uc_reg_read(engine, UC_MCS51_REG_INSTRUCTIONS, &before),
+                "read instruction counter");
+    uc_err error = UC_ERR_OK;
+    while (result.instructions < instruction_limit) {
+        const bool timer0_active =
+            (sfr_[SfrTimer0Control] & Timer0Run) != 0 &&
+            (sfr_[SfrTimerMode] & 0x0f) == 0x01;
+        const bool hook_needed = trace_output_ || timer0_active ||
+                                 uart1_irq_requested_;
+        set_code_hook_enabled(hook_needed);
+        fast_mode_ = !hook_needed;
+
+        std::uint16_t pc = 0;
+        check_error(uc_reg_read(engine, UC_MCS51_REG_PC, &pc), "read PC");
+        error = uc_emu_start(engine, pc, CodeSize, 0,
+                             instruction_limit - result.instructions);
+        fast_mode_ = false;
+        if (error != UC_ERR_OK)
+            break;
+
+        std::uint64_t current = 0;
+        check_error(uc_reg_read(engine, UC_MCS51_REG_INSTRUCTIONS, &current),
+                    "read instruction counter");
+        result.instructions = static_cast<std::size_t>(current - before);
+        if (result.instructions >= instruction_limit)
+            break;
+
+        if (result.instructions == 0) {
+            error = UC_ERR_EXCEPTION;
+            break;
+        }
+    }
+    std::uint64_t after = 0;
+    check_error(uc_reg_read(engine, UC_MCS51_REG_INSTRUCTIONS, &after),
+                "read instruction counter");
+    result.instructions = static_cast<std::size_t>(after - before);
     check_error(uc_reg_read(engine, UC_MCS51_REG_PC, &result.pc), "read PC");
     check_error(uc_reg_read(engine, UC_MCS51_REG_CYCLES, &result.cycles),
                 "read cycle counter");
