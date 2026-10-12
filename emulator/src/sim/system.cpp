@@ -56,6 +56,14 @@ const McuRegistry &McuRegistry::builtin() {
     return registry;
 }
 
+void System::drive_net(const std::string &name, Drive drive) {
+    Net &net = world_.net(name);
+    Pin *&pin = scenario_pins_[name];
+    if (!pin)
+        pin = &net.attach("external");
+    pin->set_drive(drive, world_.now());
+}
+
 System::System() = default;
 System::~System() = default;
 

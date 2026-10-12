@@ -50,6 +50,9 @@ public:
     const std::optional<std::uint64_t> &duration_ns() const noexcept {
         return duration_ns_;
     }
+    // Forces a net from outside (like a scenario event, but right now). Throws
+    // std::out_of_range for an unknown net.
+    void drive_net(const std::string &net, Drive drive);
     // Non-fatal findings from construction (e.g. a one-way UART link).
     const std::vector<std::string> &warnings() const noexcept { return warnings_; }
 

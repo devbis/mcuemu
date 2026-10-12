@@ -94,6 +94,9 @@ or I2C model.
 
 Scripted parts are described in [scripting.md](scripting.md).
 
+`tc32-emu serve` runs the same systems under remote control; see
+[control-api.md](control-api.md).
+
 ## Endpoints and sinks
 
 Everything observable or controllable is an endpoint with a name and a kind;

@@ -55,7 +55,9 @@ void usage(std::ostream &out) {
            "       [--dump-sram NAME=ADDRESS:LENGTH]\n"
            "       tc32-emu models\n"
            "       tc32-emu sim SYSTEM.yaml [--for DURATION] [--quantum DURATION]\n"
-           "       [--trace-nets]\n\n"
+           "       [--trace-nets]\n"
+           "       tc32-emu serve --root DIR [--port N] [--bind ADDR] [--token T]\n"
+           "       [--allow-origin ORIGIN]... [--max-sessions N] [--idle-timeout SEC]\n\n"
            "Models: TLSR8258F512, TLSR8258F1K\n"
            "Firmware is loaded as a raw image at flash address 0.\n"
            "Trace ranges are inclusive; addresses accept decimal or 0x hex.\n";
@@ -839,6 +841,8 @@ int main(int argc, char **argv) {
             return network_command(argc, argv);
         if (std::string(argv[1]) == "sim")
             return sim::sim_command(argc, argv);
+        if (std::string(argv[1]) == "serve")
+            return sim::serve_command(argc, argv);
         if (std::string(argv[1]) != "run") {
             usage(std::cerr);
             return 2;

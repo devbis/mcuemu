@@ -134,6 +134,12 @@ into systems (see the declarative-configuration plan for the full roadmap):
   (`RttEndpoint`, read from target memory) are endpoints too; UART links are
   built on them. The `led` and `button` parts give GPIO indicators and inputs
   a name.
+- `Simulation` / `RpcSession` / `Server` — remote control. `Simulation` wraps a
+  loaded system with run/pause, event subscriptions and a sandbox that confines
+  files to a root directory; `RpcSession` is a transport-agnostic JSON-RPC 2.0
+  dispatcher; `Server` is a single-threaded WebSocket server (hand-written
+  RFC 6455 framing) with one isolated simulation per connection. See
+  [control-api.md](control-api.md).
 - `World` — owns MCUs, nets and the scheduler; `run_until` advances all MCUs
   in quanta (default 5 us) bounded by the next scheduled event, and jumps
   straight to the next event when no MCU is running.

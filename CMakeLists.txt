@@ -80,6 +80,11 @@ if(UNIX)
 endif()
 target_compile_options(lua54 PRIVATE -w)
 
+# JSON for the control API.
+FetchContent_Declare(json
+    URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz)
+FetchContent_MakeAvailable(json)
+
 # Chip-independent simulation core: scheduler, pins/nets, endpoints, world.
 add_library(simcore
     emulator/src/sim/scheduler.cpp
@@ -89,6 +94,10 @@ add_library(simcore
     emulator/src/sim/uart_endpoint.cpp
     emulator/src/sim/rtt_endpoint.cpp
     emulator/src/sim/sink.cpp
+    emulator/src/sim/simulation.cpp
+    emulator/src/sim/rpc.cpp
+    emulator/src/sim/websocket.cpp
+    emulator/src/sim/server.cpp
     emulator/src/sim/part.cpp
     emulator/src/sim/parts/ds18b20.cpp
     emulator/src/sim/parts/i2c_slave.cpp
@@ -102,7 +111,8 @@ add_library(simcore
 )
 target_include_directories(simcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(simcore PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(simcore PUBLIC tc32emu mcs51emu ${TC32EMU_YAML_TARGET} lua54)
+target_link_libraries(simcore PUBLIC tc32emu mcs51emu ${TC32EMU_YAML_TARGET} lua54
+    nlohmann_json::nlohmann_json)
 
 if(TC32EMU_BUILD_TESTS)
     enable_testing()
@@ -130,6 +140,7 @@ if(TC32EMU_BUILD_TESTS)
         tests/sim/test_lua.cpp
         tests/sim/test_radio_medium.cpp
         tests/sim/test_attach.cpp
+        tests/sim/test_control.cpp
     )
     target_link_libraries(simcore-tests PRIVATE simcore)
     target_compile_definitions(simcore-tests PRIVATE
