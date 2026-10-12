@@ -10,7 +10,7 @@ endif()
 
 # The board wrapper depends on the TC32 architecture implemented in this local
 # Unicorn checkout. Keep the engine as a separate Git repository under ./engine.
-set(UNICORN_ARCH "tc32" CACHE STRING "Architectures built for the TLSR8258 wrapper" FORCE)
+set(UNICORN_ARCH "tc32;mcs51" CACHE STRING "Architectures built for device emulators" FORCE)
 set(UNICORN_BUILD_TESTS OFF CACHE BOOL "Build Unicorn tests through the wrapper" FORCE)
 set(UNICORN_INSTALL OFF CACHE BOOL "Install Unicorn through the wrapper" FORCE)
 add_subdirectory(engine/unicorn EXCLUDE_FROM_ALL)
@@ -32,6 +32,16 @@ target_link_libraries(tc32emu PUBLIC unicorn)
 add_executable(tc32-emu emulator/src/main.cpp)
 target_link_libraries(tc32-emu PRIVATE tc32emu)
 
+add_library(mcs51emu
+    emulator/src/mcs51/ca51f253l3.cpp
+)
+target_include_directories(mcs51emu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
+target_compile_options(mcs51emu PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(mcs51emu PUBLIC unicorn)
+
+add_executable(mcs51-emu emulator/src/mcs51/main.cpp)
+target_link_libraries(mcs51-emu PRIVATE mcs51emu)
+
 if(TC32EMU_BUILD_TESTS)
     enable_testing()
     add_executable(tc32emu-tests
@@ -43,6 +53,12 @@ if(TC32EMU_BUILD_TESTS)
     )
     target_link_libraries(tc32emu-tests PRIVATE tc32emu)
     add_test(NAME tc32emu-tests COMMAND tc32emu-tests)
+
+    add_executable(mcs51emu-tests
+        tests/mcs51/test_ca51f253l3.cpp
+    )
+    target_link_libraries(mcs51emu-tests PRIVATE mcs51emu)
+    add_test(NAME mcs51emu-tests COMMAND mcs51emu-tests)
 
     set(TC32EMU_SAMPLE_GW_FIRMWARE
         "${CMAKE_CURRENT_SOURCE_DIR}/firmware/samplegw_tb03f.bin")

@@ -1,5 +1,27 @@
 # Architecture and implementation notes
 
+## MCS-51 / CA51F253L3
+
+MCS-51 instruction execution and registers live in the separate
+`UC_ARCH_MCS51` backend in `engine/unicorn/`. The root project provides a
+CA51F253L3 device shell and the `mcs51-emu` runner. CODE, XDATA, IDATA, and SFR
+use distinct Unicorn address ranges so future device models can attach
+register behavior without changing the CPU's 8051 address semantics.
+
+The current CA51 wrapper loads raw or Intel HEX firmware into a 32 KiB flash
+image and initializes common 8051 reset state. It is a CPU execution shell:
+peripheral registers are storage only, and interrupt delivery, UART, timers,
+GPIO electrical behavior, clocking, and sleep are not implemented yet. The
+vendor [CA51F2 product overview](https://en.zhwssz.com/uploads/file/20221102/4e9369f760806204f362dcef2dc07175.pdf)
+identifies the F253 variant's 32 KiB flash and 8051-compatible core. A complete
+SFR manual is needed before assigning CA51-specific peripheral behavior.
+
+The CPU API preserves a separate 16-bit CODE and 16-bit XDATA bus. The current
+CA51 shell maps the full bus windows for deterministic access, while only the
+first 32 KiB of CODE is loadable from firmware. Future CC2530 support should be
+a separate device wrapper with its banked code mapping and SoC-specific
+peripherals; it can reuse the CPU backend.
+
 ## Address space
 
 The initial board exposes:

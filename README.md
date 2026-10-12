@@ -1,4 +1,4 @@
-# TC32 / TLSR8258 emulator
+# TC32 / TLSR8258 and MCS-51 emulator
 
 This project layers a TLSR8258 board model over Unicorn. TC32 instruction
 execution and register state live in Unicorn's `UC_ARCH_TC32` backend; the
@@ -135,6 +135,25 @@ execution quantum.
 
 `firmware/` is local-only. Images and build products are ignored by git.
 `tc32-emu models` lists the supported flash capacities.
+
+## MCS-51 / CA51F253L3
+
+The separate `mcs51-emu` executable uses Unicorn's `UC_ARCH_MCS51` backend.
+The first device shell is CA51F253L3; it accepts raw binary and Intel HEX
+images, with raw firmware limited to the chip's 32 KiB code flash. Run it with:
+
+```sh
+./build/mcs51-emu run --model CA51F253L3 \
+  --firmware firmware/application.bin --steps 1000000
+```
+
+Add `--trace` to print executed instruction addresses and bytes to stderr. The
+current shell maps the 8051 CODE, IDATA, SFR, and XDATA spaces and initializes
+the classic 8051 stack pointer and port latches. CA51-specific SFR behavior,
+interrupts, timers, GPIO electrical behavior, and UART are not modeled yet.
+CC2530 support will need its banked code and SoC peripheral maps in a separate
+device model; the shared MCS-51 instruction backend is the starting point.
+See [MCS-51 implementation notes](docs/mcs51.md).
 
 ## Current scope
 
