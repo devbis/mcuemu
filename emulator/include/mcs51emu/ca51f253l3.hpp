@@ -1,6 +1,7 @@
 #ifndef MCS51EMU_CA51F253L3_HPP
 #define MCS51EMU_CA51F253L3_HPP
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <iosfwd>
@@ -26,6 +27,9 @@ public:
     static constexpr std::uint64_t CodeSize = 64 * 1024;
     static constexpr std::uint64_t XdataBase = 0x00010000ULL;
     static constexpr std::uint64_t XdataSize = 64 * 1024;
+    static constexpr std::uint64_t XdataFlashPageOffset = 0xf000;
+    static constexpr std::uint64_t XdataFlashPageSize = 4096;
+    static constexpr std::size_t DataFlashSize = 512;
     static constexpr std::uint64_t IdataBase = 0x00020000ULL;
     static constexpr std::uint64_t SfrBase = 0x00030000ULL;
     static constexpr std::uint64_t MappedInternalSize = 4096;
@@ -43,16 +47,37 @@ public:
     std::uint8_t read_idata(std::uint8_t address) const;
     std::uint8_t read_xdata(std::uint16_t address) const;
     void write_sfr(std::uint8_t address, std::uint8_t value);
+    const std::string &uart0_output() const noexcept { return uart0_output_; }
     void set_trace(std::ostream *output) noexcept { trace_output_ = output; }
 
 private:
+    static std::uint64_t xdata_flash_read(uc_struct *uc, std::uint64_t offset,
+                                          unsigned size, void *user_data);
+    static void xdata_flash_write(uc_struct *uc, std::uint64_t offset,
+                                  unsigned size, std::uint64_t value,
+                                  void *user_data);
+    static std::uint64_t sfr_mmio_read(uc_struct *uc, std::uint64_t offset,
+                                       unsigned size, void *user_data);
+    static void sfr_mmio_write(uc_struct *uc, std::uint64_t offset,
+                               unsigned size, std::uint64_t value,
+                               void *user_data);
     static void code_hook(uc_struct *uc, std::uint64_t address,
                           std::uint32_t size, void *user_data);
     void check_error(int error, const char *operation) const;
+    void rebase_timer0() noexcept;
+    void advance_timer0(std::uint64_t cycle_delta) noexcept;
 
     uc_struct *uc_{};
     std::size_t code_hook_{};
     std::size_t executed_instructions_{};
+    std::array<std::uint8_t, 256> sfr_{};
+    std::array<std::uint8_t, XdataFlashPageSize> xdata_flash_page_{};
+    std::array<std::uint8_t, DataFlashSize> data_flash_{};
+    std::uint16_t data_flash_address_{};
+    std::uint8_t data_flash_command_{};
+    bool data_flash_unlocked_{};
+    std::uint64_t timer0_last_cycles_{};
+    std::string uart0_output_;
     std::ostream *trace_output_{};
 };
 

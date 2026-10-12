@@ -14,11 +14,23 @@ The CA51F253L3 shell currently provides:
 - Raw binary and Intel HEX loading with record checksums and flash bounds.
 - Instruction count, architectural cycle count, PC, and optional instruction
   trace output.
+- A 512-byte data flash region with the SDK-used read, write, erase, and lock
+  commands at XDATA `0xFC01..0xFC06`.
+- UART0 transmit capture from `S0BUF`, with immediate `TI0` completion so
+  firmware using a polled UART debug routine can continue.
+- `PWMUPD` write requests clear immediately after the modeled PWM shadow
+  register update.
+- Timer0 mode 1 counting from MCS-51 core cycles, setting `TF0`, and dispatching
+  vector `0x000B` when `EA` and `ET0` are enabled. Timer0 counts only when
+  `TR0=1`, `C/T0=0`, `GATE0=0`, and mode 1 is selected.
 
-SFR bytes currently behave as memory. Peripheral side effects and reset values
-specific to CA51F253L3 have not been added. Interrupts, timers, UART, GPIO
-electrical behavior, and sleep are also future work. This keeps uncertain chip
-behavior out of the CPU core until it can be tied to a manual or measurements.
+Most SFR bytes currently behave as storage. UART0 transmit and PWM updates
+complete immediately; baud-rate and PWM timing are not modeled. UART receive,
+other interrupt sources, other timer modes, GPIO electrical behavior, and sleep
+are not modeled yet. Timer0 receives one increment per MCS-51 core cycle, which
+matches the firmware's timer setup assumptions but is not a calibrated wall
+clock. Other reset values and peripheral semantics still need CA51F253L3
+documentation or hardware traces.
 
 ## Running
 
@@ -26,11 +38,13 @@ behavior out of the CPU core until it can be tied to a manual or measurements.
 cmake -S . -B build
 cmake --build build --target mcs51-emu
 ./build/mcs51-emu run --model CA51F253L3 \
-  --firmware firmware/application.hex --steps 1000000 --trace
+  --firmware firmware/application.hex --steps 1000000 --trace --state
 ```
 
 `--trace` writes each executed PC and its instruction bytes to stderr. The
 runner reports executed instruction count, backend cycle count, and final PC.
+`--state` prints CPU, timer, IDATA, and stack state. Captured UART0 output is
+printed after the CPU summary.
 
 ## Extending toward CC2530
 

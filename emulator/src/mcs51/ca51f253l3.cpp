@@ -23,6 +23,27 @@ constexpr int SfrPort0 = 0x80;
 constexpr int SfrPort1 = 0x90;
 constexpr int SfrPort2 = 0xa0;
 constexpr int SfrPort3 = 0xb0;
+constexpr std::uint8_t SfrUart0Control = 0x98;
+constexpr std::uint8_t SfrUart0Buffer = 0x99;
+constexpr std::uint8_t UartTransmitInterruptFlag = 0x02;
+constexpr std::uint8_t SfrPwmUpdate = 0xdb;
+constexpr std::uint8_t SfrTimer0Control = 0x88;
+constexpr std::uint8_t SfrTimerMode = 0x89;
+constexpr std::uint8_t SfrTimer0Low = 0x8a;
+constexpr std::uint8_t SfrTimer0High = 0x8c;
+constexpr std::uint8_t Timer0Run = 0x10;
+constexpr std::uint8_t Timer0Overflow = 0x20;
+constexpr std::uint16_t XsfrFscmd = 0xc01;
+constexpr std::uint16_t XsfrFsdat = 0xc02;
+constexpr std::uint16_t XsfrLock = 0xc03;
+constexpr std::uint16_t XsfrPtsl = 0xc05;
+constexpr std::uint16_t XsfrPtsh = 0xc06;
+constexpr std::uint8_t FlashCmdDataRead = 1;
+constexpr std::uint8_t FlashCmdDataWrite = 2;
+constexpr std::uint8_t FlashCmdDataEraseSector = 3;
+constexpr std::uint8_t FlashUnlockData = 0x2a;
+constexpr std::uint8_t FlashLock = 0xaa;
+constexpr std::size_t FlashSectorSize = 128;
 
 std::uint8_t hex_byte(std::string_view text, std::size_t offset,
                       const std::string &path) {
@@ -162,18 +183,25 @@ Ca51F253L3::Ca51F253L3() {
         std::vector<std::uint8_t> erased_code(CodeSize, 0xff);
         check_error(uc_mem_write(engine, 0, erased_code.data(), erased_code.size()),
                     "initialize erased flash");
-        check_error(uc_mem_map(engine, XdataBase, XdataSize, UC_PROT_ALL),
+        check_error(uc_mem_map(engine, XdataBase, XdataFlashPageOffset,
+                               UC_PROT_ALL),
                     "map XDATA");
+        check_error(uc_mmio_map(engine, XdataBase + XdataFlashPageOffset,
+                                XdataFlashPageSize, xdata_flash_read, this,
+                                xdata_flash_write, this),
+                    "map data flash registers");
         check_error(uc_mem_map(engine, IdataBase, MappedInternalSize, UC_PROT_ALL),
                     "map IDATA");
-        check_error(uc_mem_map(engine, SfrBase, MappedInternalSize, UC_PROT_ALL),
-                    "map SFR");
+        check_error(uc_mmio_map(engine, SfrBase, MappedInternalSize,
+                                sfr_mmio_read, this, sfr_mmio_write, this),
+                    "map SFR and UART");
         check_error(uc_hook_add(engine, reinterpret_cast<uc_hook *>(&code_hook_),
                                 UC_HOOK_CODE,
                                 reinterpret_cast<void *>(
                                     static_cast<uc_cb_hookcode_t>(Ca51F253L3::code_hook)),
                                 this, 1, 0),
                     "install code hook");
+        data_flash_.fill(0xff);
         reset();
     } catch (...) {
         uc_close(engine);
@@ -207,8 +235,13 @@ void Ca51F253L3::reset() {
     std::array<std::uint8_t, MappedInternalSize> zeros{};
     check_error(uc_mem_write(engine, IdataBase, zeros.data(), zeros.size()),
                 "reset IDATA");
-    check_error(uc_mem_write(engine, SfrBase, zeros.data(), zeros.size()),
-                "reset SFR");
+    sfr_.fill(0);
+    xdata_flash_page_.fill(0);
+    uart0_output_.clear();
+    data_flash_command_ = 0;
+    data_flash_unlocked_ = false;
+    data_flash_address_ = 0;
+    timer0_last_cycles_ = 0;
 
     // 8051-compatible reset values. CA51-specific SFR reset behavior and
     // peripherals are added as their register documentation is modeled.
@@ -225,19 +258,177 @@ void Ca51F253L3::reset() {
     executed_instructions_ = 0;
 }
 
+std::uint64_t Ca51F253L3::xdata_flash_read(uc_struct *opaque_uc,
+                                           std::uint64_t offset, unsigned size,
+                                           void *user_data) {
+    (void)opaque_uc;
+    auto *self = static_cast<Ca51F253L3 *>(user_data);
+    std::uint64_t value = 0;
+    for (unsigned i = 0; i < size; ++i) {
+        const std::uint64_t address = offset + i;
+        std::uint8_t byte = address < self->xdata_flash_page_.size()
+                                ? self->xdata_flash_page_[address]
+                                : 0xff;
+        if (address == XsfrFsdat &&
+            self->data_flash_command_ == FlashCmdDataRead) {
+            byte = self->data_flash_address_ < self->data_flash_.size()
+                       ? self->data_flash_[self->data_flash_address_]
+                       : 0xff;
+            ++self->data_flash_address_;
+        }
+        value |= static_cast<std::uint64_t>(byte) << (i * 8u);
+    }
+    return value;
+}
+
+void Ca51F253L3::xdata_flash_write(uc_struct *opaque_uc,
+                                   std::uint64_t offset, unsigned size,
+                                   std::uint64_t value, void *user_data) {
+    (void)opaque_uc;
+    auto *self = static_cast<Ca51F253L3 *>(user_data);
+    for (unsigned i = 0; i < size; ++i) {
+        const std::uint64_t address = offset + i;
+        if (address >= self->xdata_flash_page_.size())
+            continue;
+        const std::uint8_t byte = static_cast<std::uint8_t>(value >> (i * 8u));
+        self->xdata_flash_page_[address] = byte;
+        switch (address) {
+        case XsfrLock:
+            self->data_flash_unlocked_ = byte == FlashUnlockData;
+            if (byte == FlashLock)
+                self->data_flash_unlocked_ = false;
+            break;
+        case XsfrPtsl:
+        case XsfrPtsh:
+            self->data_flash_address_ = static_cast<std::uint16_t>(
+                self->xdata_flash_page_[XsfrPtsl] |
+                (static_cast<std::uint16_t>(self->xdata_flash_page_[XsfrPtsh])
+                 << 8));
+            break;
+        case XsfrFscmd:
+            self->data_flash_command_ = byte;
+            if (byte == 0) {
+                break;
+            }
+            self->data_flash_address_ = static_cast<std::uint16_t>(
+                self->xdata_flash_page_[XsfrPtsl] |
+                (static_cast<std::uint16_t>(self->xdata_flash_page_[XsfrPtsh])
+                 << 8));
+            if (byte == FlashCmdDataEraseSector && self->data_flash_unlocked_) {
+                const std::size_t sector_start =
+                    (self->data_flash_address_ / FlashSectorSize) * FlashSectorSize;
+                if (sector_start < self->data_flash_.size()) {
+                    const std::size_t erase_size = std::min(
+                        FlashSectorSize, self->data_flash_.size() - sector_start);
+                    std::fill_n(self->data_flash_.begin() + sector_start,
+                                erase_size, 0xff);
+                }
+                self->data_flash_command_ = 0;
+                self->xdata_flash_page_[XsfrFscmd] = 0;
+            }
+            break;
+        case XsfrFsdat:
+            if (self->data_flash_command_ == FlashCmdDataWrite &&
+                self->data_flash_unlocked_ &&
+                self->data_flash_address_ < self->data_flash_.size()) {
+                self->data_flash_[self->data_flash_address_] &= byte;
+                ++self->data_flash_address_;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+std::uint64_t Ca51F253L3::sfr_mmio_read(uc_struct *opaque_uc,
+                                        std::uint64_t offset, unsigned size,
+                                        void *user_data) {
+    (void)opaque_uc;
+    auto *self = static_cast<Ca51F253L3 *>(user_data);
+    std::uint64_t value = 0;
+    for (unsigned i = 0; i < size; ++i) {
+        const std::uint64_t address = offset + i;
+        const std::uint8_t byte = address < self->sfr_.size()
+                                      ? self->sfr_[address]
+                                      : 0xff;
+        value |= static_cast<std::uint64_t>(byte) << (i * 8u);
+    }
+    return value;
+}
+
+void Ca51F253L3::sfr_mmio_write(uc_struct *opaque_uc, std::uint64_t offset,
+                                unsigned size, std::uint64_t value,
+                                void *user_data) {
+    (void)opaque_uc;
+    auto *self = static_cast<Ca51F253L3 *>(user_data);
+    for (unsigned i = 0; i < size; ++i) {
+        const std::uint64_t address = offset + i;
+        if (address >= self->sfr_.size())
+            continue;
+        const std::uint8_t byte = static_cast<std::uint8_t>(value >> (i * 8u));
+        self->sfr_[address] = byte;
+        if (address == SfrUart0Buffer) {
+            self->uart0_output_.push_back(static_cast<char>(byte));
+            // Complete transmit immediately; baud-rate timing is not modeled.
+            self->sfr_[SfrUart0Control] |= UartTransmitInterruptFlag;
+        } else if (address == SfrPwmUpdate) {
+            // PWMUPD is a write-one update request. The peripheral clears it
+            // after applying the shadow values; completion is immediate here.
+            self->sfr_[SfrPwmUpdate] = 0;
+        } else if (address == SfrTimer0Control || address == SfrTimerMode) {
+            self->rebase_timer0();
+        }
+    }
+}
+
+void Ca51F253L3::rebase_timer0() noexcept {
+    auto *engine = reinterpret_cast<uc_engine *>(uc_);
+    std::uint64_t cycles = 0;
+    if (uc_reg_read(engine, UC_MCS51_REG_CYCLES, &cycles) == UC_ERR_OK)
+        timer0_last_cycles_ = cycles;
+}
+
+void Ca51F253L3::advance_timer0(std::uint64_t cycle_delta) noexcept {
+    if (cycle_delta == 0 ||
+        (sfr_[SfrTimer0Control] & Timer0Run) == 0 ||
+        (sfr_[SfrTimerMode] & 0x0f) != 0x01)
+        return;
+
+    const std::uint32_t timer =
+        (static_cast<std::uint32_t>(sfr_[SfrTimer0High]) << 8) |
+        sfr_[SfrTimer0Low];
+    const std::uint64_t advanced = timer + cycle_delta;
+    if (advanced > 0xffffu)
+        sfr_[SfrTimer0Control] |= Timer0Overflow;
+    const std::uint16_t value = static_cast<std::uint16_t>(advanced);
+    sfr_[SfrTimer0Low] = static_cast<std::uint8_t>(value);
+    sfr_[SfrTimer0High] = static_cast<std::uint8_t>(value >> 8);
+}
+
 void Ca51F253L3::code_hook(uc_struct *opaque_uc, std::uint64_t address,
                            std::uint32_t size, void *user_data) {
     auto *self = static_cast<Ca51F253L3 *>(user_data);
     ++self->executed_instructions_;
+    auto *engine = reinterpret_cast<uc_engine *>(opaque_uc);
+    const bool timer0_active = (self->sfr_[SfrTimer0Control] & Timer0Run) != 0 &&
+                               (self->sfr_[SfrTimerMode] & 0x0f) == 0x01;
+    if (timer0_active) {
+        std::uint64_t cycles = 0;
+        if (uc_reg_read(engine, UC_MCS51_REG_CYCLES, &cycles) == UC_ERR_OK) {
+            if (cycles >= self->timer0_last_cycles_)
+                self->advance_timer0(cycles - self->timer0_last_cycles_);
+            self->timer0_last_cycles_ = cycles;
+        }
+    }
     if (!self->trace_output_)
         return;
+    auto &out = *self->trace_output_;
 
     std::array<std::uint8_t, 3> bytes{};
-    auto *engine = reinterpret_cast<uc_engine *>(opaque_uc);
     const std::size_t read_size = std::min<std::size_t>(size, bytes.size());
     if (uc_mem_read(engine, address, bytes.data(), read_size) != UC_ERR_OK)
         return;
-    auto &out = *self->trace_output_;
     out << "pc=0x" << std::hex << std::setw(4) << std::setfill('0') << address
         << "  ";
     for (std::size_t i = 0; i < read_size; ++i)
@@ -268,13 +459,7 @@ RunResult Ca51F253L3::run(std::size_t instruction_limit) {
 }
 
 std::uint8_t Ca51F253L3::read_sfr(std::uint8_t address) const {
-    std::uint8_t value = 0;
-    const uc_err error = uc_mem_read(reinterpret_cast<uc_engine *>(uc_),
-                                     SfrBase + address, &value, sizeof(value));
-    if (error != UC_ERR_OK)
-        throw std::runtime_error(std::string("Unicorn read SFR: ") +
-                                 uc_strerror(error));
-    return value;
+    return sfr_[address];
 }
 
 std::uint8_t Ca51F253L3::read_idata(std::uint8_t address) const {
@@ -298,9 +483,9 @@ std::uint8_t Ca51F253L3::read_xdata(std::uint16_t address) const {
 }
 
 void Ca51F253L3::write_sfr(std::uint8_t address, std::uint8_t value) {
-    check_error(uc_mem_write(reinterpret_cast<uc_engine *>(uc_), SfrBase + address,
-                             &value, sizeof(value)),
-                "write SFR");
+    sfr_[address] = value;
+    if (address == SfrTimer0Control || address == SfrTimerMode)
+        rebase_timer0();
 }
 
 } // namespace mcs51emu

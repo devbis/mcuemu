@@ -12,10 +12,12 @@ namespace {
 
 void usage(std::ostream &out) {
     out << "Usage: mcs51-emu run --firmware IMAGE [--model CA51F253L3] "
-           "[--steps N] [--trace]\n"
+           "[--steps N] [--trace] [--state]\n"
            "\n"
            "IMAGE may be a raw binary or Intel HEX file.\n"
-           "Model: CA51F253L3 (32 KiB flash, 256-byte IDATA, 2 KiB XDATA).\n";
+           "Model: CA51F253L3 (32 KiB code flash, 512-byte data flash, "
+           "256-byte IDATA, 2 KiB XDATA).\n"
+           "UART0 bytes written to S0BUF are printed after execution.\n";
 }
 
 std::size_t parse_count(const std::string &text) {
@@ -32,6 +34,7 @@ int run(int argc, char **argv) {
     std::string model = "CA51F253L3";
     std::size_t steps = 1'000'000;
     bool trace = false;
+    bool state = false;
 
     for (int i = 2; i < argc; ++i) {
         const std::string option = argv[i];
@@ -43,6 +46,8 @@ int run(int argc, char **argv) {
             steps = parse_count(argv[++i]);
         else if (option == "--trace")
             trace = true;
+        else if (option == "--state")
+            state = true;
         else if (option == "--help" || option == "-h") {
             usage(std::cout);
             return 0;
@@ -73,6 +78,49 @@ int run(int argc, char **argv) {
     }
     if (result.step_limit_reached)
         std::cout << "stop: instruction limit\n";
+    if (state) {
+        std::cout << "core: SP=0x" << std::hex
+                  << static_cast<unsigned>(device.read_sfr(0x81))
+                  << " PSW=0x" << static_cast<unsigned>(device.read_sfr(0xd0))
+                  << " ACC=0x" << static_cast<unsigned>(device.read_sfr(0xe0))
+                  << " DPH:DPL=0x" << static_cast<unsigned>(device.read_sfr(0x83))
+                  << std::setw(2) << std::setfill('0')
+                  << static_cast<unsigned>(device.read_sfr(0x82))
+                  << std::dec << std::setfill(' ')
+                  << " TCON=0x" << std::hex
+                  << static_cast<unsigned>(device.read_sfr(0x88))
+                  << " TMOD=0x" << static_cast<unsigned>(device.read_sfr(0x89))
+                  << " TH0:TL0=0x" << std::setw(2) << std::setfill('0')
+                  << static_cast<unsigned>(device.read_sfr(0x8c))
+                  << std::setw(2)
+                  << static_cast<unsigned>(device.read_sfr(0x8a))
+                  << " IE=0x" << static_cast<unsigned>(device.read_sfr(0xa8))
+                  << std::dec << std::setfill(' ') << "\nIRAM 0x00..0x0f:";
+        for (std::uint8_t address = 0x00; address <= 0x0f; ++address)
+            std::cout << ' ' << std::hex << std::setw(2) << std::setfill('0')
+                      << static_cast<unsigned>(device.read_idata(address));
+        std::cout << "\nIRAM 0x30..0x3f:";
+        for (std::uint8_t address = 0x30; address <= 0x3f; ++address)
+            std::cout << ' ' << std::hex << std::setw(2) << std::setfill('0')
+                      << static_cast<unsigned>(device.read_idata(address));
+        const unsigned sp = device.read_sfr(0x81);
+        std::cout << "\nstack:";
+        const unsigned first = sp > 15 ? sp - 15 : 0;
+        for (unsigned address = first; address <= sp; ++address)
+            std::cout << " 0x" << std::hex << address << '=' << std::setw(2)
+                      << std::setfill('0')
+                      << static_cast<unsigned>(device.read_idata(
+                             static_cast<std::uint8_t>(address)));
+        std::cout << std::dec << std::setfill(' ') << '\n';
+    }
+    if (!device.uart0_output().empty()) {
+        std::cout << "UART0 output (" << device.uart0_output().size()
+                  << " bytes):\n";
+        std::cout.write(device.uart0_output().data(),
+                        static_cast<std::streamsize>(device.uart0_output().size()));
+        if (device.uart0_output().back() != '\n')
+            std::cout << '\n';
+    }
     return 0;
 }
 
