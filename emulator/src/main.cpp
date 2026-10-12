@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cstdint>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <iterator>
 #include <limits>
@@ -33,13 +34,17 @@ const char *power_state_name(tc32emu::Tlsr8258PowerState state) {
 
 void usage(std::ostream &out) {
     out << "Usage: tc32-emu run --firmware IMAGE [--model MODEL] [--steps N]\n"
+           "       [--rc32k-hz HZ] [--rc32k-calibration VALUE]\n"
            "       [--trace-pc | --trace-pc-range START:END]\n"
            "       [--trace-mmio | --trace-mmio-range START:END]\n"
+           "       [--trace-analog]\n"
            "       [--trace-stack] [--trace-after-step N]\n"
            "       [--trace-limit N] [--fault-trace N]\n"
            "       tc32-emu network --node NAME=IMAGE --node NAME=IMAGE\n"
            "       [--model MODEL] [--channel 11..26] [--steps N]\n"
+           "       [--rc32k-hz HZ] [--rc32k-calibration VALUE]\n"
            "       [--trace-pc-range START:END] [--trace-mmio-range START:END]\n"
+           "       [--trace-analog]\n"
            "       [--trace-stack] [--trace-node NAME] [--trace-after-step N]\n"
            "       [--trace-limit N] [--fault-trace N] [--radio-payloads]\n"
            "       [--gpio-event NAME=PORT:VALUE@TIME]\n"
@@ -53,12 +58,55 @@ void usage(std::ostream &out) {
            "Trace ranges are inclusive; addresses accept decimal or 0x hex.\n";
 }
 
+void print_analog_trace(std::ostream &out, const tc32emu::Tlsr8258 &device,
+                        const std::string *node_name = nullptr) {
+    const auto &events = device.analog_register_events();
+    for (const tc32emu::AnalogRegisterEvent &event : events) {
+        if (node_name)
+            out << '[' << *node_name << "] ";
+        out << "areg t=" << event.time_ns << " ns op="
+            << (event.direction ==
+                        tc32emu::AnalogRegisterEvent::Direction::Read
+                    ? 'R'
+                    : 'W')
+            << " addr=0x" << std::hex << std::setw(2) << std::setfill('0')
+            << static_cast<unsigned>(event.address) << " value=0x"
+            << std::setw(2) << static_cast<unsigned>(event.value) << std::dec
+            << std::setfill(' ') << '\n';
+    }
+    const std::uint64_t total = device.analog_register_event_count();
+    if (total > events.size()) {
+        if (node_name)
+            out << '[' << *node_name << "] ";
+        out << "areg trace limit: recorded " << events.size() << " of "
+            << total << " events\n";
+    }
+}
+
 std::size_t parse_count(const std::string &text) {
     std::size_t value = 0;
     const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
     if (result.ec != std::errc{} || result.ptr != text.data() + text.size())
         throw std::invalid_argument("invalid instruction count: " + text);
     return value;
+}
+
+std::uint32_t parse_positive_u32(const std::string &text,
+                                 const char *description) {
+    const std::size_t value = parse_count(text);
+    if (value == 0 || value > std::numeric_limits<std::uint32_t>::max())
+        throw std::invalid_argument(std::string(description) +
+                                    " must fit a nonzero 32-bit value");
+    return static_cast<std::uint32_t>(value);
+}
+
+std::uint16_t parse_positive_u16(const std::string &text,
+                                 const char *description) {
+    const std::size_t value = parse_count(text);
+    if (value == 0 || value > std::numeric_limits<std::uint16_t>::max())
+        throw std::invalid_argument(std::string(description) +
+                                    " must fit a nonzero 16-bit value");
+    return static_cast<std::uint16_t>(value);
 }
 
 std::uint32_t parse_address(const std::string &text) {
@@ -226,6 +274,9 @@ GpioEvent parse_gpio_event(const std::string &text) {
 int run_command(int argc, char **argv) {
     std::string firmware;
     std::string model = "TLSR8258F512";
+    std::uint32_t rc32k_hz = tc32emu::Tlsr8258::DefaultRc32kFrequencyHz;
+    std::uint16_t rc32k_calibration =
+        tc32emu::Tlsr8258::DefaultRc32kCalibration;
     std::size_t steps = 100000;
     std::size_t trace_limit = 10000;
     std::size_t trace_after_step = 0;
@@ -233,6 +284,7 @@ int run_command(int argc, char **argv) {
     bool trace_pc = false;
     bool trace_mmio = false;
     bool trace_stack = false;
+    bool trace_analog = false;
     std::optional<tc32emu::AddressRange> pc_range;
     std::optional<tc32emu::AddressRange> mmio_range;
     for (int i = 2; i < argc; ++i) {
@@ -241,6 +293,11 @@ int run_command(int argc, char **argv) {
             firmware = argv[++i];
         else if (arg == "--model" && i + 1 < argc)
             model = argv[++i];
+        else if (arg == "--rc32k-hz" && i + 1 < argc)
+            rc32k_hz = parse_positive_u32(argv[++i], "RC 32 kHz frequency");
+        else if (arg == "--rc32k-calibration" && i + 1 < argc)
+            rc32k_calibration =
+                parse_positive_u16(argv[++i], "RC 32 kHz calibration");
         else if (arg == "--steps" && i + 1 < argc)
             steps = parse_count(argv[++i]);
         else if (arg == "--trace-pc")
@@ -252,6 +309,8 @@ int run_command(int argc, char **argv) {
             trace_mmio = true;
         else if (arg == "--trace-stack")
             trace_stack = true;
+        else if (arg == "--trace-analog")
+            trace_analog = true;
         else if (arg == "--trace-mmio-range" && i + 1 < argc) {
             mmio_range = parse_range(argv[++i]);
             trace_mmio = true;
@@ -272,6 +331,8 @@ int run_command(int argc, char **argv) {
         throw std::invalid_argument("--firmware is required");
 
     tc32emu::Tlsr8258 device(tc32emu::parse_model(model));
+    device.set_rc32k_characteristics(rc32k_hz, rc32k_calibration);
+    device.set_analog_trace_enabled(trace_analog, trace_limit);
     std::ifstream input(firmware, std::ios::binary);
     if (!input)
         throw std::runtime_error("cannot open firmware image: " + firmware);
@@ -290,8 +351,12 @@ int run_command(int argc, char **argv) {
     if (trace_stack)
         cpu.set_stack_trace(&std::cerr);
     const tc32emu::RunResult result = cpu.run(steps);
+    if (trace_analog)
+        print_analog_trace(std::cerr, device);
     std::cout << "model: " << tc32emu::model_name(tc32emu::parse_model(model)) << '\n'
               << "flash image: " << image.size() << " bytes\n"
+              << "RC 32 kHz: " << rc32k_hz << " Hz, calibration "
+              << rc32k_calibration << '\n'
               << "instructions: " << result.instructions << '\n'
               << "pc: 0x" << std::hex << result.pc << std::dec << '\n'
               << "virtual time: " << device.time_ns() << " ns\n";
@@ -347,6 +412,9 @@ struct OutputEventLine {
 
 int network_command(int argc, char **argv) {
     std::string model = "TLSR8258F512";
+    std::uint32_t rc32k_hz = tc32emu::Tlsr8258::DefaultRc32kFrequencyHz;
+    std::uint16_t rc32k_calibration =
+        tc32emu::Tlsr8258::DefaultRc32kCalibration;
     std::uint8_t channel = 11;
     std::size_t steps = 1000000;
     std::size_t trace_limit = 10000;
@@ -356,6 +424,7 @@ int network_command(int argc, char **argv) {
     std::optional<tc32emu::AddressRange> pc_range;
     std::optional<tc32emu::AddressRange> mmio_range;
     bool trace_stack = false;
+    bool trace_analog = false;
     bool radio_payloads = false;
     bool trace_outputs = false;
     std::vector<SramDump> sram_dumps;
@@ -375,6 +444,11 @@ int network_command(int argc, char **argv) {
                                     spec.substr(separator + 1));
         } else if (arg == "--model" && i + 1 < argc) {
             model = argv[++i];
+        } else if (arg == "--rc32k-hz" && i + 1 < argc) {
+            rc32k_hz = parse_positive_u32(argv[++i], "RC 32 kHz frequency");
+        } else if (arg == "--rc32k-calibration" && i + 1 < argc) {
+            rc32k_calibration =
+                parse_positive_u16(argv[++i], "RC 32 kHz calibration");
         } else if (arg == "--channel" && i + 1 < argc) {
             const std::size_t parsed = parse_count(argv[++i]);
             if (parsed < 11 || parsed > 26)
@@ -388,6 +462,8 @@ int network_command(int argc, char **argv) {
             mmio_range = parse_range(argv[++i]);
         } else if (arg == "--trace-stack") {
             trace_stack = true;
+        } else if (arg == "--trace-analog") {
+            trace_analog = true;
         } else if (arg == "--radio-payloads") {
             radio_payloads = true;
         } else if (arg == "--trace-outputs") {
@@ -491,6 +567,10 @@ int network_command(int argc, char **argv) {
         node.firmware = std::move(firmware);
         node.instruction_limit = steps;
         node.device = std::make_unique<tc32emu::Tlsr8258>(selected_model);
+        node.device->set_rc32k_characteristics(rc32k_hz, rc32k_calibration);
+        node.device->set_analog_trace_enabled(
+            trace_analog && (!trace_node || *trace_node == node.name),
+            trace_limit);
         node.device->set_output_trace_enabled(trace_outputs);
         std::ifstream input(node.firmware, std::ios::binary);
         if (!input)
@@ -566,7 +646,9 @@ int network_command(int argc, char **argv) {
     bool fault = false;
     std::uint64_t global_time_ns = 0;
     std::cout << "network: model=" << tc32emu::model_name(selected_model)
-              << " zigbee-channel=" << static_cast<unsigned>(channel) << '\n';
+              << " zigbee-channel=" << static_cast<unsigned>(channel)
+              << " RC32k=" << rc32k_hz << "Hz"
+              << " calibration=" << rc32k_calibration << '\n';
     while (true) {
         bool any_running = false;
         std::optional<std::uint64_t> next_start_ns;
@@ -642,6 +724,12 @@ int network_command(int argc, char **argv) {
                   << std::hex << node.cpu->reg(15) << std::dec
                   << ", power=" << power_state_name(node.device->power_state())
                   << '\n';
+    }
+    if (trace_analog) {
+        for (const NetworkNode &node : nodes) {
+            if (!trace_node || *trace_node == node.name)
+                print_analog_trace(std::cerr, *node.device, &node.name);
+        }
     }
     for (const SramDump &dump : sram_dumps) {
         const auto node = std::find_if(nodes.begin(), nodes.end(),

@@ -12,9 +12,10 @@ The initial board exposes:
 | `0x840000` to `0x847fff` | 32 KiB SRAM retained in deep sleep |
 | `0x848000` to `0x84ffff` | 32 KiB SRAM not retained in deep sleep |
 
-These boundaries come from section 2.1.1 of the TLSR8258 datasheet. This
-baseline maps the two retention classes contiguously because power-state
-behavior has not been implemented yet.
+These boundaries come from section 2.1.1 of the TLSR8258 datasheet. The model
+maps the two SRAM retention classes contiguously; deep sleep preserves the
+retained range and clears the non-retained range. The exact retention behavior
+for every sleep mode still needs hardware validation.
 
 The wrapper also configures a TC32 instruction-fetch alias starting at
 `0x840000`, with a length equal to the selected flash capacity and source
@@ -91,6 +92,9 @@ not connected to TLSR8258 RF registers yet.
 
 ## Source references
 
+- See [TLSR8258 register model and evidence](tlsr8258-register-model.md) for
+  the current sleep/wake and RF register semantics, evidence levels, and known
+  model simplifications.
 - Telink TLSR8258 datasheet, section 2.1.1, memory windows and SRAM split.
 - Telink SDK `platform/chip_8258/register.h`, timer registers at offsets
   `0x620`–`0x638`, IRQ registers at `0x640`–`0x64b`, and GPIO ports at

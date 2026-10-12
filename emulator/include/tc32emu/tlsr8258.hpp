@@ -3,6 +3,7 @@
 #include "tc32emu/bus.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <limits>
@@ -34,6 +35,18 @@ struct OutputEvent {
     unsigned index;
     std::uint8_t value;
     std::uint64_t time_ns;
+};
+
+struct AnalogRegisterEvent {
+    enum class Direction {
+        Read,
+        Write,
+    };
+
+    std::uint64_t time_ns;
+    Direction direction;
+    std::uint8_t address;
+    std::uint8_t value;
 };
 
 class Tlsr8258 final : public Bus {
@@ -100,12 +113,18 @@ public:
     static constexpr std::uint32_t PowerDownControl = 0x80006f;
     static constexpr std::uint8_t PowerDownSleepEnable = 1u << 0;
     static constexpr std::uint8_t PowerDownSleepTrigger = 1u << 7;
+    // The TLSR8258 sleep trampoline runs 40 16-bit instructions after the
+    // 0x6f write before the instruction-cache +0x58 sleep boundary. The CPU
+    // model estimates three core cycles per instruction.
+    static constexpr std::uint32_t SleepEntryDelayCycles = 40u * 3u;
     static constexpr std::uint32_t System32kTickCompare = 0x800754;
     static constexpr std::uint32_t AnalogWakeSource = 0x26;
     static constexpr std::uint8_t AnalogWakeTimerEnable = 1u << 6;
     static constexpr std::uint32_t AnalogWakeStatus = 0x44;
     static constexpr std::uint8_t AnalogWakeTimerStatus = 1u << 1;
     static constexpr std::uint32_t SystemTimerClockHz = 16000000;
+    static constexpr std::uint32_t DefaultRc32kFrequencyHz = 32000;
+    static constexpr std::uint16_t DefaultRc32kCalibration = 8000;
     static constexpr std::uint32_t UartData = 0x800090;
     static constexpr std::uint32_t UartClockDivider = 0x800094;
     static constexpr std::uint32_t UartControl0 = 0x800096;
@@ -119,6 +138,8 @@ public:
 
     explicit Tlsr8258(Tlsr8258Model model = Tlsr8258Model::F512,
                      std::uint32_t clock_hz = 48000000);
+    void set_rc32k_characteristics(std::uint32_t frequency_hz,
+                                   std::uint16_t system_timer_calibration);
 
     std::uint8_t read8(std::uint32_t address) override;
     void write8(std::uint32_t address, std::uint8_t value) override;
@@ -142,6 +163,13 @@ public:
     const std::vector<OutputEvent> &output_events() const noexcept {
         return output_events_;
     }
+    void set_analog_trace_enabled(bool enabled, std::size_t limit);
+    const std::vector<AnalogRegisterEvent> &analog_register_events() const noexcept {
+        return analog_register_events_;
+    }
+    std::uint64_t analog_register_event_count() const noexcept {
+        return analog_register_event_count_;
+    }
     void connect_radio(VirtualAir &air, std::string node_name);
     void set_radio_time_offset(std::uint64_t offset_ns) noexcept {
         radio_time_offset_ns_ = offset_ns;
@@ -159,6 +187,8 @@ public:
 
 private:
     std::uint32_t clock_hz_;
+    std::uint32_t rc32k_frequency_hz_{DefaultRc32kFrequencyHz};
+    std::uint16_t rc32k_system_timer_calibration_{DefaultRc32kCalibration};
     std::uint64_t time_ns_{0};
     std::uint64_t time_fraction_{0};
     std::uint64_t rc32k_calibration_ready_at_ns_{0};
@@ -170,6 +200,9 @@ private:
     Tlsr8258PowerState power_state_{Tlsr8258PowerState::Awake};
     bool deep_sleep_wakeup_pending_{false};
     bool wake_timer_armed_{false};
+    bool sleep_entry_pending_{false};
+    std::uint32_t sleep_entry_cycles_remaining_{0};
+    Tlsr8258PowerState pending_sleep_state_{Tlsr8258PowerState::Awake};
     std::uint32_t system_timer_count_{0};
     std::uint64_t system_timer_fraction_{0};
     std::uint8_t mspi_command_{0};
@@ -200,6 +233,10 @@ private:
     std::array<std::uint8_t, 5> gpio_outputs_{};
     bool output_trace_enabled_{false};
     std::vector<OutputEvent> output_events_;
+    bool analog_trace_enabled_{false};
+    std::size_t analog_trace_limit_{0};
+    std::uint64_t analog_register_event_count_{0};
+    std::vector<AnalogRegisterEvent> analog_register_events_;
     std::array<std::uint32_t, 3> timer_last_tick_{};
     std::array<bool, 3> timer_fired_{};
     std::deque<std::uint8_t> uart_rx_fifo_;
@@ -217,6 +254,9 @@ private:
     std::uint8_t pwm_enable_mask() const noexcept;
     void record_output_event(OutputEvent::Kind kind, unsigned index,
                              std::uint8_t value);
+    void record_analog_register_event(AnalogRegisterEvent::Direction direction,
+                                      std::uint8_t address,
+                                      std::uint8_t value);
     std::uint32_t timer_tick(unsigned index) const;
     std::uint32_t analog_32k_tick() const noexcept;
     std::uint32_t system_32k_compare() const noexcept;

@@ -192,6 +192,10 @@ void test_tlsr_deep_sleep_sram_retention() {
     device.write8(tc32emu::Tlsr8258::PowerDownControl,
                   tc32emu::Tlsr8258::PowerDownSleepEnable |
                       tc32emu::Tlsr8258::PowerDownSleepTrigger);
+    CHECK(device.power_state() == tc32emu::Tlsr8258PowerState::Awake);
+    device.tick(tc32emu::Tlsr8258::SleepEntryDelayCycles - 1);
+    CHECK(device.power_state() == tc32emu::Tlsr8258PowerState::Awake);
+    device.tick(1);
 
     CHECK(device.power_state() == tc32emu::Tlsr8258PowerState::DeepSleep);
     CHECK(device.advance_sleep_to_wakeup());
@@ -244,6 +248,31 @@ void test_tlsr_system_timer() {
     CHECK(calibration_device.read16(0x800750) == 0);
     calibration_device.tick(1);
     CHECK(calibration_device.read16(0x800750) == 8000);
+
+    tc32emu::Tlsr8258 measured_rc_device;
+    measured_rc_device.set_rc32k_characteristics(29182, 8778);
+    auto read_measured_rc_tick = [&measured_rc_device] {
+        std::uint32_t tick = 0;
+        for (unsigned byte = 0; byte != 4; ++byte) {
+            measured_rc_device.write8(
+                tc32emu::Tlsr8258::AnalogAddress,
+                static_cast<std::uint8_t>(0x40 + byte));
+            measured_rc_device.write8(tc32emu::Tlsr8258::AnalogControl, 0x40);
+            tick |= static_cast<std::uint32_t>(measured_rc_device.read8(
+                        tc32emu::Tlsr8258::AnalogData))
+                    << (byte * 8u);
+        }
+        return tick;
+    };
+    measured_rc_device.tick(48000000);
+    CHECK(read_measured_rc_tick() == 29182);
+    measured_rc_device.write8(tc32emu::Tlsr8258::SystemTimerControl, 0x01);
+    const std::uint64_t cycles_for_16_rc_ticks =
+        (static_cast<std::uint64_t>(measured_rc_device.clock_hz()) * 16u +
+         29182u - 1u) /
+        29182u;
+    measured_rc_device.tick(static_cast<std::uint32_t>(cycles_for_16_rc_ticks));
+    CHECK(measured_rc_device.read16(0x800750) == 8778);
 }
 
 void test_tlsr_mspi_jedec_id() {

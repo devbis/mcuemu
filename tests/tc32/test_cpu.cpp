@@ -112,11 +112,17 @@ void test_cpu_pc_add_uses_word_aligned_pc() {
 
 void test_cpu_suspend_wake_from_32k_timer() {
     tc32emu::Tlsr8258 device;
-    device.load_firmware(words({
-        0x4008, // strb r0, [r1, #0] -- enter suspend through PM register.
+    auto program = words({0x4008}); // strb r0, [r1, #0] -- request suspend.
+    for (unsigned i = 0; i != 40; ++i) {
+        program.push_back(0xc0);
+        program.push_back(0x06); // tmov r8, r8: start_suspend delay instruction.
+    }
+    const auto resume_code = words({
         0xa10b, // tmov r1, #11 -- executed after the timer wake.
         0xcf00,
-    }));
+    });
+    program.insert(program.end(), resume_code.begin(), resume_code.end());
+    device.load_firmware(program);
     auto write_analog = [&device](std::uint8_t address, std::uint8_t value) {
         device.write8(tc32emu::Tlsr8258::AnalogAddress, address);
         device.write8(tc32emu::Tlsr8258::AnalogData, value);
@@ -132,7 +138,7 @@ void test_cpu_suspend_wake_from_32k_timer() {
     cpu.set_reg(0, tc32emu::Tlsr8258::PowerDownSleepEnable |
                        tc32emu::Tlsr8258::PowerDownSleepTrigger);
     cpu.set_reg(1, tc32emu::Tlsr8258::PowerDownControl);
-    const auto result = cpu.run(8);
+    const auto result = cpu.run(64);
     CHECK(result.reason == tc32emu::StopReason::Halted);
     CHECK(cpu.reg(1) == 11);
     CHECK(device.time_ns() >= 1000000);
@@ -141,7 +147,14 @@ void test_cpu_suspend_wake_from_32k_timer() {
 
 void test_cpu_sleep_stays_asleep_when_rc32k_is_powered_down() {
     tc32emu::Tlsr8258 device;
-    device.load_firmware(words({0x4008, 0xcf00}));
+    auto program = words({0x4008});
+    for (unsigned i = 0; i != 40; ++i) {
+        program.push_back(0xc0);
+        program.push_back(0x06);
+    }
+    const auto trap = words({0xcf00});
+    program.insert(program.end(), trap.begin(), trap.end());
+    device.load_firmware(program);
     auto write_analog = [&device](std::uint8_t address, std::uint8_t value) {
         device.write8(tc32emu::Tlsr8258::AnalogAddress, address);
         device.write8(tc32emu::Tlsr8258::AnalogData, value);
@@ -160,7 +173,7 @@ void test_cpu_sleep_stays_asleep_when_rc32k_is_powered_down() {
     cpu.set_reg(0, tc32emu::Tlsr8258::PowerDownSleepEnable |
                        tc32emu::Tlsr8258::PowerDownSleepTrigger);
     cpu.set_reg(1, tc32emu::Tlsr8258::PowerDownControl);
-    const auto result = cpu.run(8);
+    const auto result = cpu.run(64);
     CHECK(result.reason == tc32emu::StopReason::Sleeping);
     CHECK(device.power_state() == tc32emu::Tlsr8258PowerState::Suspend);
     CHECK(device.time_ns() < 1000000);
@@ -188,6 +201,7 @@ void test_cpu_deep_sleep_wake_resets_to_flash_vector() {
     device.write8(tc32emu::Tlsr8258::PowerDownControl,
                   tc32emu::Tlsr8258::PowerDownSleepEnable |
                       tc32emu::Tlsr8258::PowerDownSleepTrigger);
+    device.tick(tc32emu::Tlsr8258::SleepEntryDelayCycles);
 
     tc32emu::Cpu cpu(device);
     cpu.reset(4);
