@@ -281,6 +281,46 @@ void test_ca51_uart0_sbuf_emits_bytes_and_sets_ti0() {
     std::filesystem::remove(path);
 }
 
+void test_ca51_uart1_transmit_interrupt_clears_flag() {
+    const auto path = temp_file("mcs51-uart1.bin");
+    std::array<std::uint8_t, 0x60> program{};
+    program.fill(0x00);
+    program[0] = 0x02;
+    program[1] = 0x00;
+    program[2] = 0x40; // LJMP main at 0x0040
+    program[0x33] = 0x02;
+    program[0x34] = 0x00;
+    program[0x35] = 0x50; // UART1 interrupt vector
+    program[0x40] = 0x75;
+    program[0x41] = 0xa8;
+    program[0x42] = 0xc0; // MOV IE,#(EA|ES1)
+    program[0x43] = 0x75;
+    program[0x44] = 0x9a;
+    program[0x45] = 0xd0; // MOV S1CON,#UART1 mode
+    program[0x46] = 0x75;
+    program[0x47] = 0x9b;
+    program[0x48] = 'A'; // MOV S1BUF,#'A'
+    program[0x49] = 0x80;
+    program[0x4a] = 0xfe; // SJMP $
+    program[0x50] = 0x75;
+    program[0x51] = 0x9a;
+    program[0x52] = 0xd2; // W1C TI1
+    program[0x53] = 0x75;
+    program[0x54] = 0x40;
+    program[0x55] = 0x77; // MOV 0x40,#0x77
+    program[0x56] = 0x32; // RETI
+    write_binary(path, program.data(), program.size());
+
+    mcs51emu::Ca51F253L3 device;
+    device.load_firmware(path.string());
+    const mcs51emu::RunResult run = device.run(20);
+    CHECK(run.error.empty());
+    CHECK(device.uart1_output() == "A");
+    CHECK((device.read_sfr(0x9a) & 0x02) == 0);
+    CHECK(device.read_idata(0x40) == 0x77);
+    std::filesystem::remove(path);
+}
+
 void test_ca51_pwm_update_request_self_clears() {
     const auto path = temp_file("mcs51-pwmupd.bin");
     constexpr std::array<std::uint8_t, 3> program{0x75, 0xdb, 0x01};
@@ -385,6 +425,7 @@ int main() {
     test_ca51_compiler_save_restore_helper_abi();
     test_ca51_sdk_data_flash_read_write_and_erase();
     test_ca51_uart0_sbuf_emits_bytes_and_sets_ti0();
+    test_ca51_uart1_transmit_interrupt_clears_flag();
     test_ca51_pwm_update_request_self_clears();
     test_ca51_timer0_overflow_enters_isr_and_reti_returns();
     test_ca51_llvm_delay_loop_finishes();

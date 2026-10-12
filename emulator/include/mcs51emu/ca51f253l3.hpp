@@ -48,6 +48,7 @@ public:
     std::uint8_t read_xdata(std::uint16_t address) const;
     void write_sfr(std::uint8_t address, std::uint8_t value);
     const std::string &uart0_output() const noexcept { return uart0_output_; }
+    const std::string &uart1_output() const noexcept { return uart1_output_; }
     void set_trace(std::ostream *output) noexcept { trace_output_ = output; }
 
 private:
@@ -78,6 +79,7 @@ private:
     bool data_flash_unlocked_{};
     std::uint64_t timer0_last_cycles_{};
     std::string uart0_output_;
+    std::string uart1_output_;
     std::ostream *trace_output_{};
 };
 

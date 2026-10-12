@@ -17,7 +17,7 @@ void usage(std::ostream &out) {
            "IMAGE may be a raw binary or Intel HEX file.\n"
            "Model: CA51F253L3 (32 KiB code flash, 512-byte data flash, "
            "256-byte IDATA, 2 KiB XDATA).\n"
-           "UART0 bytes written to S0BUF are printed after execution.\n";
+           "UART0/S0BUF and UART1/S1BUF output is printed after execution.\n";
 }
 
 std::size_t parse_count(const std::string &text) {
@@ -119,6 +119,14 @@ int run(int argc, char **argv) {
         std::cout.write(device.uart0_output().data(),
                         static_cast<std::streamsize>(device.uart0_output().size()));
         if (device.uart0_output().back() != '\n')
+            std::cout << '\n';
+    }
+    if (!device.uart1_output().empty()) {
+        std::cout << "UART1 output (" << device.uart1_output().size()
+                  << " bytes):\n";
+        std::cout.write(device.uart1_output().data(),
+                        static_cast<std::streamsize>(device.uart1_output().size()));
+        if (device.uart1_output().back() != '\n')
             std::cout << '\n';
     }
     return 0;

@@ -26,6 +26,13 @@ constexpr int SfrPort3 = 0xb0;
 constexpr std::uint8_t SfrUart0Control = 0x98;
 constexpr std::uint8_t SfrUart0Buffer = 0x99;
 constexpr std::uint8_t UartTransmitInterruptFlag = 0x02;
+constexpr std::uint8_t SfrUart1Control = 0x9a;
+constexpr std::uint8_t SfrUart1Buffer = 0x9b;
+constexpr std::uint8_t Uart1InterruptFlags = 0x03;
+constexpr std::uint8_t SfrInterruptEnable = 0xa8;
+constexpr std::uint8_t InterruptEnableGlobal = 0x80;
+constexpr std::uint8_t InterruptEnableUart1 = 0x40;
+constexpr std::uint16_t Uart1InterruptVector = 0x0033;
 constexpr std::uint8_t SfrPwmUpdate = 0xdb;
 constexpr std::uint8_t SfrTimer0Control = 0x88;
 constexpr std::uint8_t SfrTimerMode = 0x89;
@@ -238,6 +245,7 @@ void Ca51F253L3::reset() {
     sfr_.fill(0);
     xdata_flash_page_.fill(0);
     uart0_output_.clear();
+    uart1_output_.clear();
     data_flash_command_ = 0;
     data_flash_unlocked_ = false;
     data_flash_address_ = 0;
@@ -367,11 +375,23 @@ void Ca51F253L3::sfr_mmio_write(uc_struct *opaque_uc, std::uint64_t offset,
         if (address >= self->sfr_.size())
             continue;
         const std::uint8_t byte = static_cast<std::uint8_t>(value >> (i * 8u));
-        self->sfr_[address] = byte;
+        if (address == SfrUart1Control) {
+            // CA51F253L3 UART1 uses write-one-to-clear RI1/TI1 status bits.
+            const std::uint8_t pending = self->sfr_[address] & Uart1InterruptFlags;
+            self->sfr_[address] = static_cast<std::uint8_t>(
+                (byte & ~Uart1InterruptFlags) |
+                (pending & ~(byte & Uart1InterruptFlags)));
+        } else {
+            self->sfr_[address] = byte;
+        }
         if (address == SfrUart0Buffer) {
             self->uart0_output_.push_back(static_cast<char>(byte));
             // Complete transmit immediately; baud-rate timing is not modeled.
             self->sfr_[SfrUart0Control] |= UartTransmitInterruptFlag;
+        } else if (address == SfrUart1Buffer) {
+            self->uart1_output_.push_back(static_cast<char>(byte));
+            // Complete transmit immediately; TI1 raises the UART1 interrupt.
+            self->sfr_[SfrUart1Control] |= UartTransmitInterruptFlag;
         } else if (address == SfrPwmUpdate) {
             // PWMUPD is a write-one update request. The peripheral clears it
             // after applying the shadow values; completion is immediate here.
@@ -421,6 +441,14 @@ void Ca51F253L3::code_hook(uc_struct *opaque_uc, std::uint64_t address,
             self->timer0_last_cycles_ = cycles;
         }
     }
+    const bool uart1_interrupt_pending =
+        (self->sfr_[SfrInterruptEnable] &
+         (InterruptEnableGlobal | InterruptEnableUart1)) ==
+            (InterruptEnableGlobal | InterruptEnableUart1) &&
+        (self->sfr_[SfrUart1Control] & Uart1InterruptFlags) != 0;
+    const std::uint16_t interrupt_vector =
+        uart1_interrupt_pending ? Uart1InterruptVector : 0;
+    (void)uc_reg_write(engine, UC_MCS51_REG_IRQ_VECTOR, &interrupt_vector);
     if (!self->trace_output_)
         return;
     auto &out = *self->trace_output_;
