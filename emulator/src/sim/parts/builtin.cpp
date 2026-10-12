@@ -82,6 +82,84 @@ private:
     bool ntc_to_ground_{true};
 };
 
+// An indicator on a net. `on` follows the line level (active high unless
+// `active: low`); a floating line reads as off. The endpoint reports every
+// change, so a sink attached to it logs the LED switching.
+class Led final : public Part {
+public:
+    Led(PartContext &ctx) : Part(ctx.name()), pin_(ctx.pin("in")) {
+        ParamReader &p = ctx.params();
+        const std::string active = p.string("active").value_or("high");
+        if (active != "high" && active != "low")
+            throw std::invalid_argument("param 'active' must be high or low");
+        active_high_ = active == "high";
+        p.finish();
+        pin_.net().subscribe([this](const NetChange &change) {
+            if (endpoint_)
+                endpoint_->notify(change.time_ns);
+        });
+    }
+
+    std::string type() const override { return "led"; }
+    bool on() const {
+        const Level level = pin_.net().level();
+        return level != Level::Floating && (level == Level::High) == active_high_;
+    }
+
+    void register_endpoints(EndpointRegistry &registry,
+                            const std::function<std::uint64_t()> &now) override {
+        auto endpoint = std::make_unique<ParamEndpoint>(
+            name() + ".on", [this] { return Value{on()}; },
+            [](const Value &) { throw std::logic_error("'on' is read-only"); }, now);
+        endpoint_ = endpoint.get();
+        registry.add(name() + ".on", std::move(endpoint));
+    }
+
+private:
+    Pin &pin_;
+    bool active_high_{true};
+    ParamEndpoint *endpoint_{nullptr};
+};
+
+// A push button: `pressed` drives the line to its active level (low unless
+// `active: high`) and releases it otherwise, so it needs a pull on the net.
+class Button final : public Part {
+public:
+    Button(PartContext &ctx) : Part(ctx.name()), pin_(ctx.pin("out")) {
+        ParamReader &p = ctx.params();
+        const std::string active = p.string("active").value_or("low");
+        if (active != "high" && active != "low")
+            throw std::invalid_argument("param 'active' must be high or low");
+        active_high_ = active == "high";
+        pressed_ = p.string("pressed").value_or("false") == "true";
+        p.finish();
+        apply(ctx.scheduler().now());
+    }
+
+    std::string type() const override { return "button"; }
+
+    void register_endpoints(EndpointRegistry &registry,
+                            const std::function<std::uint64_t()> &now) override {
+        registry.add(name() + ".pressed",
+                     std::make_unique<ParamEndpoint>(
+                         name() + ".pressed", [this] { return Value{pressed_}; },
+                         [this, now](const Value &v) {
+                             pressed_ = value_as_number(v) != 0.0;
+                             apply(now());
+                         },
+                         now));
+    }
+
+private:
+    void apply(std::uint64_t time_ns) {
+        pin_.set_drive(pressed_ ? (active_high_ ? Drive::High : Drive::Low) : Drive::HiZ,
+                       time_ns);
+    }
+    Pin &pin_;
+    bool active_high_{false};
+    bool pressed_{false};
+};
+
 // Generic register-file I2C device: the first written byte selects a register,
 // later writes store into it and reads return it; the pointer auto-increments.
 class I2cRegs final : public Part {
@@ -200,6 +278,12 @@ const PartRegistry &PartRegistry::builtin() {
         });
         r.add("ntc", [](PartContext &ctx) -> std::unique_ptr<Part> {
             return std::make_unique<Ntc>(ctx);
+        });
+        r.add("led", [](PartContext &ctx) -> std::unique_ptr<Part> {
+            return std::make_unique<Led>(ctx);
+        });
+        r.add("button", [](PartContext &ctx) -> std::unique_ptr<Part> {
+            return std::make_unique<Button>(ctx);
         });
         r.add("script", [](PartContext &ctx) -> std::unique_ptr<Part> {
             return make_lua_part(ctx);

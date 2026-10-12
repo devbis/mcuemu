@@ -11,7 +11,8 @@ namespace sim {
 
 void print_sim_usage(std::ostream &out) {
     out << "       tc32-emu sim SYSTEM.yaml [--for DURATION] [--quantum DURATION]\n"
-           "       [--trace-nets]\n";
+           "       [--trace-nets] [--attach ENDPOINT=SINK]... [--list-endpoints]\n"
+           "       sinks: stdout, file:PATH, tcp:PORT, vcd:PATH, pcap:PATH[,ble]\n";
 }
 
 namespace {
@@ -32,6 +33,8 @@ int sim_command(int argc, char **argv) {
     std::string path;
     std::optional<std::uint64_t> duration, quantum;
     bool trace_nets = false;
+    bool list_endpoints = false;
+    std::vector<std::pair<std::string, std::string>> attachments;
     for (int i = 2; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--for" && i + 1 < argc)
@@ -40,6 +43,15 @@ int sim_command(int argc, char **argv) {
             quantum = parse_duration_ns(argv[++i]);
         else if (arg == "--trace-nets")
             trace_nets = true;
+        else if (arg == "--list-endpoints")
+            list_endpoints = true;
+        else if (arg == "--attach" && i + 1 < argc) {
+            const std::string spec = argv[++i];
+            const std::size_t equals = spec.find('=');
+            if (equals == std::string::npos || equals == 0 || equals + 1 == spec.size())
+                throw std::invalid_argument("--attach must be ENDPOINT=SINK: " + spec);
+            attachments.emplace_back(spec.substr(0, equals), spec.substr(equals + 1));
+        }
         else if (arg == "--help" || arg == "-h") {
             print_sim_usage(std::cout);
             return 0;
@@ -58,6 +70,20 @@ int sim_command(int argc, char **argv) {
     World &world = system->world();
     for (const std::string &warning : system->warnings())
         std::cerr << "warning: " << warning << '\n';
+
+    if (list_endpoints) {
+        for (const std::string &name : world.endpoints().names())
+            std::cout << name << "  (" << world.endpoints().at(name).kind() << ")\n";
+        return 0;
+    }
+    for (const auto &[endpoint, sink] : attachments) {
+        try {
+            system->session().attach(endpoint, sink);
+        } catch (const std::out_of_range &) {
+            throw std::invalid_argument("--attach: unknown endpoint '" + endpoint +
+                                        "' (see --list-endpoints)");
+        }
+    }
 
     const std::optional<std::uint64_t> run_for =
         duration ? duration : system->duration_ns();
@@ -79,6 +105,7 @@ int sim_command(int argc, char **argv) {
     }
 
     world.run_until(*run_for);
+    system->session().finish();
     std::cout << "simulated " << world.now() << " ns\n";
     for (const std::string &name : world.mcu_names()) {
         Mcu &mcu = world.mcu(name);

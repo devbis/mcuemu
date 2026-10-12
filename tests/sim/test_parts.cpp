@@ -453,7 +453,7 @@ void test_part_errors_and_events() {
         return build_error([&] { build(nets + "    parts:\n" + parts); });
     };
     CHECK(contains(err("      - {id: p, type: nope}\n"),
-                   "unknown part type 'nope' (known: ds18b20, i2c_regs, ntc, script)"));
+                   "unknown part type 'nope' (known: button, ds18b20, i2c_regs, led, ntc, script)"));
     CHECK(contains(err("      - {id: p, type: ds18b20}\n"),
                    "terminal 'dq' is not wired"));
     CHECK(contains(err("      - {id: p, type: ds18b20, pins: {dq: nowhere}}\n"),

@@ -113,6 +113,9 @@ public:
     void set(const Value &value) override;
     std::size_t subscribe(EndpointSink sink) override;
     void unsubscribe(std::size_t id) override { sinks_.erase(id); }
+    // Reports the current value to subscribers (for values that change on
+    // their own, like an LED following a net).
+    void notify(std::uint64_t time_ns);
 
 private:
     std::string name_;

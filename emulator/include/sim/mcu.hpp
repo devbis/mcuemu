@@ -3,6 +3,7 @@
 #include "sim/net.hpp"
 #include "tc32emu/radio.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -60,6 +61,24 @@ public:
         (void)protocols;
         throw std::invalid_argument(std::string(model()) +
                                     " has no radio model");
+    }
+
+    // Target memory as the CPU sees it (used by RTT and debugging). Throws
+    // std::runtime_error for an unmapped address and std::invalid_argument
+    // when the model does not expose memory.
+    virtual void read_memory(std::uint32_t address, std::uint8_t *out,
+                             std::size_t length) {
+        (void)address;
+        (void)out;
+        (void)length;
+        throw std::invalid_argument(std::string(model()) + " does not expose memory");
+    }
+    virtual void write_memory(std::uint32_t address, const std::uint8_t *data,
+                              std::size_t length) {
+        (void)address;
+        (void)data;
+        (void)length;
+        throw std::invalid_argument(std::string(model()) + " does not expose memory");
     }
 
     // Number of modeled UARTs, and whether UART `index` can accept bytes.

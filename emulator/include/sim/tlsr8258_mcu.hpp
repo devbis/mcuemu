@@ -34,6 +34,10 @@ public:
     // Only the Zigbee RF path is connected to the chip's RF registers.
     void attach_radio(tc32emu::VirtualAir &air, const std::string &node,
                       const std::vector<std::string> &protocols) override;
+    void read_memory(std::uint32_t address, std::uint8_t *out,
+                     std::size_t length) override;
+    void write_memory(std::uint32_t address, const std::uint8_t *data,
+                      std::size_t length) override;
     unsigned uart_count() const override { return 1; }
     bool uart_can_receive(unsigned index) const override { return index == 0; }
     bool uart_rx(unsigned index, std::uint8_t byte) override;

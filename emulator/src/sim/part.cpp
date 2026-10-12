@@ -96,7 +96,13 @@ double value_as_number(const Value &value) {
 
 void ParamEndpoint::set(const Value &value) {
     setter_(value);
-    const EndpointEvent event{clock_(), name_, getter_()};
+    notify(clock_());
+}
+
+void ParamEndpoint::notify(std::uint64_t time_ns) {
+    if (sinks_.empty())
+        return;
+    const EndpointEvent event{time_ns, name_, getter_()};
     const auto snapshot = sinks_;
     for (const auto &entry : snapshot)
         entry.second(event);

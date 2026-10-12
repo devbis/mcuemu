@@ -1,6 +1,7 @@
 # System configuration (YAML)
 
-`tc32-emu sim SYSTEM.yaml [--for DURATION] [--quantum DURATION] [--trace-nets]`
+`tc32-emu sim SYSTEM.yaml [--for DURATION] [--quantum DURATION] [--trace-nets]
+[--attach ENDPOINT=SINK]... [--list-endpoints]`
 builds a system of devices from a declarative description and runs it on one
 virtual timeline. `--for` overrides `world.duration`; `--quantum` overrides
 `world.quantum`. Errors are reported with the YAML line. Keys for planned
@@ -25,6 +26,7 @@ devices:
         firmware: fw/a.bin # relative to this file
         clock_hz: 48MHz    # 48000000 | 48MHz | 32kHz
         start_at: 100us    # power-on delay on the world timeline
+        rtt: { address: 0x20000100 }   # optional: SEGGER RTT control block
         radio:             # optional: attach to a medium
           air: air0
           position: [0, 0, 1.5]    # meters
@@ -50,6 +52,9 @@ devices:
 nets:                      # world scope: references are device.mcu.PAD
   - { id: shared, pins: [a.m.PA0, b.m.PA0] }
 links: []                  # world scope: device.mcu.uartN
+attach:                    # endpoint -> sink (device scope: relative names)
+  - { endpoint: node.main.uart0, sink: "tcp:5000" }
+  - { endpoint: node.line, sink: "vcd:pins.vcd" }
 scenario:
   events:                  # external stimulus on a net (full net name)
     - { at: 200us, net: node.line, drive: low }   # low|high|hiz|pullup|pulldown
@@ -88,6 +93,42 @@ an external `pull: up`. SPI is not modeled yet; `ca51f253l3` has no GPIO, ADC
 or I2C model.
 
 Scripted parts are described in [scripting.md](scripting.md).
+
+## Endpoints and sinks
+
+Everything observable or controllable is an endpoint with a name and a kind;
+`--list-endpoints` prints them. A sink connects to an endpoint and is created
+from a spec; the same specs work in `attach:` (device scope may use names
+relative to the device, e.g. `m.uart0`) and in `--attach ENDPOINT=SINK`
+(repeatable). Relative output paths are relative to the working directory.
+
+| endpoint | kind | events | `set` |
+|---|---|---|---|
+| `device.mcu.uartN` | `uart` | bytes the UART transmitted | bytes/string to receive (queued until the FIFO has room) |
+| `device.mcu.rtt`, `rttN` | `rtt` | bytes the firmware wrote to up buffer N | bytes/string for down buffer N |
+| `device.net`, world nets | `net` | level changes (true = high) | - |
+| `device.part.param` | `param` | the new value after a change | a new value |
+| radio medium `air0` | `radio` | one text summary per frame | - |
+
+| sink | for | does |
+|---|---|---|
+| `stdout` | any | bytes raw (a console), other values as `t_ns name = value` |
+| `file:PATH` | any | the same, into a file |
+| `tcp:PORT` or `tcp:HOST:PORT` | any; useful for uart/rtt | listens (default `127.0.0.1`; `tcp:0` picks a port); one client gets the events and what it sends is fed into the endpoint; a new connection replaces the old one; a client that does not read loses data |
+| `vcd:PATH` | `net` and numeric `param` | a waveform, written when the run ends; several endpoints can share one file |
+| `pcap:PATH[,ble]` | `radio` | a capture of Zigbee frames (IEEE 802.15.4 without FCS, link type 230) or BLE (link type 251, with the advertising access address in front of the payload); timestamps are virtual time |
+
+`rtt:` (on an `mcu`) reads the control block at `address` straight from target
+memory; nothing happens until the firmware has initialized it. It uses the
+standard layout for a 32-bit target (24-byte buffer descriptors). The host
+advances `RdOff` of the up buffer and `WrOff` of the down buffer, polled every
+`interval` (default 100 us of virtual time). `channels` creates `rtt`, `rtt1`,
+... Only the TLSR8258 model exposes memory.
+
+Parts `led` (terminal `in`, param `active: high|low`, endpoint `on`) and
+`button` (terminal `out`, params `active`/`pressed`, endpoint `pressed`; it
+releases the line when not pressed, so the net needs a pull) give indicators
+and inputs a name.
 
 ## Radio
 

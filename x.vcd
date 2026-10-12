@@ -1,0 +1,9 @@
+$timescale 1 ns $end
+$scope module sim $end
+$var real 64 ! d_m_uart0 $end
+$upscope $end
+$enddefinitions $end
+#0
+$dumpvars
+r0 !
+$end

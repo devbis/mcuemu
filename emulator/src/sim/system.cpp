@@ -56,47 +56,6 @@ const McuRegistry &McuRegistry::builtin() {
     return registry;
 }
 
-// Byte-level UART cross-connect. Each direction takes bytes the source UART
-// has finished transmitting and hands them to the destination after
-// `latency_ns`; bytes wait while the destination FIFO is full.
-class System::UartLink {
-public:
-    UartLink(Mcu &a, unsigned ia, Mcu &b, unsigned ib, std::uint64_t latency_ns)
-        : latency_ns_(latency_ns) {
-        if (b.uart_can_receive(ib))
-            directions_.push_back({&a, ia, &b, ib, {}});
-        if (a.uart_can_receive(ia))
-            directions_.push_back({&b, ib, &a, ia, {}});
-    }
-    bool one_way() const { return directions_.size() < 2; }
-    bool usable() const { return !directions_.empty(); }
-
-    void poll(std::uint64_t now_ns) {
-        for (Direction &dir : directions_) {
-            for (std::uint8_t byte : dir.from->uart_take_tx(dir.from_index))
-                dir.pending.push_back({now_ns + latency_ns_, byte});
-            while (!dir.pending.empty() && dir.pending.front().deliver_at <= now_ns &&
-                   dir.to->uart_rx(dir.to_index, dir.pending.front().byte))
-                dir.pending.pop_front();
-        }
-    }
-
-private:
-    struct Pending {
-        std::uint64_t deliver_at;
-        std::uint8_t byte;
-    };
-    struct Direction {
-        Mcu *from;
-        unsigned from_index;
-        Mcu *to;
-        unsigned to_index;
-        std::deque<Pending> pending;
-    };
-    std::uint64_t latency_ns_;
-    std::vector<Direction> directions_;
-};
-
 System::System() = default;
 System::~System() = default;
 
@@ -347,7 +306,32 @@ std::unique_ptr<System> build_system(const SystemConfig &config,
                             "mcu '" + name + "': " + error.what());
                 }
             }
-            world.add_mcu(std::move(mcu), mcu_config.start_at_ns);
+            Mcu &added = world.add_mcu(std::move(mcu), mcu_config.start_at_ns);
+            try {
+                for (unsigned i = 0; i < added.uart_count(); ++i) {
+                    auto uart = std::make_unique<UartEndpoint>(
+                        name + ".uart" + std::to_string(i), added, i);
+                    system->uarts_.push_back(uart.get());
+                    world.endpoints().add(name + ".uart" + std::to_string(i),
+                                          std::move(uart));
+                }
+                if (mcu_config.rtt) {
+                    std::uint8_t probe = 0;
+                    added.read_memory(mcu_config.rtt->address, &probe, 1);
+                    for (unsigned ch = 0; ch < mcu_config.rtt->channels; ++ch) {
+                        const std::string endpoint_name =
+                            name + (ch == 0 ? ".rtt" : ".rtt" + std::to_string(ch));
+                        auto rtt = std::make_unique<RttEndpoint>(
+                            endpoint_name, added, mcu_config.rtt->address, ch,
+                            mcu_config.rtt->interval_ns);
+                        system->rtts_.push_back(rtt.get());
+                        world.endpoints().add(endpoint_name, std::move(rtt));
+                    }
+                }
+            } catch (const std::exception &error) {
+                fail_at(mcu_config.rtt ? mcu_config.rtt->line : mcu_config.line,
+                        "mcu '" + name + "': " + error.what());
+            }
         }
     }
 
@@ -379,18 +363,31 @@ std::unique_ptr<System> build_system(const SystemConfig &config,
                                    " UART(s)");
         if (mcu_a == mcu_b && index_a == index_b)
             fail_at(link.line, "link connects " + link.a + " to itself");
-        auto uart = std::make_unique<System::UartLink>(
-            *mcu_a, index_a, *mcu_b, index_b, link.latency_ns);
-        if (!uart->usable())
+        auto *end_a = dynamic_cast<UartEndpoint *>(world.endpoints().find(
+            mcu_a->name() + ".uart" + std::to_string(index_a)));
+        auto *end_b = dynamic_cast<UartEndpoint *>(world.endpoints().find(
+            mcu_b->name() + ".uart" + std::to_string(index_b)));
+        if (!end_a->can_receive() && !end_b->can_receive())
             fail_at(link.line, "neither " + link.a + " nor " + link.b +
                                    " can receive UART data");
-        if (uart->one_way())
+        if (!end_a->can_receive() || !end_b->can_receive())
             system->warnings_.push_back(
                 "line " + std::to_string(link.line) + ": link " + link.a +
                 " <-> " + link.b + " is one-way (one end cannot receive)");
-        System::UartLink *raw = uart.get();
-        system->links_.push_back(std::move(uart));
-        world.add_poller([raw](std::uint64_t now) { raw->poll(now); });
+        // Bytes one side transmits arrive at the other after the latency; the
+        // destination queues them until its FIFO has room.
+        Scheduler *scheduler = &world.scheduler();
+        const std::uint64_t latency = link.latency_ns;
+        auto forward = [scheduler, latency](UartEndpoint *from, UartEndpoint *to) {
+            if (!to->can_receive())
+                return;
+            from->subscribe([scheduler, latency, to](const EndpointEvent &event) {
+                const Value bytes = event.value;
+                scheduler->at(event.time_ns + latency, [to, bytes] { to->set(bytes); });
+            });
+        };
+        forward(end_a, end_b);
+        forward(end_b, end_a);
     };
     for (const DeviceConfig &device : config.devices)
         for (const LinkConfig &link : device.links)
@@ -434,6 +431,35 @@ std::unique_ptr<System> build_system(const SystemConfig &config,
             pin->set_drive(drive, w->scheduler().now());
         });
     }
+    // Endpoints that need regular service: UART FIFOs, RTT buffers and the
+    // sinks' sockets (every 16th slice).
+    System *self = system.get();
+    world.add_poller([self](std::uint64_t now) {
+        for (UartEndpoint *uart : self->uarts_)
+            uart->poll(now);
+        for (RttEndpoint *rtt : self->rtts_)
+            rtt->poll(now);
+        if (++self->session_ticks_ % 16 == 0)
+            self->session_.poll();
+    });
+
+    auto apply_attach = [&](const std::string *device, const AttachConfig &attach) {
+        std::string endpoint = attach.endpoint;
+        if (device && world.endpoints().find(*device + "." + endpoint))
+            endpoint = *device + "." + endpoint;
+        try {
+            system->session_.attach(endpoint, attach.sink);
+        } catch (const std::out_of_range &) {
+            fail_at(attach.line, "unknown endpoint '" + attach.endpoint + "'");
+        } catch (const std::exception &error) {
+            fail_at(attach.line, "attach '" + attach.endpoint + "': " + error.what());
+        }
+    };
+    for (const DeviceConfig &device : config.devices)
+        for (const AttachConfig &attach : device.attach)
+            apply_attach(&device.id, attach);
+    for (const AttachConfig &attach : config.attach)
+        apply_attach(nullptr, attach);
     return system;
 }
 

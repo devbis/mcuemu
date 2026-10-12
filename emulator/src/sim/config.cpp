@@ -130,6 +130,55 @@ double config_number(const YAML::Node &node, const std::string &what) {
     return value;
 }
 
+std::uint64_t config_integer(const YAML::Node &node, const std::string &what) {
+    const std::string text = scalar(node, what);
+    std::size_t used = 0;
+    unsigned long long value = 0;
+    try {
+        value = std::stoull(text, &used, 0); // decimal or 0x hex
+    } catch (const std::exception &) {
+        used = 0;
+    }
+    if (text.empty() || used != text.size() || text[0] == '-')
+        fail(node, what + " must be a non-negative integer, got '" + text + "'");
+    return value;
+}
+
+AttachConfig parse_attach(const YAML::Node &node) {
+    require_map(node, "attach entry");
+    check_keys(node, "attach entry", {"endpoint", "sink"});
+    AttachConfig attach;
+    attach.line = node.Mark().line + 1;
+    attach.endpoint = required_string(node, "endpoint", "attach entry");
+    attach.sink = required_string(node, "sink", "attach entry");
+    return attach;
+}
+
+RttConfig parse_rtt(const YAML::Node &node) {
+    require_map(node, "rtt");
+    check_keys(node, "rtt", {"address", "channels", "interval"});
+    RttConfig rtt;
+    rtt.line = node.Mark().line + 1;
+    if (!node["address"])
+        fail(node, "rtt requires 'address' (the _SEGGER_RTT control block)");
+    const std::uint64_t address = config_integer(node["address"], "address");
+    if (address > 0xffffffffull)
+        fail(node["address"], "address must fit 32 bits");
+    rtt.address = static_cast<std::uint32_t>(address);
+    if (node["channels"]) {
+        const std::uint64_t channels = config_integer(node["channels"], "channels");
+        if (channels < 1 || channels > 16)
+            fail(node["channels"], "channels must be 1..16");
+        rtt.channels = static_cast<unsigned>(channels);
+    }
+    if (node["interval"]) {
+        rtt.interval_ns = config_duration(node["interval"], "interval");
+        if (rtt.interval_ns == 0)
+            fail(node["interval"], "interval must be positive");
+    }
+    return rtt;
+}
+
 RadioAttachConfig parse_radio_attach(const YAML::Node &node) {
     require_map(node, "radio");
     check_keys(node, "radio",
@@ -294,7 +343,7 @@ McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
     require_map(node, "mcu");
     check_keys(node, "mcu",
                {"id", "model", "variant", "firmware", "clock_hz", "start_at",
-                "radio"});
+                "radio", "rtt"});
     McuConfig mcu;
     mcu.line = node.Mark().line + 1;
     mcu.id = required_string(node, "id", "mcu");
@@ -313,13 +362,14 @@ McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
         mcu.start_at_ns = config_duration(start, "start_at");
     if (const YAML::Node radio = node["radio"])
         mcu.radio = parse_radio_attach(radio);
+    if (const YAML::Node rtt = node["rtt"])
+        mcu.rtt = parse_rtt(rtt);
     return mcu;
 }
 
 DeviceConfig parse_device(const YAML::Node &node, const std::string &base_dir) {
     require_map(node, "device");
-    check_keys(node, "device", {"id", "mcus", "nets", "links", "parts"},
-               {"attach"});
+    check_keys(node, "device", {"id", "mcus", "nets", "links", "parts", "attach"});
     DeviceConfig device;
     device.line = node.Mark().line + 1;
     device.id = required_string(node, "id", "device");
@@ -340,6 +390,9 @@ DeviceConfig parse_device(const YAML::Node &node, const std::string &base_dir) {
     if (const YAML::Node parts = node["parts"])
         for (const YAML::Node &part : require_seq(parts, "'parts'"))
             device.parts.push_back(parse_part(part, base_dir));
+    if (const YAML::Node attach = node["attach"])
+        for (const YAML::Node &entry : require_seq(attach, "'attach'"))
+            device.attach.push_back(parse_attach(entry));
     return device;
 }
 
@@ -436,8 +489,8 @@ SystemConfig parse_system_config(const std::string &yaml_text,
     if (!root.IsMap())
         throw ConfigError("the document must be a mapping");
     check_keys(root, "the document",
-               {"version", "world", "devices", "nets", "links", "scenario"},
-               {"attach"});
+               {"version", "world", "devices", "nets", "links", "scenario",
+                "attach"});
 
     const YAML::Node version = root["version"];
     if (!version)
@@ -477,6 +530,9 @@ SystemConfig parse_system_config(const std::string &yaml_text,
     if (const YAML::Node links = root["links"])
         for (const YAML::Node &link : require_seq(links, "'links'"))
             config.links.push_back(parse_link(link));
+    if (const YAML::Node attach = root["attach"])
+        for (const YAML::Node &entry : require_seq(attach, "'attach'"))
+            config.attach.push_back(parse_attach(entry));
     if (const YAML::Node scenario = root["scenario"]) {
         require_map(scenario, "'scenario'");
         check_keys(scenario, "'scenario'", {"events"}, {"script"});

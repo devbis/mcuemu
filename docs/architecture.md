@@ -129,6 +129,11 @@ into systems (see the declarative-configuration plan for the full roadmap):
   mcs51 model (no GPIO yet, so no pads can be wired).
 - `Endpoint`/`EndpointRegistry` — named observable points; every net is
   registered as a `NetEndpoint`. UART/RTT/LED/radio endpoints and sinks follow.
+- `Session` and `Sink` — attach endpoints to stdout, files, TCP sockets,
+  VCD waveforms and pcap captures. UARTs (`UartEndpoint`) and RTT
+  (`RttEndpoint`, read from target memory) are endpoints too; UART links are
+  built on them. The `led` and `button` parts give GPIO indicators and inputs
+  a name.
 - `World` — owns MCUs, nets and the scheduler; `run_until` advances all MCUs
   in quanta (default 5 us) bounded by the next scheduled event, and jumps
   straight to the next event when no MCU is running.

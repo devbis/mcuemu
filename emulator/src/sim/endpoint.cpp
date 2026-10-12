@@ -50,7 +50,7 @@ std::size_t NetEndpoint::subscribe(EndpointSink sink) {
 void NetEndpoint::unsubscribe(std::size_t id) { sinks_.erase(id); }
 
 RadioEndpoint::RadioEndpoint(std::string name, tc32emu::VirtualAir &air)
-    : name_(std::move(name)) {
+    : name_(std::move(name)), air_(air) {
     air.add_observer([this](const tc32emu::RadioFrame &frame) {
         ++frame_count_;
         std::string text = tc32emu::protocol_name(frame.protocol);

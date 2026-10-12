@@ -177,6 +177,18 @@ void Tlsr8258Mcu::attach_radio(tc32emu::VirtualAir &air, const std::string &node
     device_.connect_radio(air, node);
 }
 
+void Tlsr8258Mcu::read_memory(std::uint32_t address, std::uint8_t *out,
+                              std::size_t length) {
+    for (std::size_t i = 0; i < length; ++i)
+        out[i] = device_.read8(address + static_cast<std::uint32_t>(i));
+}
+
+void Tlsr8258Mcu::write_memory(std::uint32_t address, const std::uint8_t *data,
+                               std::size_t length) {
+    for (std::size_t i = 0; i < length; ++i)
+        device_.write8(address + static_cast<std::uint32_t>(i), data[i]);
+}
+
 bool Tlsr8258Mcu::uart_rx(unsigned index, std::uint8_t byte) {
     return index == 0 && device_.inject_uart_rx(byte);
 }

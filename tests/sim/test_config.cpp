@@ -110,7 +110,7 @@ void test_config_errors() {
     CHECK(contains(typo, "line 5") && contains(typo, "unknown key 'clok_hz'"));
     // Planned features are rejected explicitly, not ignored.
     CHECK(contains(parse(head + "      - {id: m, model: tlsr8258, firmware: f}\n"
-                                "    attach: []\n"),
+                                "scenario:\n  script: x.lua\n"),
                    "planned but not supported yet"));
     CHECK(contains(parse(head + "      - {id: m, model: x, firmware: f, radio: {}}\n"),
                    "requires 'air'"));

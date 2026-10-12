@@ -42,6 +42,21 @@ struct RadioAttachConfig {
     int line{0};
 };
 
+// Connects an endpoint to a sink (see sim/sink.hpp for the spec grammar).
+struct AttachConfig {
+    std::string endpoint; // device scope: relative to the device; else full name
+    std::string sink;
+    int line{0};
+};
+
+// SEGGER RTT control block of the firmware, read from target memory.
+struct RttConfig {
+    std::uint32_t address{0};
+    unsigned channels{1}; // endpoints "rtt", "rtt1", ... for channels 0..n-1
+    std::uint64_t interval_ns{100000};
+    int line{0};
+};
+
 struct McuConfig {
     std::string id;
     std::string model;
@@ -50,6 +65,7 @@ struct McuConfig {
     std::optional<std::uint32_t> clock_hz;
     std::uint64_t start_at_ns{0};
     std::optional<RadioAttachConfig> radio;
+    std::optional<RttConfig> rtt;
     int line{0};
 };
 
@@ -89,6 +105,7 @@ struct DeviceConfig {
     std::string id;
     std::vector<McuConfig> mcus;
     std::vector<PartConfig> parts;
+    std::vector<AttachConfig> attach;
     std::vector<NetConfig> nets;
     std::vector<LinkConfig> links;
     int line{0};
@@ -113,6 +130,7 @@ struct SystemConfig {
     std::vector<DeviceConfig> devices;
     std::vector<NetConfig> nets;   // world-level, full pad references
     std::vector<LinkConfig> links; // world-level, full endpoint references
+    std::vector<AttachConfig> attach; // world-level, full endpoint names
     std::vector<EventConfig> events;
 };
 

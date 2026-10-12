@@ -3,6 +3,9 @@
 #include "sim/config.hpp"
 #include "sim/mcu.hpp"
 #include "sim/part.hpp"
+#include "sim/sink.hpp"
+#include "sim/rtt_endpoint.hpp"
+#include "sim/uart_endpoint.hpp"
 #include "sim/world.hpp"
 
 #include <functional>
@@ -42,6 +45,8 @@ public:
     System &operator=(const System &) = delete;
 
     World &world() noexcept { return world_; }
+    // Sinks attached to endpoints (from `attach:` and added at run time).
+    Session &session() noexcept { return session_; }
     const std::optional<std::uint64_t> &duration_ns() const noexcept {
         return duration_ns_;
     }
@@ -52,11 +57,14 @@ private:
     friend std::unique_ptr<System> build_system(const SystemConfig &,
                                                 const McuRegistry &,
                                                 const PartRegistry &);
-    class UartLink;
     World world_;
+    Session session_{world_.endpoints()};
     std::optional<std::uint64_t> duration_ns_;
     std::vector<std::string> warnings_;
-    std::vector<std::unique_ptr<UartLink>> links_;
+    // Owned by the endpoint registry; polled after every slice.
+    std::vector<UartEndpoint *> uarts_;
+    std::vector<RttEndpoint *> rtts_;
+    unsigned session_ticks_{0};
     std::vector<std::unique_ptr<Part>> parts_;
     // Pins used to apply scenario events, one per driven net.
     std::map<std::string, Pin *> scenario_pins_;

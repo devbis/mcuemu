@@ -86,6 +86,9 @@ add_library(simcore
     emulator/src/sim/net.cpp
     emulator/src/sim/endpoint.cpp
     emulator/src/sim/world.cpp
+    emulator/src/sim/uart_endpoint.cpp
+    emulator/src/sim/rtt_endpoint.cpp
+    emulator/src/sim/sink.cpp
     emulator/src/sim/part.cpp
     emulator/src/sim/parts/ds18b20.cpp
     emulator/src/sim/parts/i2c_slave.cpp
@@ -126,6 +129,7 @@ if(TC32EMU_BUILD_TESTS)
         tests/sim/test_periph.cpp
         tests/sim/test_lua.cpp
         tests/sim/test_radio_medium.cpp
+        tests/sim/test_attach.cpp
     )
     target_link_libraries(simcore-tests PRIVATE simcore)
     target_compile_definitions(simcore-tests PRIVATE
