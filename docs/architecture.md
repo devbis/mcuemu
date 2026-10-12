@@ -112,6 +112,50 @@ quarter-MHz frequency units there (for example, `2450.25 MHz` selects channel
 The medium does not parse Zigbee MAC/APS or BLE link-layer packets, and BLE is
 not connected to TLSR8258 RF registers yet.
 
+## Simulation core (`simcore`)
+
+`emulator/include/sim/` holds the chip-independent layer that composes MCUs
+into systems (see the declarative-configuration plan for the full roadmap):
+
+- `Scheduler` — deterministic event queue over virtual nanoseconds.
+- `Net`/`Pin` — electrical wiring. Each device terminal is a `Pin` attached to
+  a `Net`; drives are `HiZ`/`Low`/`High`/`PullDown`/`PullUp`, nets are
+  push-pull or open-drain (wired-AND for I2C/1-Wire), strong drivers that
+  disagree are flagged as a conflict, and an analog source can set the net
+  voltage for ADC inputs. Level changes carry the virtual time of the change.
+- `Mcu` — interface the world uses (`run_until`, `connect_pin`, UART bytes,
+  start offset). `Tlsr8258Mcu` wraps `Tlsr8258` + `Cpu` (pads `PA0..PE7`
+  through the GPIO OUT/OEN registers, UART 0); `Ca51F253L3Mcu` wraps the
+  mcs51 model (no GPIO yet, so no pads can be wired).
+- `Endpoint`/`EndpointRegistry` — named observable points; every net is
+  registered as a `NetEndpoint`. UART/RTT/LED/radio endpoints and sinks follow.
+- `World` — owns MCUs, nets and the scheduler; `run_until` advances all MCUs
+  in quanta (default 5 us) bounded by the next scheduled event, and jumps
+  straight to the next event when no MCU is running.
+
+- `Part`/`PartRegistry` — external peripherals attached to nets. Built in:
+  `ds18b20` (1-Wire slave driven by timestamped edges), `ntc` (analog divider)
+  and `i2c_regs` (register file behind the bit-level `I2cSlave` decoder), plus
+  `script` parts whose behavior is a sandboxed Lua 5.4 file (`LuaPart`, see
+  [scripting.md](scripting.md)).
+  Part parameters are exposed as endpoints.
+
+- Radio: `VirtualAir` is the medium. Besides the original ideal behavior it has
+  a log-distance model with node positions, RSSI, sensitivity, SINR capture,
+  half duplex and a shared frequency axis for BLE and IEEE 802.15.4 (so BLE
+  traffic interferes with Zigbee when their spectra overlap). `World` owns the
+  media and exposes each one as a `radio` endpoint; TLSR8258 attaches through
+  `Mcu::attach_radio` and scripted parts through the Lua `radio` API.
+
+A system is described in YAML and built by `build_system` (`System`,
+`McuRegistry`; format in [system-config.md](system-config.md)). UART links are
+polled by `World` after every slice. `tc32-emu sim SYSTEM.yaml` runs one.
+
+Pad timing: an MCU is executed one instruction at a time inside `run_until`,
+so pad changes are timestamped to the executing instruction. Different MCUs
+may be up to one quantum apart in time. Unwired pads keep the legacy behavior
+(`set_gpio_input`, idle-high inputs). GPIO OEN resets to `0xff`.
+
 ## Source references
 
 - See [TLSR8258 register model and evidence](tlsr8258-register-model.md) for

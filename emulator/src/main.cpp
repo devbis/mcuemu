@@ -1,3 +1,4 @@
+#include "sim/cli.hpp"
 #include "tc32emu/cpu.hpp"
 #include "tc32emu/radio.hpp"
 #include "tc32emu/tlsr8258.hpp"
@@ -52,7 +53,9 @@ void usage(std::ostream &out) {
            "       [--start-at NAME=TIME]\n"
            "       [--dump-mmio NAME=ADDRESS:LENGTH]\n"
            "       [--dump-sram NAME=ADDRESS:LENGTH]\n"
-           "       tc32-emu models\n\n"
+           "       tc32-emu models\n"
+           "       tc32-emu sim SYSTEM.yaml [--for DURATION] [--quantum DURATION]\n"
+           "       [--trace-nets]\n\n"
            "Models: TLSR8258F512, TLSR8258F1K\n"
            "Firmware is loaded as a raw image at flash address 0.\n"
            "Trace ranges are inclusive; addresses accept decimal or 0x hex.\n";
@@ -834,6 +837,8 @@ int main(int argc, char **argv) {
         }
         if (std::string(argv[1]) == "network")
             return network_command(argc, argv);
+        if (std::string(argv[1]) == "sim")
+            return sim::sim_command(argc, argv);
         if (std::string(argv[1]) != "run") {
             usage(std::cerr);
             return 2;

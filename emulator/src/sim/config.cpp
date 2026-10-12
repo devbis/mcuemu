@@ -1,0 +1,526 @@
+#include "sim/config.hpp"
+
+#include <yaml-cpp/yaml.h>
+
+#include <algorithm>
+#include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <initializer_list>
+#include <set>
+#include <sstream>
+
+namespace sim {
+
+namespace {
+
+[[noreturn]] void fail(const YAML::Node &node, const std::string &message) {
+    std::ostringstream out;
+    if (node.Mark().line >= 0)
+        out << "line " << node.Mark().line + 1 << ": ";
+    out << message;
+    throw ConfigError(out.str());
+}
+
+std::string scalar(const YAML::Node &node, const std::string &what) {
+    if (!node.IsScalar())
+        fail(node, what + " must be a scalar");
+    return node.Scalar();
+}
+
+const YAML::Node &require_map(const YAML::Node &node, const std::string &what) {
+    if (!node.IsMap())
+        fail(node, what + " must be a mapping");
+    return node;
+}
+
+const YAML::Node &require_seq(const YAML::Node &node, const std::string &what) {
+    if (!node.IsSequence())
+        fail(node, what + " must be a list");
+    return node;
+}
+
+// Rejects keys that are neither allowed nor reserved for a later feature.
+void check_keys(const YAML::Node &map, const std::string &what,
+                std::initializer_list<const char *> allowed,
+                std::initializer_list<const char *> reserved = {}) {
+    for (const auto &entry : map) {
+        const std::string key = entry.first.Scalar();
+        bool ok = false;
+        for (const char *name : allowed)
+            ok |= key == name;
+        if (ok)
+            continue;
+        for (const char *name : reserved)
+            if (key == name)
+                fail(entry.first, "'" + key + "' in " + what +
+                                      " is planned but not supported yet");
+        fail(entry.first, "unknown key '" + key + "' in " + what);
+    }
+}
+
+std::string required_string(const YAML::Node &map, const char *key,
+                            const std::string &what) {
+    const YAML::Node value = map[key];
+    if (!value)
+        fail(map, what + " requires '" + key + "'");
+    return scalar(value, std::string("'") + key + "'");
+}
+
+void check_id(const YAML::Node &node, const std::string &id,
+              const std::string &what) {
+    if (id.empty())
+        fail(node, what + " id must not be empty");
+    for (char c : id)
+        if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_' ||
+              c == '-'))
+            fail(node, what + " id '" + id +
+                           "' may only contain letters, digits, '_' and '-'");
+}
+
+Drive parse_drive(const YAML::Node &node) {
+    const std::string text = scalar(node, "drive");
+    if (text == "low") return Drive::Low;
+    if (text == "high") return Drive::High;
+    if (text == "hiz") return Drive::HiZ;
+    if (text == "pullup") return Drive::PullUp;
+    if (text == "pulldown") return Drive::PullDown;
+    fail(node, "drive must be low, high, hiz, pullup or pulldown, got '" + text +
+                   "'");
+}
+
+std::uint64_t config_duration(const YAML::Node &node, const std::string &what) {
+    try {
+        return parse_duration_ns(scalar(node, what));
+    } catch (const std::invalid_argument &error) {
+        fail(node, what + ": " + error.what());
+    }
+}
+
+std::uint32_t config_frequency(const YAML::Node &node, const std::string &what) {
+    try {
+        return parse_frequency_hz(scalar(node, what));
+    } catch (const std::invalid_argument &error) {
+        fail(node, what + ": " + error.what());
+    }
+}
+
+std::uint64_t config_uint(const YAML::Node &node, const std::string &what) {
+    const std::string text = scalar(node, what);
+    if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos)
+        fail(node, what + " must be a non-negative integer, got '" + text + "'");
+    try {
+        return std::stoull(text);
+    } catch (const std::exception &) {
+        fail(node, what + " is out of range: " + text);
+    }
+}
+
+double config_number(const YAML::Node &node, const std::string &what) {
+    const std::string text = scalar(node, what);
+    std::size_t used = 0;
+    double value = 0;
+    try {
+        value = std::stod(text, &used);
+    } catch (const std::exception &) {
+        used = 0;
+    }
+    if (text.empty() || used != text.size() || !std::isfinite(value))
+        fail(node, what + " must be a number, got '" + text + "'");
+    return value;
+}
+
+RadioAttachConfig parse_radio_attach(const YAML::Node &node) {
+    require_map(node, "radio");
+    check_keys(node, "radio",
+               {"air", "position", "tx_power_dbm", "sensitivity_dbm", "protocols"});
+    RadioAttachConfig radio;
+    radio.line = node.Mark().line + 1;
+    radio.air = required_string(node, "air", "radio");
+    if (const YAML::Node position = node["position"]) {
+        require_seq(position, "'position'");
+        if (position.size() != 3)
+            fail(position, "'position' must be [x, y, z] in meters");
+        for (std::size_t i = 0; i < 3; ++i)
+            radio.position[i] = config_number(position[i], "position");
+    }
+    if (node["tx_power_dbm"])
+        radio.tx_power_dbm = config_number(node["tx_power_dbm"], "tx_power_dbm");
+    if (node["sensitivity_dbm"])
+        radio.sensitivity_dbm =
+            config_number(node["sensitivity_dbm"], "sensitivity_dbm");
+    if (const YAML::Node protocols = node["protocols"]) {
+        radio.protocols.clear();
+        for (const YAML::Node &protocol : require_seq(protocols, "'protocols'")) {
+            const std::string name = scalar(protocol, "protocol");
+            if (name != "zigbee" && name != "ble")
+                fail(protocol, "protocol must be zigbee or ble, got '" + name + "'");
+            radio.protocols.push_back(name);
+        }
+        if (radio.protocols.empty())
+            fail(protocols, "'protocols' must not be empty");
+    }
+    return radio;
+}
+
+RadioMediumConfig parse_radio_medium(const YAML::Node &node) {
+    require_map(node, "radio medium");
+    check_keys(node, "radio medium",
+               {"id", "model", "reference_loss_db", "path_loss_exponent",
+                "shadowing_sigma_db", "noise_floor_dbm", "sinr_threshold_db"});
+    RadioMediumConfig medium;
+    medium.line = node.Mark().line + 1;
+    medium.id = required_string(node, "id", "radio medium");
+    check_id(node["id"], medium.id, "radio medium");
+    if (node["model"]) {
+        medium.model = scalar(node["model"], "model");
+        if (medium.model != "ideal" && medium.model != "log_distance")
+            fail(node["model"], "radio model must be ideal or log_distance, got '" +
+                                    medium.model + "'");
+    }
+    if (node["reference_loss_db"])
+        medium.reference_loss_db =
+            config_number(node["reference_loss_db"], "reference_loss_db");
+    if (node["path_loss_exponent"]) {
+        medium.exponent = config_number(node["path_loss_exponent"], "path_loss_exponent");
+        if (medium.exponent <= 0)
+            fail(node["path_loss_exponent"], "path_loss_exponent must be positive");
+    }
+    if (node["shadowing_sigma_db"]) {
+        medium.shadowing_sigma_db =
+            config_number(node["shadowing_sigma_db"], "shadowing_sigma_db");
+        if (medium.shadowing_sigma_db < 0)
+            fail(node["shadowing_sigma_db"], "shadowing_sigma_db must not be negative");
+    }
+    if (node["noise_floor_dbm"])
+        medium.noise_floor_dbm = config_number(node["noise_floor_dbm"], "noise_floor_dbm");
+    if (node["sinr_threshold_db"])
+        medium.sinr_threshold_db =
+            config_number(node["sinr_threshold_db"], "sinr_threshold_db");
+    return medium;
+}
+
+NetConfig parse_net(const YAML::Node &node) {
+    require_map(node, "net");
+    check_keys(node, "net", {"id", "kind", "pull", "pull_up", "pins"});
+    NetConfig net;
+    net.line = node.Mark().line + 1;
+    net.id = required_string(node, "id", "net");
+    check_id(node["id"], net.id, "net");
+    if (const YAML::Node kind = node["kind"]) {
+        const std::string text = scalar(kind, "kind");
+        if (text == "push_pull")
+            net.kind = NetKind::PushPull;
+        else if (text == "open_drain")
+            net.kind = NetKind::OpenDrain;
+        else
+            fail(kind, "net kind must be push_pull or open_drain, got '" +
+                           text + "'");
+    }
+    if (node["pull"] && node["pull_up"])
+        fail(node, "net '" + net.id + "' sets both 'pull' and 'pull_up'");
+    if (const YAML::Node pull = node["pull"]) {
+        const std::string text = scalar(pull, "pull");
+        if (text == "up") net.pull = Drive::PullUp;
+        else if (text == "down") net.pull = Drive::PullDown;
+        else if (text != "none")
+            fail(pull, "pull must be up, down or none, got '" + text + "'");
+    }
+    // `pull_up: { ohm: 4700, to: vdd }` is accepted; the resistance is not
+    // modeled yet (the pull is a weak driver).
+    if (node["pull_up"])
+        net.pull = Drive::PullUp;
+    if (const YAML::Node pins = node["pins"]) {
+        for (const YAML::Node &pin : require_seq(pins, "'pins'"))
+            net.pins.push_back(scalar(pin, "pin reference"));
+    }
+    return net;
+}
+
+LinkConfig parse_link(const YAML::Node &node) {
+    require_map(node, "link");
+    check_keys(node, "link", {"type", "a", "b", "baud", "latency"});
+    LinkConfig link;
+    link.line = node.Mark().line + 1;
+    link.type = required_string(node, "type", "link");
+    if (link.type != "uart")
+        fail(node["type"], "link type '" + link.type +
+                               "' is not supported (only 'uart')");
+    link.a = required_string(node, "a", "link");
+    link.b = required_string(node, "b", "link");
+    if (const YAML::Node baud = node["baud"]) {
+        const std::uint64_t value = config_uint(baud, "baud");
+        if (value == 0 || value > 0xffffffffu)
+            fail(baud, "baud out of range");
+        link.baud = static_cast<std::uint32_t>(value);
+    }
+    if (const YAML::Node latency = node["latency"])
+        link.latency_ns = config_duration(latency, "latency");
+    return link;
+}
+
+PartConfig parse_part(const YAML::Node &node, const std::string &base_dir) {
+    require_map(node, "part");
+    check_keys(node, "part", {"id", "type", "pins", "params", "script", "radio"});
+    PartConfig part;
+    part.line = node.Mark().line + 1;
+    part.id = required_string(node, "id", "part");
+    check_id(node["id"], part.id, "part");
+    part.type = required_string(node, "type", "part");
+    if (const YAML::Node radio = node["radio"])
+        part.radio = parse_radio_attach(radio);
+    if (const YAML::Node script = node["script"]) {
+        std::filesystem::path path(scalar(script, "'script'"));
+        if (path.is_relative())
+            path = std::filesystem::path(base_dir) / path;
+        part.script = path.lexically_normal().string();
+    }
+    if (const YAML::Node pins = node["pins"]) {
+        require_map(pins, "'pins'");
+        for (const auto &entry : pins)
+            part.pins[scalar(entry.first, "terminal name")] =
+                scalar(entry.second, "net reference");
+    }
+    if (const YAML::Node params = node["params"]) {
+        require_map(params, "'params'");
+        for (const auto &entry : params)
+            part.params[scalar(entry.first, "param name")] =
+                scalar(entry.second, "param value");
+    }
+    return part;
+}
+
+McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
+    require_map(node, "mcu");
+    check_keys(node, "mcu",
+               {"id", "model", "variant", "firmware", "clock_hz", "start_at",
+                "radio"});
+    McuConfig mcu;
+    mcu.line = node.Mark().line + 1;
+    mcu.id = required_string(node, "id", "mcu");
+    check_id(node["id"], mcu.id, "mcu");
+    mcu.model = required_string(node, "model", "mcu");
+    if (const YAML::Node variant = node["variant"])
+        mcu.variant = scalar(variant, "variant");
+    const std::string firmware = required_string(node, "firmware", "mcu");
+    std::filesystem::path path(firmware);
+    if (path.is_relative())
+        path = std::filesystem::path(base_dir) / path;
+    mcu.firmware = path.lexically_normal().string();
+    if (const YAML::Node clock = node["clock_hz"])
+        mcu.clock_hz = config_frequency(clock, "clock_hz");
+    if (const YAML::Node start = node["start_at"])
+        mcu.start_at_ns = config_duration(start, "start_at");
+    if (const YAML::Node radio = node["radio"])
+        mcu.radio = parse_radio_attach(radio);
+    return mcu;
+}
+
+DeviceConfig parse_device(const YAML::Node &node, const std::string &base_dir) {
+    require_map(node, "device");
+    check_keys(node, "device", {"id", "mcus", "nets", "links", "parts"},
+               {"attach"});
+    DeviceConfig device;
+    device.line = node.Mark().line + 1;
+    device.id = required_string(node, "id", "device");
+    check_id(node["id"], device.id, "device");
+    const YAML::Node mcus = node["mcus"];
+    if (!mcus)
+        fail(node, "device '" + device.id + "' requires 'mcus'");
+    for (const YAML::Node &mcu : require_seq(mcus, "'mcus'"))
+        device.mcus.push_back(parse_mcu(mcu, base_dir));
+    if (device.mcus.empty())
+        fail(mcus, "device '" + device.id + "' has no MCUs");
+    if (const YAML::Node nets = node["nets"])
+        for (const YAML::Node &net : require_seq(nets, "'nets'"))
+            device.nets.push_back(parse_net(net));
+    if (const YAML::Node links = node["links"])
+        for (const YAML::Node &link : require_seq(links, "'links'"))
+            device.links.push_back(parse_link(link));
+    if (const YAML::Node parts = node["parts"])
+        for (const YAML::Node &part : require_seq(parts, "'parts'"))
+            device.parts.push_back(parse_part(part, base_dir));
+    return device;
+}
+
+EventConfig parse_event(const YAML::Node &node) {
+    require_map(node, "event");
+    check_keys(node, "event", {"at", "net", "drive", "endpoint", "set"},
+               {"target"});
+    EventConfig event;
+    event.line = node.Mark().line + 1;
+    if (!node["at"])
+        fail(node, "event requires 'at'");
+    event.at_ns = config_duration(node["at"], "at");
+    const bool drives_net = node["net"] || node["drive"];
+    const bool sets_endpoint = node["endpoint"] || node["set"];
+    if (drives_net == sets_endpoint)
+        fail(node, "event needs either 'net' + 'drive' or 'endpoint' + 'set'");
+    if (drives_net) {
+        event.net = required_string(node, "net", "event");
+        if (!node["drive"])
+            fail(node, "event requires 'drive'");
+        event.drive = parse_drive(node["drive"]);
+    } else {
+        event.endpoint = required_string(node, "endpoint", "event");
+        if (!node["set"])
+            fail(node, "event requires 'set'");
+        event.value = scalar(node["set"], "set");
+    }
+    return event;
+}
+
+} // namespace
+
+std::uint64_t parse_duration_ns(const std::string &text) {
+    if (text == "0")
+        return 0;
+    struct Unit {
+        const char *suffix;
+        double scale;
+    };
+    static const Unit units[] = {{"ns", 1.0}, {"us", 1e3}, {"ms", 1e6}, {"s", 1e9}};
+    for (const Unit &unit : units) {
+        const std::string suffix = unit.suffix;
+        if (text.size() <= suffix.size() ||
+            text.compare(text.size() - suffix.size(), suffix.size(), suffix) != 0)
+            continue;
+        const std::string number = text.substr(0, text.size() - suffix.size());
+        if (number.find_first_not_of("0123456789.") != std::string::npos ||
+            std::count(number.begin(), number.end(), '.') > 1 || number == ".")
+            break;
+        const double value = std::stod(number) * unit.scale;
+        if (value >= 1.8e19)
+            throw std::invalid_argument("duration is too large: " + text);
+        return static_cast<std::uint64_t>(std::llround(value));
+    }
+    throw std::invalid_argument("invalid duration '" + text +
+                                "' (use e.g. 100ns, 5us, 10ms, 2.5s)");
+}
+
+std::uint32_t parse_frequency_hz(const std::string &text) {
+    struct Unit {
+        const char *suffix;
+        double scale;
+    };
+    static const Unit units[] = {
+        {"MHz", 1e6}, {"kHz", 1e3}, {"Hz", 1.0}, {"", 1.0}};
+    for (const Unit &unit : units) {
+        const std::string suffix = unit.suffix;
+        if (text.size() <= suffix.size() ||
+            text.compare(text.size() - suffix.size(), suffix.size(), suffix) != 0)
+            continue;
+        const std::string number = text.substr(0, text.size() - suffix.size());
+        if (number.find_first_not_of("0123456789.") != std::string::npos ||
+            std::count(number.begin(), number.end(), '.') > 1 || number == ".")
+            continue;
+        const double value = std::stod(number) * unit.scale;
+        if (value < 1.0 || value > 4294967295.0)
+            throw std::invalid_argument("frequency out of range: " + text);
+        return static_cast<std::uint32_t>(std::llround(value));
+    }
+    throw std::invalid_argument("invalid frequency '" + text +
+                                "' (use e.g. 48000000, 48MHz, 32kHz)");
+}
+
+SystemConfig parse_system_config(const std::string &yaml_text,
+                                 const std::string &base_dir) {
+    YAML::Node root;
+    try {
+        root = YAML::Load(yaml_text);
+    } catch (const YAML::Exception &error) {
+        std::ostringstream out;
+        out << "line " << error.mark.line + 1 << ": " << error.msg;
+        throw ConfigError(out.str());
+    }
+    if (!root.IsMap())
+        throw ConfigError("the document must be a mapping");
+    check_keys(root, "the document",
+               {"version", "world", "devices", "nets", "links", "scenario"},
+               {"attach"});
+
+    const YAML::Node version = root["version"];
+    if (!version)
+        throw ConfigError("'version' is required (currently 1)");
+    if (scalar(version, "'version'") != "1")
+        fail(version, "unsupported version '" + version.Scalar() +
+                          "' (only 1)");
+
+    SystemConfig config;
+    if (const YAML::Node world = root["world"]) {
+        require_map(world, "'world'");
+        check_keys(world, "'world'", {"seed", "duration", "quantum", "radio"});
+        if (world["seed"])
+            config.seed = config_uint(world["seed"], "seed");
+        if (world["duration"])
+            config.duration_ns = config_duration(world["duration"], "duration");
+        if (const YAML::Node radios = world["radio"])
+            for (const YAML::Node &radio : require_seq(radios, "'radio'"))
+                config.radios.push_back(parse_radio_medium(radio));
+        if (world["quantum"]) {
+            config.quantum_ns = config_duration(world["quantum"], "quantum");
+            if (*config.quantum_ns == 0)
+                fail(world["quantum"], "quantum must be positive");
+        }
+    }
+
+    const YAML::Node devices = root["devices"];
+    if (!devices)
+        throw ConfigError("'devices' is required");
+    for (const YAML::Node &device : require_seq(devices, "'devices'"))
+        config.devices.push_back(parse_device(device, base_dir));
+    if (config.devices.empty())
+        fail(devices, "'devices' is empty");
+    if (const YAML::Node nets = root["nets"])
+        for (const YAML::Node &net : require_seq(nets, "'nets'"))
+            config.nets.push_back(parse_net(net));
+    if (const YAML::Node links = root["links"])
+        for (const YAML::Node &link : require_seq(links, "'links'"))
+            config.links.push_back(parse_link(link));
+    if (const YAML::Node scenario = root["scenario"]) {
+        require_map(scenario, "'scenario'");
+        check_keys(scenario, "'scenario'", {"events"}, {"script"});
+        if (const YAML::Node events = scenario["events"])
+            for (const YAML::Node &event : require_seq(events, "'events'"))
+                config.events.push_back(parse_event(event));
+    }
+
+    std::set<std::string> radio_ids;
+    for (const RadioMediumConfig &medium : config.radios)
+        if (!radio_ids.insert(medium.id).second)
+            throw ConfigError("line " + std::to_string(medium.line) +
+                              ": duplicate radio medium id '" + medium.id + "'");
+    // Identifier uniqueness is a property of the document, not of the chips.
+    std::set<std::string> device_ids;
+    for (const DeviceConfig &device : config.devices) {
+        if (!device_ids.insert(device.id).second)
+            throw ConfigError("line " + std::to_string(device.line) +
+                              ": duplicate device id '" + device.id + "'");
+        std::set<std::string> mcu_ids;
+        for (const McuConfig &mcu : device.mcus)
+            if (!mcu_ids.insert(mcu.id).second)
+                throw ConfigError("line " + std::to_string(mcu.line) +
+                                  ": duplicate mcu id '" + mcu.id +
+                                  "' in device '" + device.id + "'");
+        std::set<std::string> part_ids;
+        for (const PartConfig &part : device.parts)
+            if (!part_ids.insert(part.id).second || mcu_ids.count(part.id))
+                throw ConfigError("line " + std::to_string(part.line) +
+                                  ": duplicate part id '" + part.id +
+                                  "' in device '" + device.id + "'");
+    }
+    return config;
+}
+
+SystemConfig load_system_config(const std::string &path) {
+    std::ifstream input(path);
+    if (!input)
+        throw ConfigError("cannot open configuration: " + path);
+    std::ostringstream text;
+    text << input.rdbuf();
+    const std::filesystem::path parent = std::filesystem::path(path).parent_path();
+    return parse_system_config(text.str(),
+                               parent.empty() ? "." : parent.string());
+}
+
+} // namespace sim

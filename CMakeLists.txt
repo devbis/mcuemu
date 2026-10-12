@@ -32,7 +32,7 @@ target_compile_options(tc32emu PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(tc32emu PUBLIC unicorn)
 
 add_executable(tc32-emu emulator/src/main.cpp)
-target_link_libraries(tc32-emu PRIVATE tc32emu)
+target_link_libraries(tc32-emu PRIVATE tc32emu simcore)
 
 add_library(mcs51emu
     emulator/src/mcs51/ca51f253l3.cpp
@@ -43,6 +43,63 @@ target_link_libraries(mcs51emu PUBLIC unicorn)
 
 add_executable(mcs51-emu emulator/src/mcs51/main.cpp)
 target_link_libraries(mcs51-emu PRIVATE mcs51emu)
+
+find_package(yaml-cpp QUIET)
+if(NOT yaml-cpp_FOUND)
+    include(FetchContent)
+    set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_INSTALL OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(yaml-cpp
+        GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+        GIT_TAG 0.8.0)
+    FetchContent_MakeAvailable(yaml-cpp)
+endif()
+if(TARGET yaml-cpp::yaml-cpp)
+    set(TC32EMU_YAML_TARGET yaml-cpp::yaml-cpp)
+else()
+    set(TC32EMU_YAML_TARGET yaml-cpp)
+endif()
+
+# Lua 5.4 for scripted parts, built from source so behavior does not depend on
+# the system's Lua version. The upstream repository has no CMakeLists.txt.
+include(FetchContent)
+FetchContent_Declare(lua
+    GIT_REPOSITORY https://github.com/lua/lua.git
+    GIT_TAG v5.4.8)
+FetchContent_MakeAvailable(lua)
+file(GLOB TC32EMU_LUA_SOURCES "${lua_SOURCE_DIR}/*.c")
+list(FILTER TC32EMU_LUA_SOURCES EXCLUDE REGEX "/(lua|luac|onelua|ltests)\\.c$")
+add_library(lua54 STATIC ${TC32EMU_LUA_SOURCES})
+target_include_directories(lua54 PUBLIC "${lua_SOURCE_DIR}")
+set_target_properties(lua54 PROPERTIES C_STANDARD 99)
+if(UNIX)
+    target_compile_definitions(lua54 PRIVATE LUA_USE_POSIX)
+    target_link_libraries(lua54 PUBLIC m)
+endif()
+target_compile_options(lua54 PRIVATE -w)
+
+# Chip-independent simulation core: scheduler, pins/nets, endpoints, world.
+add_library(simcore
+    emulator/src/sim/scheduler.cpp
+    emulator/src/sim/net.cpp
+    emulator/src/sim/endpoint.cpp
+    emulator/src/sim/world.cpp
+    emulator/src/sim/part.cpp
+    emulator/src/sim/parts/ds18b20.cpp
+    emulator/src/sim/parts/i2c_slave.cpp
+    emulator/src/sim/parts/builtin.cpp
+    emulator/src/sim/parts/lua_part.cpp
+    emulator/src/sim/config.cpp
+    emulator/src/sim/system.cpp
+    emulator/src/sim/cli.cpp
+    emulator/src/sim/tlsr8258_mcu.cpp
+    emulator/src/sim/ca51f253l3_mcu.cpp
+)
+target_include_directories(simcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
+target_compile_options(simcore PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(simcore PUBLIC tc32emu mcs51emu ${TC32EMU_YAML_TARGET} lua54)
 
 if(TC32EMU_BUILD_TESTS)
     enable_testing()
@@ -61,6 +118,19 @@ if(TC32EMU_BUILD_TESTS)
     )
     target_link_libraries(mcs51emu-tests PRIVATE mcs51emu)
     add_test(NAME mcs51emu-tests COMMAND mcs51emu-tests)
+
+    add_executable(simcore-tests
+        tests/sim/test_sim.cpp
+        tests/sim/test_config.cpp
+        tests/sim/test_parts.cpp
+        tests/sim/test_periph.cpp
+        tests/sim/test_lua.cpp
+        tests/sim/test_radio_medium.cpp
+    )
+    target_link_libraries(simcore-tests PRIVATE simcore)
+    target_compile_definitions(simcore-tests PRIVATE
+        TC32EMU_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME simcore-tests COMMAND simcore-tests)
 
     set(TC32EMU_SAMPLE_GW_FIRMWARE
         "${CMAKE_CURRENT_SOURCE_DIR}/firmware/samplegw_tb03f.bin")
