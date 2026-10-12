@@ -271,6 +271,14 @@ Tlsr8258::Tlsr8258(Tlsr8258Model model, std::uint32_t clock_hz)
     // drive individual port values explicitly.
     gpio_inputs_.fill(0xff);
     gpio_outputs_.fill(0);
+    // Output-enable resets to 0xff (all pads are inputs).
+    for (std::uint32_t base : gpio_port_offsets) {
+        registers_[base + 2] = 0xff;
+        registers_[base + 6] = 0xff; // all pads start as GPIO (ACT_AS_GPIO)
+    }
+    registers_[0xb0b] = 0x04; // DFIFO2 base address high byte
+    dfifo2_write_pointer_ = 0;
+    adc_next_sample_ns_ = 0;
     timer_last_tick_.fill(0);
     timer_fired_.fill(false);
     // UART register reset values follow datasheet table 7-9. The SDK's polling
@@ -527,6 +535,8 @@ void Tlsr8258::tick(std::uint32_t cycles) {
         time_fraction_ = fractional_numerator % clock_hz_;
     }
     update_analog_calibration();
+    i2c_advance(cycles);
+    adc_advance();
 
     // Writing PWDN_CTRL requests sleep; it does not stop execution at the
     // store. The silicon's start_suspend trampoline runs 40 16-bit delay
@@ -630,6 +640,32 @@ void Tlsr8258::set_gpio_input(unsigned port, std::uint8_t value) {
     if (port >= gpio_inputs_.size())
         throw std::out_of_range("GPIO port must be PA..PE (0..4)");
     gpio_inputs_[port] = value;
+}
+
+std::uint8_t Tlsr8258::gpio_oen(unsigned port) const {
+    if (port >= gpio_port_offsets.size())
+        throw std::out_of_range("GPIO port must be PA..PE (0..4)");
+    return registers_[gpio_port_offsets[port] + 2];
+}
+
+bool Tlsr8258::gpio_is_gpio(unsigned port, unsigned bit) const {
+    if (port >= gpio_port_offsets.size() || bit > 7)
+        throw std::out_of_range("GPIO pad must be PA0..PE7");
+    return (registers_[gpio_port_offsets[port] + 6] & (1u << bit)) != 0;
+}
+
+GpioPull Tlsr8258::gpio_pull(unsigned port, unsigned bit) const {
+    if (port >= gpio_port_offsets.size() || bit > 7)
+        throw std::out_of_range("GPIO pad must be PA0..PE7");
+    // Two bits per pad in analog registers 0x0e + 2 * port + (bit >= 4):
+    // 0 floating, 1 pull-up 1M, 2 pull-down 100K, 3 pull-up 10K.
+    const std::uint8_t reg = analog_registers_[0x0e + 2 * port + (bit >= 4 ? 1 : 0)];
+    switch ((reg >> ((bit & 3u) * 2u)) & 3u) {
+    case 1:
+    case 3: return GpioPull::Up;
+    case 2: return GpioPull::Down;
+    default: return GpioPull::None;
+    }
 }
 
 std::uint8_t Tlsr8258::gpio_output(unsigned port) const {
@@ -765,9 +801,10 @@ void Tlsr8258::poll_radio() {
         for (unsigned byte = 0; byte != 4; ++byte)
             write8(address + timestamp_offset + byte,
                    static_cast<std::uint8_t>(system_timer_count_ >> (byte * 8u)));
-        // The SDK subtracts 110 from this raw byte to produce dBm. Encode a
-        // modeled -50 dBm signal as 60 rather than storing -50 directly.
-        write8(address + packet_length + 2u, 60u);
+        // The SDK subtracts 110 from this raw byte to produce dBm, so the
+        // medium's RSSI is encoded as dBm + 110 (-50 dBm in the ideal model).
+        write8(address + packet_length + 2u,
+               static_cast<std::uint8_t>(std::clamp(frame.rssi_dbm + 110, 0, 255)));
         write8(address + packet_length + 3u, 0x10u); // CRC valid
         registers_[0xf20] |= 0x01u; // RF_RX complete.
         update_radio_irq();
@@ -835,6 +872,12 @@ std::uint8_t Tlsr8258::analog_register_read(std::uint8_t address) noexcept {
 }
 
 std::uint8_t Tlsr8258::read_register(std::uint32_t offset) {
+    if (offset == 0x002)
+        return i2c_status();
+    if (offset == 0xb1e)
+        return static_cast<std::uint8_t>(dfifo2_write_pointer_ & 0xffu);
+    if (offset == 0xb1f)
+        return static_cast<std::uint8_t>(dfifo2_write_pointer_ >> 8);
     if (offset == 0x00c && mspi_active_ && mspi_command_seen_) {
         if (mspi_command_ == 0x9f) {
             const std::array<std::uint8_t, 3> jedec_id = {
@@ -924,6 +967,24 @@ void Tlsr8258::update_system_timer_calibration() noexcept {
 }
 
 void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
+    if (offset == 0x007) {
+        registers_[offset] = value;
+        i2c_start_command(value);
+        return;
+    }
+    if (offset == 0x061) {
+        registers_[offset] = value;
+        if ((value & 0x20u) != 0) // FLD_RST1_ADC: restart the sample clock
+            adc_next_sample_ns_ = 0;
+        return;
+    }
+    if (offset == 0xb1e || offset == 0xb1f) {
+        // reg_dfifo2_wptr: firmware clears it when it (re)configures the buffer.
+        const unsigned shift = (offset - 0xb1e) * 8u;
+        dfifo2_write_pointer_ = static_cast<std::uint16_t>(
+            (dfifo2_write_pointer_ & ~(0xffu << shift)) | (value << shift));
+        return;
+    }
     if (offset >= 0x648 && offset <= 0x64a) {
         // IRQ source bits are write-one-to-clear; in particular Zephyr's
         // system timer ISR clears IRQ 20 with a 32-bit write at 0x800648.
@@ -1116,6 +1177,8 @@ void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
                             static_cast<std::uint8_t>(~data);
                     } else {
                         analog_registers_[address] = data;
+                        if (address >= 0x0e && address <= 0x17)
+                            notify_gpio_pad((address - 0x0eu) / 2u);
                     }
                     // cpu_wakeup_init's RC24M calibration writes 0x0e then
                     // 0x0f to AREG 0xc7 and polls AREG 0xcf[7]. Complete that
@@ -1208,6 +1271,15 @@ void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
                 record_output_event(OutputEvent::Kind::GpioPort, port, value);
             }
             registers_[offset] = value;
+            if (gpio_pad_observer_)
+                gpio_pad_observer_(port);
+            return;
+        }
+        if (offset == base + 2 || offset == base + 6) {
+            const bool changed = registers_[offset] != value;
+            registers_[offset] = value;
+            if (changed && gpio_pad_observer_)
+                gpio_pad_observer_(port);
             return;
         }
     }

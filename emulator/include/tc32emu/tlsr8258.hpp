@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <limits>
 #include <string>
 #include <vector>
@@ -47,6 +48,21 @@ struct AnalogRegisterEvent {
     Direction direction;
     std::uint8_t address;
     std::uint8_t value;
+};
+
+enum class GpioPull {
+    None,
+    Up,
+    Down,
+};
+
+// The pad pair currently used by the I2C master (SDA/SCL), if any.
+struct I2cPads {
+    int sda_port{-1};
+    unsigned sda_bit{0};
+    int scl_port{-1};
+    unsigned scl_bit{0};
+    bool valid() const noexcept { return sda_port >= 0; }
 };
 
 class Tlsr8258 final : public Bus {
@@ -157,6 +173,41 @@ public:
     std::uint8_t *sram_data() noexcept { return sram_.data(); }
     void set_gpio_input(unsigned port, std::uint8_t value);
     std::uint8_t gpio_output(unsigned port) const;
+    // Pad-level view for external wiring: called whenever the output latch
+    // (OUT) or the output-enable (OEN, 0 = driven) of a port changes. The
+    // callee reads pad_out()/pad_oen() and drives its nets.
+    using GpioPadObserver = std::function<void(unsigned port)>;
+    void set_gpio_pad_observer(GpioPadObserver observer) {
+        gpio_pad_observer_ = std::move(observer);
+    }
+    std::uint8_t gpio_oen(unsigned port) const;
+    // True while the pad belongs to GPIO (ACT_AS_GPIO = 1); a pad assigned to
+    // another function (I2C, UART, PWM, ...) is not driven by OUT/OEN.
+    bool gpio_is_gpio(unsigned port, unsigned bit) const;
+    // Internal pull resistor selected through the analog registers 0x0e..0x17.
+    GpioPull gpio_pull(unsigned port, unsigned bit) const;
+
+    // I2C master (registers 0x00..0x07). The master drives SDA/SCL open-drain:
+    // `sda_low`/`scl_low` tell which line it pulls low, otherwise it releases
+    // the line. The callee applies this to the nets and feeds the line level
+    // back through set_gpio_input() on the SDA pad.
+    using I2cPadObserver =
+        std::function<void(const I2cPads &pads, bool sda_low, bool scl_low)>;
+    void set_i2c_pad_observer(I2cPadObserver observer) {
+        i2c_pad_observer_ = std::move(observer);
+    }
+
+    // SAR ADC misc channel. The provider returns the voltage (millivolts) of a
+    // pad: it is queried for every sample.
+    using AdcInputProvider =
+        std::function<std::uint32_t(unsigned port, unsigned bit)>;
+    void set_adc_input_provider(AdcInputProvider provider) {
+        adc_input_provider_ = std::move(provider);
+    }
+    // Actual 1.2 V reference voltage; the SDK default calibration is 1175 mV.
+    void set_adc_reference_mv(std::uint32_t millivolts) noexcept {
+        adc_reference_mv_ = millivolts;
+    }
     void set_output_trace_enabled(bool enabled) noexcept {
         output_trace_enabled_ = enabled;
     }
@@ -231,6 +282,35 @@ private:
     alignas(4096) std::array<std::uint8_t, SramSize> sram_{};
     std::array<std::uint8_t, 5> gpio_inputs_{};
     std::array<std::uint8_t, 5> gpio_outputs_{};
+    GpioPadObserver gpio_pad_observer_;
+    I2cPadObserver i2c_pad_observer_;
+    AdcInputProvider adc_input_provider_;
+    std::uint32_t adc_reference_mv_{1175};
+    std::uint64_t adc_next_sample_ns_{0};
+    std::uint16_t dfifo2_write_pointer_{0};
+
+    struct I2cStep {
+        enum class Kind {
+            Drive,     // set the line states
+            SampleBit, // shift SDA into the read byte
+            SampleAck, // slave ACK of a written byte
+            StoreRead, // read byte complete: copy into the data register
+            End,       // command finished
+        };
+        std::uint64_t cycle;
+        Kind kind;
+        bool sda_low;
+        bool scl_low;
+    };
+    std::deque<I2cStep> i2c_steps_;
+    std::uint64_t i2c_cycles_{0};
+    bool i2c_sda_low_{false};
+    bool i2c_scl_low_{false};
+    bool i2c_nak_{false};
+    bool i2c_bus_busy_{false};
+    bool i2c_cmd_stop_{false};
+    I2cPads i2c_pads_;
+    std::uint8_t i2c_read_shift_{0};
     bool output_trace_enabled_{false};
     std::vector<OutputEvent> output_events_;
     bool analog_trace_enabled_{false};
@@ -272,6 +352,20 @@ private:
     std::uint64_t uart_frame_cycles() const;
     void update_uart_status();
     void start_uart_transmit();
+    void notify_gpio_pad(unsigned port) {
+        if (gpio_pad_observer_)
+            gpio_pad_observer_(port);
+    }
+    // tlsr8258_i2c.cpp
+    void i2c_start_command(std::uint8_t command);
+    void i2c_advance(std::uint32_t cycles);
+    void i2c_apply(bool sda_low, bool scl_low);
+    I2cPads i2c_select_pads() const;
+    std::uint8_t i2c_status() const;
+    // tlsr8258_adc.cpp
+    void adc_advance();
+    std::uint16_t adc_sample() const;
+    std::uint32_t adc_channel_mv(unsigned selector) const;
 };
 
 Tlsr8258Model parse_model(const std::string &name);

@@ -66,6 +66,30 @@ not establish the undocumented register-level semantics of every mode. The
 emulator currently maps the tested Zigbee TX/RX DMA sequence to packets on
 `VirtualAir`; BLE is not connected to these TLSR8258 RF registers.
 
+## GPIO pads, I2C master and SAR ADC
+
+These were added for the system simulation (see
+[system-config.md](system-config.md)); evidence is the datasheet (sections
+7.3.4 and 11) and the Telink SDK drivers (`drivers/B85/i2c.c`,
+`platform/chip_8258/adc.c`, `adc.h`, `dfifo.h`, `gpio.c`).
+
+| Registers | Model | Evidence |
+|---|---|---|
+| GPIO `base+2` (OEN), `base+3` (OUT), `base+6` (ACT_AS_GPIO) | Pad observers report changes. OEN resets to `0xff` and ACT_AS_GPIO to `0xff` (all pads start as GPIO inputs). A pad whose ACT_AS_GPIO bit is 0 is not driven by OUT/OEN. | Datasheet reset values; SDK `gpio_set_func`. |
+| AREG `0x0e..0x17` | Internal pull resistors, two bits per pad: 1 pull-up 1M, 2 pull-down 100K, 3 pull-up 10K. Modeled as weak pull-up/down on the pad's net. | SDK `gpio_setup_up_down_resistor`. |
+| `0x00..0x07` | I2C master: speed `0x00`, id `0x01`, status `0x02` (CMD_BUSY, BUS_BUSY, NAK), mode `0x03[1]` master enable, ADR/DO/DI `0x04..0x06`, command `0x07` (ID, ADDR, DO, DI, START, STOP, READ_ID, ACK). Phases run START, ID, ADR, DO, DI, STOP; each bit takes `4 * speed` cycles. Pads follow the pair whose ACT_AS_GPIO bits are cleared: A3/A4, B6/D7, C0/C1 or C2/C3. | Datasheet 7.3.4 and SDK I2C driver. |
+| AREG `0xe7..0xfc`, `0xb08..0xb0b`, `0xb10`, `0xb1e` | SAR ADC misc channel into DFIFO2: sample period `(R_max_mc + R_max_s) / 24 MHz`, P/N input selectors, reference, resolution and 1/2^n input prescaler; samples are written to the SRAM ring buffer while DFIFO2 input is enabled. | Datasheet section 11 and SDK `adc.c`. The sample period reproduces the SDK's 23/96/192 kHz rates. |
+
+Inferred, not documented: the I2C `ACK` command bit makes the master release
+SDA (NACK) after a received byte, as the SDK sets it on the last byte; `NAK`
+reports a missing slave ACK on any written byte of the command and the
+remaining phases still run; clock stretching is not modeled. ADC samples are
+stored as 16-bit entries (the SDK reads the buffer through 32-bit words and
+uses only the low 13 bits plus the sign at bit 13, which works for either
+layout); the 1.2 V reference is `1175 mV` like the SDK's default calibration;
+left/right channels, PGA and the temperature sensor are not modeled. The I2C
+slave mode and SPI master/slave are not modeled.
+
 ## Next accuracy steps
 
 1. Compare the decoded AREG sequence and virtual timestamps against a captured

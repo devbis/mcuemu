@@ -22,6 +22,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(tc32emu
     emulator/src/cpu.cpp
     emulator/src/tlsr8258.cpp
+    emulator/src/tlsr8258_i2c.cpp
+    emulator/src/tlsr8258_adc.cpp
     emulator/src/radio.cpp
     emulator/src/api.cpp
 )
