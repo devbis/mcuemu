@@ -1,0 +1,24 @@
+# The thermostat alone, with a coordinator to join. Run:
+#   tc32-emu sim examples/thermostat_only.yaml --for 5s
+version: 1
+
+world:
+  seed: 1
+  radio:
+    - id: air0
+      model: log_distance
+      reference_loss_db: 40
+      path_loss_exponent: 2.5
+
+devices:
+  - id: coordinator
+    mcus:
+      - id: zb
+        model: tlsr8258
+        variant: F1K
+        firmware: ../firmware/samplegw_tb03f.bin
+        radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+  - include: devices/tuya_thermostat.yaml
+    id: thermostat
+    params: { position: [4, 2, 1] }

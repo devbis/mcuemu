@@ -334,6 +334,21 @@ void Cpu::mmio_write(uc_struct *opaque, std::uint64_t offset, unsigned size,
 void Cpu::code_hook(uc_struct *opaque, std::uint64_t address,
                     std::uint32_t size, void *user_data) {
     auto *self = static_cast<Cpu *>(user_data);
+    if (self->batch_active_) {
+        // The first instruction of a batch always runs: the caller has just
+        // handled whatever was pending. Later ones stop the batch instead of
+        // starting when something needs the wrapper (see batch_must_end()).
+        if (self->batch_first_)
+            self->batch_first_ = false;
+        else if (self->batch_must_end()) {
+            const std::uint32_t resume_pc = static_cast<std::uint32_t>(address);
+            auto *engine = reinterpret_cast<uc_engine *>(opaque);
+            uc_reg_write(engine, UC_TC32_REG_PC, &resume_pc);
+            uc_emu_stop(engine);
+            return;
+        }
+        --self->batch_remaining_;
+    }
     const std::uint32_t previous_pc = self->previous_pc_;
     const std::uint16_t previous_instruction = self->previous_instruction_;
     const bool has_previous_instruction = self->has_previous_instruction_;
@@ -486,7 +501,22 @@ bool Cpu::enter_pending_irq() {
     return true;
 }
 
-bool Cpu::step(std::string *fault, std::uint16_t *instruction) {
+bool Cpu::batch_must_end() {
+    if (halted_ || batch_remaining_ == 0 ||
+        device_.power_state() != Tlsr8258PowerState::Awake ||
+        device_.network_time_ns() >= batch_deadline_ns_)
+        return true;
+    if (!device_.interrupt_pending())
+        return false;
+    // enter_pending_irq() ignores an IRQ raised while one is being served.
+    std::uint32_t status = 0;
+    uc_reg_read(reinterpret_cast<uc_engine *>(uc_), UC_TC32_REG_CPSR, &status);
+    return (status & mode_mask) != irq_mode;
+}
+
+bool Cpu::run_batch(std::size_t limit, std::string *fault,
+                    std::uint16_t *instruction, std::size_t *executed) {
+    *executed = 0;
     if (halted_)
         return false;
 
@@ -496,12 +526,20 @@ bool Cpu::step(std::string *fault, std::uint16_t *instruction) {
     if (enter_pending_irq()) {
         if (instruction)
             *instruction = 0;
+        *executed = 1;
         return true;
     }
 
     const std::uint32_t start_pc = pc();
-    const uc_err error = uc_emu_start(reinterpret_cast<uc_engine *>(uc_), start_pc,
-                                      emulation_end, 0, 1);
+    const std::size_t before = executed_instructions_;
+    batch_active_ = true;
+    batch_first_ = true;
+    batch_remaining_ = limit;
+    const uc_err error =
+        uc_emu_start(reinterpret_cast<uc_engine *>(uc_), start_pc, emulation_end,
+                     0, 0);
+    batch_active_ = false;
+    *executed = executed_instructions_ - before;
     if (instruction)
         *instruction = current_instruction_;
     if (!callback_fault_.empty()) {
@@ -513,7 +551,7 @@ bool Cpu::step(std::string *fault, std::uint16_t *instruction) {
         if (fault) {
             std::ostringstream out;
             out << uc_strerror(error) << " while executing "
-                << instruction_text(start_pc, current_instruction_);
+                << instruction_text(pc(), current_instruction_);
             *fault = out.str();
         }
         return false;
@@ -526,7 +564,12 @@ bool Cpu::step(std::string *fault, std::uint16_t *instruction) {
     return true;
 }
 
-RunResult Cpu::run(std::size_t instruction_limit) {
+bool Cpu::step(std::string *fault, std::uint16_t *instruction) {
+    std::size_t executed = 0;
+    return run_batch(1, fault, instruction, &executed);
+}
+
+RunResult Cpu::run(std::size_t instruction_limit, std::uint64_t deadline_ns) {
     RunResult result;
     while (result.instructions < instruction_limit) {
         if (halted_) {
@@ -549,16 +592,23 @@ RunResult Cpu::run(std::size_t instruction_limit) {
             continue;
         }
 
+        if (result.instructions != 0 && device_.network_time_ns() >= deadline_ns)
+            break;
+
         std::string fault;
         std::uint16_t instruction = 0;
-        if (!step(&fault, &instruction)) {
+        std::size_t executed = 0;
+        batch_deadline_ns_ = deadline_ns;
+        const bool ok = run_batch(instruction_limit - result.instructions,
+                                  &fault, &instruction, &executed);
+        result.instructions += executed;
+        if (!ok) {
             result.reason = halted_ ? StopReason::Halted : StopReason::Fault;
             result.pc = pc();
             result.instruction = instruction;
             result.message = std::move(fault);
             return result;
         }
-        ++result.instructions;
         result.instruction = instruction;
         if (halted_) {
             result.reason = StopReason::Halted;

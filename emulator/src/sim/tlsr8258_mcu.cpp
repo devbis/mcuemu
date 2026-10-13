@@ -1,3 +1,4 @@
+#include <limits>
 #include "sim/tlsr8258_mcu.hpp"
 
 #include <fstream>
@@ -77,10 +78,12 @@ void Tlsr8258Mcu::set_start_offset(std::uint64_t offset_ns) {
 }
 
 McuState Tlsr8258Mcu::run_until(std::uint64_t target_ns) {
-    // One instruction per call keeps pad changes timestamped to within one
-    // instruction (~60 ns at 48 MHz) of the executing code.
+    // The CPU runs instructions in batches up to the target time. Pad changes
+    // are stamped with the device clock when the write happens, so batching
+    // does not blur them; the target can be overshot by one instruction.
     while (state_ == McuState::Running && device_.network_time_ns() < target_ns) {
-        const tc32emu::RunResult result = cpu_.run(1);
+        const tc32emu::RunResult result =
+            cpu_.run(std::numeric_limits<std::size_t>::max(), target_ns);
         switch (result.reason) {
         case tc32emu::StopReason::StepLimit:
             break;

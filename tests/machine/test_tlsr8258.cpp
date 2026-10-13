@@ -452,4 +452,59 @@ void test_tlsr_uart_irq_enters_and_returns_from_irq_mode() {
     CHECK(!device.interrupt_pending());
 }
 
+void test_tlsr_batched_run_matches_single_steps() {
+    std::vector<std::uint16_t> program(300, 0x0000);
+    program.push_back(0xcf00); // stop marker
+    auto make = [&](tc32emu::Tlsr8258 &device) {
+        std::vector<std::uint8_t> bytes;
+        for (std::uint16_t value : program) {
+            bytes.push_back(static_cast<std::uint8_t>(value));
+            bytes.push_back(static_cast<std::uint8_t>(value >> 8));
+        }
+        device.load_firmware(bytes);
+    };
+
+    tc32emu::Tlsr8258 stepped_device, batched_device, bounded_device;
+    make(stepped_device);
+    make(batched_device);
+    make(bounded_device);
+    tc32emu::Cpu stepped(stepped_device), batched(batched_device),
+        bounded(bounded_device);
+
+    std::size_t stepped_count = 0;
+    tc32emu::RunResult result;
+    do {
+        result = stepped.run(1);
+        stepped_count += result.instructions;
+    } while (result.reason == tc32emu::StopReason::StepLimit);
+    const auto batch = batched.run(100000);
+
+    CHECK(result.reason == tc32emu::StopReason::Halted);
+    CHECK(batch.reason == tc32emu::StopReason::Halted);
+    CHECK(batch.instructions == stepped_count);
+    CHECK(batched.pc() == stepped.pc());
+    CHECK(batched_device.time_ns() == stepped_device.time_ns());
+
+    // A batch also stops at its instruction limit and resumes where it left off.
+    const auto first = bounded.run(100);
+    CHECK(first.reason == tc32emu::StopReason::StepLimit);
+    CHECK(first.instructions == 100);
+    const auto rest = bounded.run(100000);
+    CHECK(rest.reason == tc32emu::StopReason::Halted);
+    CHECK(first.instructions + rest.instructions == stepped_count);
+    CHECK(bounded_device.time_ns() == stepped_device.time_ns());
+
+    // A time deadline ends the run once the device clock reaches it, at most
+    // one instruction late.
+    tc32emu::Tlsr8258 timed_device;
+    make(timed_device);
+    tc32emu::Cpu timed(timed_device);
+    const std::uint64_t deadline = 2000;
+    const auto timed_result = timed.run(100000, deadline);
+    CHECK(timed_result.reason == tc32emu::StopReason::StepLimit);
+    CHECK(timed_device.network_time_ns() >= deadline);
+    CHECK(timed_device.network_time_ns() < deadline + 200);
+    CHECK(timed_result.instructions < stepped_count);
+}
+
 } // namespace tc32emu_tests

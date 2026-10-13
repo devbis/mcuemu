@@ -23,6 +23,7 @@ void test_tlsr_aes128_encrypt_decrypt();
 void test_tlsr_divider_registers();
 void test_tlsr_uart_fifo_and_virtual_timing();
 void test_tlsr_uart_irq_enters_and_returns_from_irq_mode();
+void test_tlsr_batched_run_matches_single_steps();
 void test_virtual_air();
 void test_tlsr_radio_dma_packet_exchange();
 void test_c_api_register_access();
@@ -52,6 +53,7 @@ int main() {
     test_tlsr_divider_registers();
     test_tlsr_uart_fifo_and_virtual_timing();
     test_tlsr_uart_irq_enters_and_returns_from_irq_mode();
+    test_tlsr_batched_run_matches_single_steps();
     test_virtual_air();
     test_tlsr_radio_dma_packet_exchange();
     test_c_api_register_access();

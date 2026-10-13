@@ -58,7 +58,14 @@ public:
 
     void reset(std::uint32_t pc = 0);
     void sync_flash();
-    RunResult run(std::size_t instruction_limit);
+    // Executes up to `instruction_limit` instructions. Instructions are run in
+    // batches inside one Unicorn call; a batch ends before the instruction that
+    // follows an event the wrapper must handle (a pending IRQ, a sleep request,
+    // a halt) or once the device's network time reaches `deadline_ns`. The
+    // deadline is only checked between instructions, like the step limit, so
+    // the last instruction may finish just past it.
+    RunResult run(std::size_t instruction_limit,
+                  std::uint64_t deadline_ns = UINT64_MAX);
     bool step(std::string *fault = nullptr,
               std::uint16_t *instruction = nullptr);
     void set_pc_trace(std::ostream *output,
@@ -106,6 +113,9 @@ private:
 
     void check_error(int error, const char *operation) const;
     bool enter_pending_irq();
+    bool batch_must_end();
+    bool run_batch(std::size_t limit, std::string *fault,
+                   std::uint16_t *instruction, std::size_t *executed);
     void set_callback_fault(const std::string &message);
     void emit_trace(std::ostream *output,
                     const std::optional<AddressRange> &range,
@@ -118,6 +128,10 @@ private:
     std::size_t code_hook_{0};
     bool halted_{false};
     bool instruction_seen_{false};
+    bool batch_active_{false};
+    bool batch_first_{false};
+    std::size_t batch_remaining_{0};
+    std::uint64_t batch_deadline_ns_{UINT64_MAX};
     bool has_previous_instruction_{false};
     std::uint32_t current_pc_{0};
     std::uint16_t current_instruction_{0};
