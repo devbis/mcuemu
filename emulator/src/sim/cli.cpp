@@ -14,10 +14,10 @@ namespace sim {
 void print_sim_usage(std::ostream &out) {
     out << "       tc32-emu sim SYSTEM.yaml [--for DURATION] [--quantum DURATION]\n"
            "       [--trace-nets] [--attach ENDPOINT=SINK]... [--list-endpoints]\n"
-           "       [--trace-uart PATTERN]...\n"
-           "       sinks: stdout, hex[:GAP], file:PATH, tcp:PORT, vcd:PATH, pcap:PATH[,ble]\n"
+           "       [--trace-uart PATTERN[=hex|text]]...\n"
+           "       sinks: stdout, text, hex[:GAP], file:PATH, tcp:PORT, vcd:PATH, pcap:PATH[,ble]\n"
            "       --trace-uart prints the bytes of every UART endpoint whose name contains\n"
-           "       PATTERN (or all of them for '*') as hex lines, one per frame\n";
+           "       PATTERN ('*' for all) as hex lines, one per frame (default), or as text lines\n";
 }
 
 void print_serve_usage(std::ostream &out) {
@@ -142,14 +142,22 @@ int sim_command(int argc, char **argv) {
         }
     }
 
-    for (const std::string &pattern : uart_patterns) {
+    for (std::string pattern : uart_patterns) {
+        std::string sink = "hex";
+        if (const std::size_t equals = pattern.rfind('=');
+            equals != std::string::npos) {
+            sink = pattern.substr(equals + 1);
+            pattern.resize(equals);
+            if (sink != "hex" && sink != "text")
+                throw std::invalid_argument("--trace-uart: the format must be hex or text");
+        }
         bool matched = false;
         for (const std::string &name : world.endpoints().names()) {
             if (world.endpoints().at(name).kind() != "uart")
                 continue;
             if (pattern != "*" && name.find(pattern) == std::string::npos)
                 continue;
-            system->session().attach(name, "hex");
+            system->session().attach(name, sink);
             matched = true;
         }
         if (!matched)

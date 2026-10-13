@@ -333,6 +333,24 @@ void test_hex_sink_groups_frames() {
     CHECK(contains(split_captured.str(), "d.m.uart0  1 byte: 6b\n"));
 }
 
+void test_text_sink_makes_lines() {
+    const auto system = build(mcu_yaml(""));
+    sim::World &world = system->world();
+    std::ostringstream captured;
+    auto *old = std::cout.rdbuf(captured.rdbuf());
+    system->session().attach("d.m.uart0", "text");
+    for (const char c : std::string("hi\r\nx\x01y\n!")) {
+        transmit_uart(device_of(*system), static_cast<std::uint8_t>(c));
+        world.run_for(100000);
+    }
+    system->session().finish();
+    std::cout.rdbuf(old);
+    const std::string out = captured.str();
+    CHECK(contains(out, " s] d.m.uart0: hi\n"));
+    CHECK(contains(out, " s] d.m.uart0: x\\x01y\n"));
+    CHECK(contains(out, " s] d.m.uart0: !\n")); // the partial line at the end
+}
+
 void test_tcp_sink() {
     const auto system = build(mcu_yaml());
     sim::World &world = system->world();

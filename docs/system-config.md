@@ -161,15 +161,17 @@ relative to the device, e.g. `m.uart0`) and in `--attach ENDPOINT=SINK`
 (repeatable). Relative output paths are relative to the working directory.
 
 To watch UART traffic without touching the YAML, `tc32-emu sim` has
-`--trace-uart PATTERN` (repeatable): it attaches a `hex` sink to every UART
-endpoint whose name contains PATTERN (`'*'` is all of them):
+`--trace-uart PATTERN[=hex|text]` (repeatable): it attaches a `hex` (default) or
+`text` sink to every UART endpoint whose name contains PATTERN (`'*'` is all
+of them). Use `text` for a debug UART that prints messages:
 
     tc32-emu sim examples/thermostat_only.yaml --for 3s \
-        --trace-uart thermostat.main.uart1 --trace-uart thermostat.zb.uart0
+        --trace-uart thermostat.main.uart1 --trace-uart thermostat.zb.uart0 \
+        --trace-uart thermostat.main.uart0=text
 
 Frames sent back to back (less than 1 ms apart) end up on one line; use
 `--attach thermostat.main.uart1=hex:300us` to split them. Remote clients cannot
-use `stdout` or `hex`.
+use `stdout`, `text` or `hex`.
 
 | endpoint | kind | events | `set` |
 |---|---|---|---|
@@ -182,6 +184,7 @@ use `stdout` or `hex`.
 | sink | for | does |
 |---|---|---|
 | `stdout` | any | bytes raw (a console), other values as `t_ns name = value` |
+| `text` | uart, rtt | console text, one line per `\n`: `[ time s] endpoint: text`; control and non-ASCII bytes are shown as `\xNN`; a partial line is written at the end of the run |
 | `hex` or `hex:GAP` | uart, rtt | hex lines on stdout: `[ time s] endpoint  N bytes: ..`. Bytes of one endpoint closer together than GAP (a duration, default `1ms`) share a line, so a frame is a line; lines from all `hex` sinks are merged in time order. A line appears once a later event (of any endpoint) shows the gap has passed, and at the end of the run |
 | `file:PATH` | any | the same, into a file |
 | `tcp:PORT` or `tcp:HOST:PORT` | any; useful for uart/rtt | listens (default `127.0.0.1`; `tcp:0` picks a port); one client gets the events and what it sends is fed into the endpoint; a new connection replaces the old one; a client that does not read loses data |

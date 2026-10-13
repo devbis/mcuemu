@@ -353,6 +353,7 @@ void test_rpc_sandbox() {
     CHECK(code_of(call(rpc, "attach", {{"endpoint", "d.m.uart0"}, {"sink", "file:/tmp/out.log"}})) == -32001);
     CHECK(code_of(call(rpc, "attach", {{"endpoint", "d.m.uart0"}, {"sink", "stdout"}})) == -32001);
     CHECK(code_of(call(rpc, "attach", {{"endpoint", "d.m.uart0"}, {"sink", "hex"}})) == -32001);
+    CHECK(code_of(call(rpc, "attach", {{"endpoint", "d.m.uart0"}, {"sink", "text"}})) == -32001);
     CHECK(code_of(call(rpc, "attach", {{"endpoint", "d.m.uart0"}, {"sink", "tcp:0.0.0.0:9000"}})) == -32001);
     CHECK(code_of(call(rpc, "attach", {{"endpoint", "d.m.uart0"}, {"sink", "tcp:80"}})) == -32001);
     CHECK(contains(message_of(call(rpc, "attach", {{"endpoint", "d.m.uart0"}, {"sink", "smoke"}})), "unknown sink"));

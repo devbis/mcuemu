@@ -127,6 +127,58 @@ private:
     std::shared_ptr<HexLog> log_;
 };
 
+// Console text from a UART: one line per '\n', stamped with the time of its
+// first byte and the endpoint name. Control and non-ASCII bytes are shown as \xNN
+// so a binary stream cannot mangle the terminal; a partial line is written when
+// the run ends.
+class TextSink final : public Sink {
+public:
+    explicit TextSink(std::string endpoint) : endpoint_(std::move(endpoint)) {}
+    ~TextSink() override { finish(); }
+    void consume(const EndpointEvent &event) override {
+        const auto *bytes = std::get_if<Bytes>(&event.value);
+        if (!bytes)
+            return;
+        for (std::uint8_t byte : *bytes) {
+            if (line_.empty() && !started_) {
+                started_ = true;
+                first_ns_ = event.time_ns;
+            }
+            if (byte == '\n') {
+                emit();
+            } else if (byte == '\r') {
+                // dropped: CRLF and bare CR both end up as the line break
+            } else if (byte == '\t' || (byte >= 0x20 && byte < 0x7f)) {
+                line_.push_back(static_cast<char>(byte));
+            } else {
+                static const char digits[] = "0123456789abcdef";
+                line_ += "\\x";
+                line_.push_back(digits[byte >> 4]);
+                line_.push_back(digits[byte & 15]);
+            }
+        }
+    }
+    void finish() override {
+        if (started_)
+            emit();
+    }
+
+private:
+    void emit() {
+        char stamp[48];
+        std::snprintf(stamp, sizeof stamp, "[%11.6f s] ", static_cast<double>(first_ns_) / 1e9);
+        const std::string text = std::string(stamp) + endpoint_ + ": " + line_ + "\n";
+        std::cout.write(text.data(), static_cast<std::streamsize>(text.size()));
+        std::cout.flush();
+        line_.clear();
+        started_ = false;
+    }
+    std::string endpoint_;
+    std::string line_;
+    std::uint64_t first_ns_{0};
+    bool started_{false};
+};
+
 class FileSink final : public Sink {
 public:
     explicit FileSink(const std::string &path) : out_(path, std::ios::binary) {
@@ -415,6 +467,8 @@ std::size_t Session::attach(const std::string &endpoint_name, const std::string 
     std::unique_ptr<Sink> sink;
     if (kind == "stdout" && colon == std::string::npos) {
         sink = std::make_unique<StdoutSink>();
+    } else if (kind == "text" && colon == std::string::npos) {
+        sink = std::make_unique<TextSink>(endpoint_name);
     } else if (kind == "hex") {
         // hex or hex:GAP (a duration such as 500us); the default gap is 1 ms.
         const std::uint64_t gap = arg.empty() ? 1000000u : parse_duration_ns(arg);
@@ -459,7 +513,7 @@ std::size_t Session::attach(const std::string &endpoint_name, const std::string 
     } else {
         throw std::invalid_argument(
             "unknown sink '" + spec +
-            "' (use stdout, hex[:GAP], file:PATH, tcp:PORT, vcd:PATH or pcap:PATH[,ble])");
+            "' (use stdout, text, hex[:GAP], file:PATH, tcp:PORT, vcd:PATH or pcap:PATH[,ble])");
     }
     Sink *raw = sink.get();
     const std::size_t subscription =
