@@ -208,6 +208,9 @@ public:
     void set_adc_reference_mv(std::uint32_t millivolts) noexcept {
         adc_reference_mv_ = millivolts;
     }
+    // Supply voltage seen by the ADC's VBAT input (positive selector 0xf).
+    void set_supply_mv(std::uint32_t millivolts) noexcept { supply_mv_ = millivolts; }
+    std::uint32_t supply_mv() const noexcept { return supply_mv_; }
     void set_output_trace_enabled(bool enabled) noexcept {
         output_trace_enabled_ = enabled;
     }
@@ -286,6 +289,7 @@ private:
     I2cPadObserver i2c_pad_observer_;
     AdcInputProvider adc_input_provider_;
     std::uint32_t adc_reference_mv_{1175};
+    std::uint32_t supply_mv_{3300};
     std::uint64_t adc_next_sample_ns_{0};
     std::uint16_t dfifo2_write_pointer_{0};
 
@@ -325,6 +329,19 @@ private:
     std::uint64_t uart_tx_cycles_remaining_{0};
     bool uart_tx_done_{true};
     bool uart_rx_error_{false};
+    // UART DMA (SDK drv_uart on the 8258): channel 0 receives into a buffer as
+    // "u32 length + payload", closed by an idle timeout; channel 1 sends a
+    // "u32 length + payload" buffer.
+    std::deque<std::uint8_t> uart_dma_tx_queue_;
+    bool uart_dma_tx_active_{false};
+    std::uint32_t uart_dma_rx_count_{0};
+    std::uint64_t uart_dma_rx_idle_cycles_{0};
+    bool uart_rx_dma_enabled() const noexcept;
+    void uart_dma_receive(std::uint8_t value);
+    void finish_uart_dma_receive();
+    void start_uart_dma_transmit();
+    void refill_uart_tx_from_dma();
+    void update_dma_irq() noexcept;
 
     std::uint8_t read_register(std::uint32_t offset);
     void write_register(std::uint32_t offset, std::uint8_t value);

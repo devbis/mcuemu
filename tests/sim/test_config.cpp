@@ -1,6 +1,7 @@
 #include "../test_support.hpp"
 
 #include "sim/config.hpp"
+#include "sim/simulation.hpp"
 #include "sim/system.hpp"
 #include "sim/tlsr8258_mcu.hpp"
 
@@ -228,6 +229,117 @@ void test_uart_link_between_mcus() {
     CHECK((b.device().read8(tc32emu::Tlsr8258::UartBufferCount) & 0x0fu) == 1);
     CHECK(b.device().read8(tc32emu::Tlsr8258::UartData + 3) == 0x5a);
     CHECK(a.uart_take_tx(0).empty()); // the link consumed A's output
+}
+
+} // namespace tc32emu_tests
+
+namespace tc32emu_tests {
+
+void test_config_include() {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "simcore-include-tests";
+    fs::remove_all(dir);
+    fs::create_directories(dir / "devices");
+    auto write = [&](const char *name, const std::string &text) {
+        std::ofstream(dir / name) << text;
+    };
+    write("devices/dev.yaml",
+          "version: 1\n"
+          "params: {pos: [0, 0, 0], fw: a.bin, pin: PB1, tx: 0}\n"
+          "device:\n"
+          "  id: dev\n"
+          "  mcus:\n"
+          "    - {id: m, model: tlsr8258, firmware: \"${fw}\", radio: {air: air0, position: \"${pos}\", tx_power_dbm: \"${tx}\"}}\n"
+          "  nets:\n"
+          "    - {id: n, pins: [\"m.${pin}\"]}\n");
+    const std::string world =
+        "version: 1\nworld: {radio: [{id: air0, model: log_distance}]}\ndevices:\n"
+        "  - include: devices/dev.yaml\n    id: one\n    params: {pos: [1, 2, 3], tx: 4}\n"
+        "  - include: devices/dev.yaml\n    id: two\n    params: {pin: PB2, fw: b.bin}\n";
+    const sim::SystemConfig config = sim::parse_system_config(world, dir.string());
+    CHECK(config.devices.size() == 2);
+    CHECK(config.devices[0].id == "one" && config.devices[1].id == "two");
+    const sim::McuConfig &one = config.devices[0].mcus[0], &two = config.devices[1].mcus[0];
+    // Typed substitution (list and number), and paths relative to the included file.
+    CHECK(one.radio && one.radio->position == (std::array<double, 3>{1, 2, 3}));
+    CHECK(one.radio->tx_power_dbm == 4);
+    CHECK(two.radio->position == (std::array<double, 3>{0, 0, 0}));
+    CHECK(one.firmware == (dir / "devices/a.bin").lexically_normal().string());
+    CHECK(two.firmware == (dir / "devices/b.bin").lexically_normal().string());
+    CHECK(config.devices[0].nets[0].pins[0] == "m.PB1" && config.devices[1].nets[0].pins[0] == "m.PB2");
+
+    auto parse = [&](const std::string &text) {
+        return error_of([&] { sim::parse_system_config(text, dir.string()); });
+    };
+    const std::string head = "version: 1\nworld: {radio: [{id: air0}]}\ndevices:\n";
+    // Two copies without an id override collide.
+    CHECK(contains(parse(head + "  - {include: devices/dev.yaml}\n  - {include: devices/dev.yaml}\n"),
+                   "duplicate device id 'dev'"));
+    // Misspelled parameter, unknown key, missing file.
+    CHECK(contains(parse(head + "  - {include: devices/dev.yaml, params: {posn: [1,1,1]}}\n"),
+                   "unknown parameter 'posn'"));
+    CHECK(contains(parse(head + "  - {include: devices/dev.yaml, mcus: []}\n"), "unknown key 'mcus'"));
+    CHECK(contains(parse(head + "  - {include: devices/missing.yaml}\n"), "cannot open"));
+    // Errors inside the file name it and its own line.
+    write("devices/bad.yaml", "version: 1\ndevice:\n  id: d\n  mcus:\n    - {id: m, modl: t, firmware: f}\n");
+    const std::string bad = parse(head + "  - {include: devices/bad.yaml}\n");
+    CHECK(contains(bad, "devices/bad.yaml: line 5") && contains(bad, "unknown key 'modl'"));
+    write("devices/ref.yaml", "version: 1\ndevice:\n  id: d\n  mcus:\n    - {id: m, model: t, firmware: \"${nope}\"}\n");
+    CHECK(contains(parse(head + "  - {include: devices/ref.yaml}\n"), "unknown parameter 'nope'"));
+    write("devices/part.yaml",
+          "version: 1\nparams: {list: [1, 2]}\ndevice:\n  id: d\n  mcus:\n    - {id: m, model: t, firmware: \"x${list}\"}\n");
+    CHECK(contains(parse(head + "  - {include: devices/part.yaml}\n"), "not a scalar"));
+
+    // The hosting sandbox confines includes as it does every other file.
+    fs::create_directories(dir / "root");
+    std::ofstream(dir / "outside.yaml") << "version: 1\ndevice: {id: d, mcus: []}\n";
+    fs::create_symlink(dir / "outside.yaml", dir / "root" / "link.yaml");
+    sim::Simulation sandbox((dir / "root").string());
+    const std::string sandbox_head = "version: 1\nworld: {radio: [{id: air0}]}\ndevices:\n";
+    auto load = [&](const std::string &include) {
+        return error_of([&] { sandbox.load(sandbox_head + "  - {include: " + include + "}\n"); });
+    };
+    CHECK(contains(load("../outside.yaml"), "outside the allowed directory"));
+    CHECK(contains(load("link.yaml"), "outside the allowed directory"));
+    CHECK(contains(load("/etc/passwd"), "outside the allowed directory"));
+}
+
+} // namespace tc32emu_tests
+
+namespace tc32emu_tests {
+
+// The shipped examples must stay loadable: parse the world with its
+// insertions and check the wiring (firmware files are not needed to parse).
+void test_shipped_examples() {
+    const std::string dir = std::string(TC32EMU_SOURCE_DIR) + "/examples";
+    const sim::SystemConfig config = sim::load_system_config(dir + "/world.yaml");
+    CHECK(config.devices.size() == 3);
+    CHECK(config.devices[0].id == "coordinator");
+    const sim::DeviceConfig &thermostat = config.devices[1];
+    CHECK(thermostat.id == "thermostat" && thermostat.mcus.size() == 2);
+    CHECK(thermostat.mcus[0].model == "tlsr8258" && thermostat.mcus[1].model == "ca51f253l3");
+    CHECK(thermostat.mcus[0].images.size() == 2);
+    CHECK(thermostat.mcus[0].images[1].offset == 0x9ad0 && thermostat.mcus[0].images[1].skip == 0x1ad0);
+    CHECK(thermostat.links.size() == 1 && thermostat.links[0].a == "main.uart1");
+    CHECK(thermostat.mcus[0].radio && thermostat.mcus[0].radio->position[0] == 4);
+    const sim::DeviceConfig &plug = config.devices[2];
+    CHECK(plug.id == "plug" && plug.parts.size() == 4 && plug.nets.size() == 6);
+    CHECK(plug.mcus[0].radio && plug.mcus[0].radio->position[1] == 5);
+    bool found_power = false;
+    for (const sim::PartConfig &part : plug.parts)
+        if (part.id == "meter") {
+            found_power = part.params.at("power_w") == "60";
+            CHECK(part.script.find("bl0937.lua") != std::string::npos);
+        }
+    CHECK(found_power);
+    CHECK(config.events.size() == 4 && config.attach.size() == 2);
+
+    // Both devices are valid on their own too, with the defaults.
+    for (const char *file : {"/devices/tuya_plug.yaml", "/devices/tuya_thermostat.yaml"}) {
+        const std::string name = std::string("version: 1\nworld: {radio: [{id: air0}]}\ndevices:\n"
+                                             "  - include: devices") + (file + 8) + "\n";
+        CHECK(sim::parse_system_config(name, dir).devices.size() == 1);
+    }
 }
 
 } // namespace tc32emu_tests

@@ -41,13 +41,19 @@ const McuRegistry &McuRegistry::builtin() {
                         "' (use F512 or F1K)");
                 }
             }
-            return std::make_unique<Tlsr8258Mcu>(
+            auto mcu = std::make_unique<Tlsr8258Mcu>(
                 name, model, config.clock_hz.value_or(48000000));
+            if (config.supply_mv)
+                mcu->device().set_supply_mv(*config.supply_mv);
+            return mcu;
         });
         r.add("ca51f253l3", [](const McuConfig &config, const std::string &name) {
             if (config.variant)
                 throw std::invalid_argument(
                     "ca51f253l3 has no variants; remove 'variant'");
+            if (config.supply_mv)
+                throw std::invalid_argument(
+                    "ca51f253l3 does not model its supply; remove 'supply_mv'");
             return std::make_unique<Ca51F253L3Mcu>(
                 name, config.clock_hz.value_or(24000000));
         });
@@ -293,7 +299,7 @@ std::unique_ptr<System> build_system(const SystemConfig &config,
             std::unique_ptr<Mcu> mcu;
             try {
                 mcu = (*factory)(mcu_config, name);
-                mcu->load_firmware(mcu_config.firmware);
+                mcu->load_images(mcu_config.images);
             } catch (const std::exception &error) {
                 fail_at(mcu_config.line, "mcu '" + name + "': " + error.what());
             }

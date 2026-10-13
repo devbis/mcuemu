@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 
 namespace sim {
 
@@ -90,7 +92,8 @@ void Simulation::check_config(const SystemConfig &config) const {
         for (const AttachConfig &attach : device.attach)
             check_attach(attach);
         for (const McuConfig &mcu : device.mcus)
-            (void)confine_path(mcu.firmware);
+            for (const FirmwareImage &image : mcu.images)
+                (void)confine_path(image.file);
         for (const PartConfig &part : device.parts)
             if (!part.script.empty())
                 (void)confine_path(part.script);
@@ -102,7 +105,17 @@ void Simulation::load(const std::string &yaml, const std::string &base_dir) {
     if (yaml.size() > MaxYaml)
         throw SimulationError("the description is larger than 1 MiB");
     const std::string base = confine_path(base_dir.empty() ? "." : base_dir);
-    SystemConfig config = parse_system_config(yaml, base);
+    // Included device files are confined like every other file.
+    const IncludeReader reader = [this](const std::string &path) {
+        const std::string confined = confine_path(path);
+        std::ifstream input(confined, std::ios::binary);
+        if (!input)
+            throw SimulationError("cannot open included file '" + path + "'");
+        std::ostringstream text;
+        text << input.rdbuf();
+        return text.str();
+    };
+    SystemConfig config = parse_system_config(yaml, base, reader);
     // Sink paths in the YAML are relative to the root, not to the base dir.
     for (AttachConfig &attach : config.attach)
         attach.sink = confine_sink(attach.sink);

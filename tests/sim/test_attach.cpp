@@ -111,7 +111,7 @@ void test_uart_endpoint() {
     const auto ca51 = build("version: 1\ndevices:\n  - id: d\n    mcus:\n"
                             "      - {id: m, model: ca51f253l3, firmware: " + idle() + "}\n");
     CHECK(contains(error_of([&] {
-                       ca51->world().endpoints().at("d.m.uart1").set(sim::Value{std::string("a")});
+                       ca51->world().endpoints().at("d.m.uart0").set(sim::Value{std::string("a")});
                    }),
                    "cannot receive"));
     CHECK(contains(error_of([&] { uart.set(sim::Value{3.5}); }), "bytes or a string"));

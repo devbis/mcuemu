@@ -19,6 +19,17 @@ enum class McuState {
     Fault,
 };
 
+// One piece of a flash image: `size` bytes of a file (all of it when 0),
+// starting `skip` bytes in, placed at `offset` in the flash. Slicing one file
+// into several pieces lets an image linked for a bootloader layout be placed
+// the way the chip sees it.
+struct FirmwareImage {
+    std::string file;
+    std::uint32_t offset{0};
+    std::uint32_t skip{0};
+    std::uint32_t size{0};
+};
+
 // Chip-independent view of one emulated MCU as seen by the simulation world.
 // Implementations wrap a concrete chip model (CPU core + peripherals).
 class Mcu {
@@ -33,6 +44,14 @@ public:
     virtual std::string_view model() const = 0;
 
     virtual void load_firmware(const std::string &path) = 0;
+    // Loads several images (e.g. a bootloader at 0 and the application at
+    // 0x8000). The default accepts only the single image at offset 0.
+    virtual void load_images(const std::vector<FirmwareImage> &images) {
+        if (images.size() != 1 || images[0].offset != 0)
+            throw std::invalid_argument(std::string(model()) +
+                                        " loads a single firmware image at offset 0");
+        load_firmware(images[0].file);
+    }
     virtual void reset() = 0;
 
     // Power-on delay: the MCU's clock starts at `offset_ns` of world time.

@@ -30,7 +30,12 @@ The CA51F253L3 shell currently provides:
 Most SFR bytes currently behave as storage. UART0 transmit and PWM updates
 complete immediately; UART1 uses the documented-by-firmware `FOSC/32` reload
 formula for its 8N1 frame duration. This timing is driven by emulated core
-cycles, not calibrated wall time. UART receive, other interrupt sources, other
+cycles, not calibrated wall time. UART1 receive is modeled: bytes pushed by the
+host (a UART link in a system) queue up to 16 deep and are presented one at a
+time through `S1BUF` with `RI1` set, raising the UART1 interrupt (vector
+`0x0033`) when `EA` and `ES1` allow; writing `RI1` back (write-one-to-clear)
+brings the next byte. There is no bit-level timing for reception: the sender's
+byte rate is what spaces the bytes. UART0 receive, other interrupt sources, other
 timer modes, GPIO electrical behavior, and sleep are not modeled yet. The CPU
 backend accepts a part-specific interrupt vector from its SoC wrapper while
 retaining the standard Timer0 vector. Timer0

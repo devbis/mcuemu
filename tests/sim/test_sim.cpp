@@ -1,6 +1,9 @@
 #include "../test_support.hpp"
 
 #include "sim/ca51f253l3_mcu.hpp"
+
+#include <filesystem>
+#include <fstream>
 #include "sim/endpoint.hpp"
 #include "sim/net.hpp"
 #include "sim/scheduler.hpp"
@@ -279,6 +282,40 @@ void test_ca51_adapter_basics() {
     CHECK(mcu.uart_take_tx(1).empty());
 }
 
+void test_ca51_uart1_receive() {
+    // LJMP main / vector 0x33: LJMP isr / main: IE=EA|ES1, spin /
+    // isr: store S1BUF in IDATA 0x30, count in 0x31, clear RI1 (write-one), RETI.
+    std::string image(0x210, '\0');
+    auto put = [&](std::size_t at, std::initializer_list<int> bytes) {
+        for (int byte : bytes)
+            image[at++] = static_cast<char>(byte);
+    };
+    put(0x0000, {0x02, 0x01, 0x00});
+    put(0x0033, {0x02, 0x02, 0x00});
+    put(0x0100, {0x75, 0xa8, 0xc0, 0x80, 0xfe});
+    put(0x0200, {0xe5, 0x9b, 0xf5, 0x30, 0x05, 0x31, 0x75, 0x9a, 0x01, 0x32});
+    const auto path = std::filesystem::temp_directory_path() / "simcore-ca51-rx.bin";
+    std::ofstream(path, std::ios::binary) << image;
+
+    sim::Ca51F253L3Mcu mcu("c");
+    mcu.load_firmware(path.string());
+    CHECK(mcu.run_until(20000) == sim::McuState::Running);
+    CHECK(!mcu.uart_can_receive(0) && mcu.uart_can_receive(1));
+    CHECK(!mcu.uart_rx(0, 1)); // UART0 is transmit-only
+    CHECK(mcu.uart_rx(1, 0x42));
+    mcu.run_until(60000);
+    CHECK(mcu.device().read_idata(0x30) == 0x42 && mcu.device().read_idata(0x31) == 1);
+    // Several bytes at once queue up and arrive one by one, in order.
+    CHECK(mcu.uart_rx(1, 1) && mcu.uart_rx(1, 2) && mcu.uart_rx(1, 3));
+    mcu.run_until(200000);
+    CHECK(mcu.device().read_idata(0x30) == 3 && mcu.device().read_idata(0x31) == 4);
+    // The queue is bounded.
+    int accepted = 0;
+    for (int i = 0; i < 100; ++i)
+        accepted += mcu.uart_rx(1, 9) ? 1 : 0;
+    CHECK(accepted >= 16 && accepted < 100);
+}
+
 } // namespace
 
 namespace tc32emu_tests {
@@ -312,6 +349,9 @@ void test_rpc_sandbox();
 void test_server_over_websocket();
 void test_server_security_options();
 void test_rpc_realtime();
+void test_config_include();
+void test_shipped_examples();
+void test_bl0937_example_part();
 void test_ds18b20_search_two_devices();
 void test_ntc_divider();
 void test_i2c_register_device();
@@ -353,6 +393,9 @@ int main() {
     test_server_over_websocket();
     test_server_security_options();
     test_rpc_realtime();
+    test_config_include();
+    test_shipped_examples();
+    test_bl0937_example_part();
     test_ds18b20_search_two_devices();
     test_ntc_divider();
     test_i2c_register_device();
@@ -370,6 +413,7 @@ int main() {
     test_start_offset_delays_mcu();
     test_world_jumps_when_nothing_runs();
     test_ca51_adapter_basics();
+    test_ca51_uart1_receive();
     if (tc32emu_tests::failures) {
         std::cerr << tc32emu_tests::failures << " sim check(s) failed\n";
         return 1;

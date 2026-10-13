@@ -30,6 +30,13 @@ public:
     void connect_pin(std::string_view pad, Pin &pin) override;
     // UART0/UART1 transmit output is captured; receive is not modeled yet.
     unsigned uart_count() const override { return 2; }
+    // UART1 (the link to a companion module) receives; UART0 is transmit-only.
+    bool uart_can_receive(unsigned index) const override {
+        return index == 1 && device_.uart1_can_receive();
+    }
+    bool uart_rx(unsigned index, std::uint8_t byte) override {
+        return index == 1 && device_.uart1_receive(byte);
+    }
     std::vector<std::uint8_t> uart_take_tx(unsigned index) override;
 
     mcs51emu::Ca51F253L3 &device() noexcept { return device_; }

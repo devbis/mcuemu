@@ -28,21 +28,40 @@ Tlsr8258Mcu::Tlsr8258Mcu(std::string name, tc32emu::Tlsr8258Model model,
         [this](const tc32emu::I2cPads &pads, bool sda_low, bool scl_low) {
             on_i2c_pads(pads, sda_low, scl_low);
         });
-    // The ADC reads the voltage of whatever net is wired to the pad.
+    // The ADC reads the voltage of whatever net is wired to the pad. A pad the
+    // chip itself drives sits at the rail or at ground: the SDK's VBAT mode
+    // measures the supply that way, through a pad driven high.
     device_.set_adc_input_provider([this](unsigned port, unsigned bit) {
+        const std::uint8_t mask = static_cast<std::uint8_t>(1u << bit);
+        if (device_.gpio_is_gpio(port, bit) && (device_.gpio_oen(port) & mask) == 0)
+            return (device_.gpio_output(port) & mask) ? device_.supply_mv() : 0u;
         Pin *pin = pins_[port][bit];
         return pin ? pin->net().millivolts() : 0u;
     });
 }
 
 void Tlsr8258Mcu::load_firmware(const std::string &path) {
-    std::ifstream input(path, std::ios::binary);
-    if (!input)
-        throw std::runtime_error("cannot open firmware image: " + path);
-    const std::vector<std::uint8_t> image(
-        (std::istreambuf_iterator<char>(input)),
-        std::istreambuf_iterator<char>());
-    device_.load_firmware(image);
+    load_images({{path, 0}});
+}
+
+void Tlsr8258Mcu::load_images(const std::vector<FirmwareImage> &images) {
+    for (const FirmwareImage &entry : images) {
+        std::ifstream input(entry.file, std::ios::binary);
+        if (!input)
+            throw std::runtime_error("cannot open firmware image: " + entry.file);
+        std::vector<std::uint8_t> image(
+            (std::istreambuf_iterator<char>(input)),
+            std::istreambuf_iterator<char>());
+        if (entry.skip > image.size())
+            throw std::runtime_error("firmware image " + entry.file + " is shorter than 'from'");
+        image.erase(image.begin(), image.begin() + entry.skip);
+        if (entry.size != 0) {
+            if (entry.size > image.size())
+                throw std::runtime_error("firmware image " + entry.file + " is shorter than 'from' + 'size'");
+            image.resize(entry.size);
+        }
+        device_.load_firmware(image, entry.offset);
+    }
     cpu_.sync_flash();
     cpu_.reset();
 }

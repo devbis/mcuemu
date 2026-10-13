@@ -254,6 +254,8 @@ void Ca51F253L3::reset() {
     uart1_tx_active_ = false;
     uart1_tx_waiting_.clear();
     uart1_irq_requested_ = false;
+    uart1_rx_queue_.clear();
+    uart1_rx_byte_ = 0;
 
     // 8051-compatible reset values. CA51-specific SFR reset behavior and
     // peripherals are added as their register documentation is modeled.
@@ -367,9 +369,10 @@ std::uint64_t Ca51F253L3::sfr_mmio_read(uc_struct *opaque_uc,
     std::uint64_t value = 0;
     for (unsigned i = 0; i < size; ++i) {
         const std::uint64_t address = offset + i;
-        const std::uint8_t byte = address < self->sfr_.size()
-                                      ? self->sfr_[address]
-                                      : 0xff;
+        // S1BUF reads the receive buffer; writes go to the transmitter.
+        const std::uint8_t byte = address == SfrUart1Buffer ? self->uart1_rx_byte_
+                                  : address < self->sfr_.size() ? self->sfr_[address]
+                                                                : 0xff;
         value |= static_cast<std::uint64_t>(byte) << (i * 8u);
     }
     return value;
@@ -408,6 +411,7 @@ void Ca51F253L3::sfr_mmio_write(uc_struct *opaque_uc, std::uint64_t offset,
             self->rebase_timer0();
         }
     }
+    self->deliver_uart1_rx(); // RI1 may just have been acknowledged
     self->update_uart1_interrupt(opaque_uc);
     const bool timer0_active =
         (self->sfr_[SfrTimer0Control] & Timer0Run) != 0 &&
@@ -480,6 +484,25 @@ void Ca51F253L3::advance_uart1(uc_struct *opaque_uc) noexcept {
         uart1_tx_cycles_remaining_ -= elapsed;
     if (completed)
         update_uart1_interrupt(opaque_uc);
+}
+
+bool Ca51F253L3::uart1_receive(std::uint8_t byte) {
+    if (!uart1_can_receive())
+        return false;
+    uart1_rx_queue_.push_back(byte);
+    deliver_uart1_rx();
+    return true;
+}
+
+void Ca51F253L3::deliver_uart1_rx() noexcept {
+    constexpr std::uint8_t ReceiveInterruptFlag = 0x01;
+    if (uart1_rx_queue_.empty() || (sfr_[SfrUart1Control] & ReceiveInterruptFlag))
+        return;
+    uart1_rx_byte_ = uart1_rx_queue_.front();
+    uart1_rx_queue_.pop_front();
+    sfr_[SfrUart1Control] |= ReceiveInterruptFlag;
+    if (uc_)
+        update_uart1_interrupt(uc_);
 }
 
 void Ca51F253L3::update_uart1_interrupt(uc_struct *opaque_uc) noexcept {

@@ -11,8 +11,9 @@ parts:
     params: { temperature_c: 23.5 }
 ```
 
-`examples/parts/ds18b20.lua` (1-Wire) and `examples/parts/sht3x.lua` (I2C)
-are complete references. The DS18B20 script passes the same tests as the
+`examples/parts/ds18b20.lua` (1-Wire), `examples/parts/sht3x.lua` (I2C) and
+`examples/parts/bl0937.lua` (an energy meter that reports through CF/CF1 pulse
+trains and a SEL input) are complete references. The DS18B20 script passes the same tests as the
 native C++ `ds18b20` part. Python scripts are planned and use the same API.
 
 The script runs once at load time and registers what it needs; afterwards the

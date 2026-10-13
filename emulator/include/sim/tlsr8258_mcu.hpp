@@ -22,6 +22,7 @@ public:
 
     std::string_view model() const override { return "tlsr8258"; }
     void load_firmware(const std::string &path) override;
+    void load_images(const std::vector<FirmwareImage> &images) override;
     void reset() override;
     void set_start_offset(std::uint64_t offset_ns) override;
     std::uint64_t time_ns() const override { return device_.network_time_ns(); }

@@ -57,8 +57,11 @@ std::uint32_t Tlsr8258::adc_channel_mv(unsigned selector) const {
 
 std::uint16_t Tlsr8258::adc_sample() const {
     const std::uint8_t input = analog_registers_[AnalogMiscInput];
-    const double diff_mv = static_cast<double>(adc_channel_mv(input >> 4)) -
-                           static_cast<double>(adc_channel_mv(input & 0x0f));
+    // Selector 0xf is VBAT on the positive input and GND on the negative one.
+    const unsigned positive = input >> 4, negative = input & 0x0f;
+    const double positive_mv = positive == 0x0f ? supply_mv_ : adc_channel_mv(positive);
+    const double negative_mv = negative == 0x0f ? 0u : adc_channel_mv(negative);
+    const double diff_mv = positive_mv - negative_mv;
     const unsigned prescale_shift = analog_registers_[AnalogInputScale] >> 6;
     const unsigned reference = (analog_registers_[AnalogVref] >> 4) & 3u;
     const double vref_mv = reference == 0   ? 600.0

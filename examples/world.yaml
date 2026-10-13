@@ -1,0 +1,53 @@
+# A small Zigbee network built from separately described devices: a
+# coordinator, a thermostat (two chips) and a smart plug with energy
+# monitoring. Each device lives in its own file under devices/ and is inserted
+# with `include:`; `params:` override what the file leaves open (position,
+# firmware paths, pins, ...).
+#
+#   tc32-emu sim examples/world.yaml --for 10s
+#   tc32-emu sim examples/world.yaml --list-endpoints --for 1ms
+#
+# The firmware images are not part of the repository; see examples/README.md.
+version: 1
+
+world:
+  seed: 1
+  duration: 10s
+  radio:
+    - id: air0
+      model: log_distance
+      reference_loss_db: 40
+      path_loss_exponent: 2.5
+      shadowing_sigma_db: 2
+
+devices:
+  - id: coordinator
+    mcus:
+      - id: zb
+        model: tlsr8258
+        variant: F1K
+        firmware: ../firmware/samplegw_tb03f.bin
+        radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+  - include: devices/tuya_thermostat.yaml
+    id: thermostat
+    params:
+      position: [4, 2, 1]
+
+  - include: devices/tuya_plug.yaml
+    id: plug
+    params:
+      position: [-3, 5, 0.5]
+      power_w: 60              # a lamp on the plug
+
+attach:
+  # The thermostat's own file logs the wire between its two chips.
+  - { endpoint: plug.cf, sink: "vcd:plug-energy.vcd" }
+  - { endpoint: air0, sink: "pcap:air.pcap" }
+
+scenario:
+  events:
+    - { at: 3s, endpoint: plug.meter.power_w, set: 1500 }   # a kettle starts
+    - { at: 6s, endpoint: plug.key.pressed, set: true }     # someone presses the button
+    - { at: 6200ms, endpoint: plug.key.pressed, set: false }
+    - { at: 8s, endpoint: plug.meter.power_w, set: 0 }

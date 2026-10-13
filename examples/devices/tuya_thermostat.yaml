@@ -1,0 +1,52 @@
+# Tuya-style Zigbee thermostat: a CA51F253L3 main board (display, keys, relay,
+# NTC sensors) and a ZT3L Zigbee module (TLSR8258). They talk over a UART with
+# the "serial v2" framing: 66 BB | SEQ | FLAGS | STATUS | CMD | DLC | ... | CRC-8.
+#
+# Firmware: the thermostat project builds the ZT3L application and the
+# CA51F253L3 image; defaults point at copies in this repository's firmware/
+# directory. The ZT3L application is linked to run behind a bootloader (flash
+# 0x8000): the bootloader copies its vectors and RAM code (the first
+# zb_ramcode_size bytes) to RAM, and the rest executes in place at +0x8000.
+# The emulator has no bootloader, so the two pieces are placed where the chip
+# sees them. Both values come from the application's linker map (`.vectors` +
+# `.ram_code` size, and `.text` VMA).
+# The CA51F253L3 model has no GPIO yet, so the display, keys, relay and NTC
+# inputs are not modeled; what is observable is the Zigbee side and the UART
+# traffic between the two chips.
+version: 1
+
+params:
+  zb_firmware: ../../firmware/osrctherm_r02_zrd.bin
+  zb_ramcode_size: 0x1ad0
+  zb_text_offset: 0x9ad0
+  main_firmware: ../../firmware/osrctherm_r02_v1.02_CA51F253L3.bin
+  air: air0                     # radio medium defined in the world
+  position: [0, 0, 0]           # meters
+  tx_power_dbm: 4
+  uart_latency: 20us            # board trace + driver delay
+  main_tx_log: "file:thermostat-main-tx.log"   # bytes CA51 -> ZT3L
+  zb_tx_log: "file:thermostat-zb-tx.log"       # bytes ZT3L -> CA51
+
+device:
+  id: thermostat
+  mcus:
+    - id: zb
+      model: tlsr8258
+      variant: F1K                  # the ZT3L module carries 1 MiB of flash
+      firmware:
+        - { file: "${zb_firmware}", offset: 0, size: "${zb_ramcode_size}" }
+        - { file: "${zb_firmware}", offset: "${zb_text_offset}", from: "${zb_ramcode_size}" }
+      radio:
+        air: "${air}"
+        position: "${position}"
+        tx_power_dbm: "${tx_power_dbm}"
+        protocols: [zigbee]
+    - id: main
+      model: ca51f253l3
+      clock_hz: 24MHz
+      firmware: "${main_firmware}"
+  links:
+    - { type: uart, a: main.uart1, b: zb.uart0, latency: "${uart_latency}" }
+  attach:
+    - { endpoint: main.uart1, sink: "${main_tx_log}" }
+    - { endpoint: zb.uart0, sink: "${zb_tx_log}" }

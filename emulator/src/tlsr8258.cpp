@@ -417,6 +417,10 @@ void Tlsr8258::reset_volatile_state_after_deep_sleep() {
     uart_tx_cycles_remaining_ = 0;
     uart_tx_done_ = true;
     uart_rx_error_ = false;
+    uart_dma_tx_queue_.clear();
+    uart_dma_tx_active_ = false;
+    uart_dma_rx_count_ = 0;
+    uart_dma_rx_idle_cycles_ = 0;
     aes_cycles_remaining_ = 0;
     aes_input_word_ = 0;
     aes_input_word_count_ = 0;
@@ -586,6 +590,7 @@ void Tlsr8258::tick(std::uint32_t cycles) {
     }
 
     std::uint64_t remaining = cycles;
+    refill_uart_tx_from_dma();
     while (!uart_tx_fifo_.empty()) {
         start_uart_transmit();
         if (remaining < uart_tx_cycles_remaining_) {
@@ -598,8 +603,16 @@ void Tlsr8258::tick(std::uint32_t cycles) {
         uart_tx_fifo_.pop_front();
         uart_transmitted_.push_back(sent);
         uart_tx_cycles_remaining_ = 0;
-        if (uart_tx_fifo_.empty())
+        refill_uart_tx_from_dma();
+        if (uart_tx_fifo_.empty()) {
             uart_tx_done_ = true;
+            if (uart_dma_tx_active_) { // the DMA transfer has drained
+                uart_dma_tx_active_ = false;
+                registers_[0xc24] &= static_cast<std::uint8_t>(~0x02u);
+                registers_[0xc26] |= 0x02u;
+                update_dma_irq();
+            }
+        }
         if ((registers_[0x97] & 0x80u) != 0)
             inject_uart_rx(sent);
         if (remaining == 0)
@@ -607,6 +620,12 @@ void Tlsr8258::tick(std::uint32_t cycles) {
     }
     if (uart_tx_fifo_.empty())
         uart_tx_cycles_remaining_ = 0;
+    if (uart_dma_rx_idle_cycles_ != 0) {
+        if (cycles >= uart_dma_rx_idle_cycles_)
+            finish_uart_dma_receive();
+        else
+            uart_dma_rx_idle_cycles_ -= cycles;
+    }
     update_uart_status();
     poll_radio();
 }
@@ -823,7 +842,84 @@ void Tlsr8258::update_radio_irq() {
         registers_[0x649] &= static_cast<std::uint8_t>(~zb_irq_bit);
 }
 
+bool Tlsr8258::uart_rx_dma_enabled() const noexcept {
+    // ctrl0 bit 4 turns the receiver's DMA on, DMA channel 0 must be enabled
+    // and have a buffer of at least one 16-byte unit.
+    return (registers_[0x96] & 0x10u) != 0 && (registers_[0xc20] & 0x01u) != 0 &&
+           registers_[0xc02] != 0;
+}
+
+void Tlsr8258::uart_dma_receive(std::uint8_t value) {
+    const std::uint32_t address = dma_address(0x0c00, 0x0c40);
+    const std::uint32_t capacity = static_cast<std::uint32_t>(registers_[0xc02]) * 16u;
+    if (capacity <= 4u || uart_dma_rx_count_ + 4u >= capacity) {
+        uart_rx_error_ = true; // no room: the byte is lost
+        update_uart_status();
+        return;
+    }
+    write8(address + 4u + uart_dma_rx_count_, value);
+    ++uart_dma_rx_count_;
+    // A packet ends after the line has been idle for the receive timeout:
+    // 12 bit times, scaled by the multiplier in 0x9b[1:0].
+    const std::uint64_t bit_cycles = std::max<std::uint64_t>(1u, uart_frame_cycles() / 10u);
+    uart_dma_rx_idle_cycles_ = 12u * bit_cycles * ((registers_[0x9b] & 0x03u) + 1u);
+    if (uart_dma_rx_count_ + 4u >= capacity)
+        finish_uart_dma_receive();
+}
+
+void Tlsr8258::finish_uart_dma_receive() {
+    const std::uint32_t address = dma_address(0x0c00, 0x0c40);
+    for (unsigned i = 0; i != 4; ++i)
+        write8(address + i, static_cast<std::uint8_t>(uart_dma_rx_count_ >> (8u * i)));
+    uart_dma_rx_count_ = 0;
+    uart_dma_rx_idle_cycles_ = 0;
+    registers_[0xc26] |= 0x01u; // UART RX DMA done
+    update_dma_irq();
+}
+
+void Tlsr8258::start_uart_dma_transmit() {
+    const std::uint32_t address = dma_address(0x0c04, 0x0c41);
+    std::uint32_t length = 0;
+    for (unsigned i = 0; i != 4; ++i)
+        length |= static_cast<std::uint32_t>(read8(address + i)) << (8u * i);
+    constexpr std::uint32_t MaxDmaTransfer = 4096;
+    length = std::min(length, MaxDmaTransfer);
+    for (std::uint32_t i = 0; i != length; ++i)
+        uart_dma_tx_queue_.push_back(read8(address + 4u + i));
+    uart_dma_tx_active_ = true;
+    uart_tx_done_ = length == 0 && uart_tx_fifo_.empty();
+    if (length == 0) { // nothing to send: complete at once
+        uart_dma_tx_active_ = false;
+        registers_[0xc24] &= static_cast<std::uint8_t>(~0x02u);
+        registers_[0xc26] |= 0x02u;
+        update_dma_irq();
+    }
+    refill_uart_tx_from_dma();
+    start_uart_transmit();
+}
+
+void Tlsr8258::refill_uart_tx_from_dma() {
+    while (!uart_dma_tx_queue_.empty() && uart_tx_fifo_.size() < uart_fifo_capacity) {
+        uart_tx_fifo_.push_back(uart_dma_tx_queue_.front());
+        uart_dma_tx_queue_.pop_front();
+    }
+}
+
+void Tlsr8258::update_dma_irq() noexcept {
+    // The DMA interrupt (FLD_IRQ_DMA_EN, bit 4 of the source register) mirrors
+    // the channel status gated by the channel interrupt mask.
+    constexpr std::uint8_t dma_irq_bit = 1u << 4;
+    if ((registers_[0xc26] & registers_[0xc21]) != 0)
+        registers_[0x648] |= dma_irq_bit;
+    else
+        registers_[0x648] &= static_cast<std::uint8_t>(~dma_irq_bit);
+}
+
 bool Tlsr8258::inject_uart_rx(std::uint8_t value) {
+    if (uart_rx_dma_enabled()) {
+        uart_dma_receive(value);
+        return true;
+    }
     if (uart_rx_fifo_.size() == uart_fifo_capacity) {
         uart_rx_error_ = true;
         update_uart_status();
@@ -989,6 +1085,7 @@ void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
         // IRQ source bits are write-one-to-clear; in particular Zephyr's
         // system timer ISR clears IRQ 20 with a 32-bit write at 0x800648.
         registers_[offset] &= static_cast<std::uint8_t>(~value);
+        update_dma_irq(); // level sources stay asserted while pending
         return;
     }
     if (offset >= System32kTickCompare - RegisterBase &&
@@ -1037,9 +1134,22 @@ void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
     }
     if (offset == 0x0c24) {
         const bool tx_ready_before = (registers_[offset] & 0x08u) != 0;
+        const bool uart_tx_before = (registers_[offset] & 0x02u) != 0;
         registers_[offset] = value;
         if (!tx_ready_before && (value & 0x08u) != 0)
             start_radio_transmit();
+        if (!uart_tx_before && (value & 0x02u) != 0)
+            start_uart_dma_transmit();
+        return;
+    }
+    if (offset == 0x0c26) { // DMA interrupt status: write one to clear
+        registers_[offset] &= static_cast<std::uint8_t>(~value);
+        update_dma_irq();
+        return;
+    }
+    if (offset == 0x0c21) {
+        registers_[offset] = value;
+        update_dma_irq();
         return;
     }
     if (offset == 0x0f20 || offset == 0x0f21) {

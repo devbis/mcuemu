@@ -1,10 +1,12 @@
 #pragma once
 
+#include "sim/mcu.hpp"
 #include "sim/net.hpp"
 
 #include <array>
 #include <cstdint>
 #include <map>
+#include <functional>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -62,7 +64,11 @@ struct McuConfig {
     std::string model;
     std::optional<std::string> variant;
     std::string firmware; // resolved against the YAML file's directory
+    // Every image to load; `firmware: path` gives one image at offset 0, a
+    // list of {file, offset} places several (bootloader + application).
+    std::vector<FirmwareImage> images;
     std::optional<std::uint32_t> clock_hz;
+    std::optional<std::uint32_t> supply_mv; // supply voltage (default 3300)
     std::uint64_t start_at_ns{0};
     std::optional<RadioAttachConfig> radio;
     std::optional<RttConfig> rtt;
@@ -143,8 +149,16 @@ std::uint32_t parse_frequency_hz(const std::string &text);
 // paths are resolved against `base_dir`. Keys that belong to planned but not
 // yet implemented features (parts, radio, attach, script) are rejected with a
 // clear message rather than silently ignored.
+//
+// A `devices` entry may be `{include: file.yaml, id?, params?}`: the file holds
+// one `device:` (optionally with default `params:`); `${name}` scalars inside
+// it are replaced by the parameters. `reader` returns the text of an included
+// file given its resolved path (default: read from disk); a hosting service
+// uses it to confine the files that may be read.
+using IncludeReader = std::function<std::string(const std::string &path)>;
 SystemConfig parse_system_config(const std::string &yaml_text,
-                                 const std::string &base_dir = ".");
+                                 const std::string &base_dir = ".",
+                                 const IncludeReader &reader = {});
 SystemConfig load_system_config(const std::string &path);
 
 } // namespace sim

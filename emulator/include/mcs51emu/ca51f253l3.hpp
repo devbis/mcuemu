@@ -50,6 +50,12 @@ public:
     void write_sfr(std::uint8_t address, std::uint8_t value);
     const std::string &uart0_output() const noexcept { return uart0_output_; }
     const std::string &uart1_output() const noexcept { return uart1_output_; }
+    // UART1 receive: bytes queue up (up to Uart1RxQueueSize) and are presented
+    // one at a time through S1BUF with RI1 set, like the single-byte receive
+    // buffer of the chip. Returns false when the queue is full.
+    static constexpr std::size_t Uart1RxQueueSize = 16;
+    bool uart1_receive(std::uint8_t byte);
+    bool uart1_can_receive() const noexcept { return uart1_rx_queue_.size() < Uart1RxQueueSize; }
     void set_trace(std::ostream *output) noexcept { trace_output_ = output; }
 
 private:
@@ -73,6 +79,7 @@ private:
     void advance_uart1(uc_struct *uc) noexcept;
     std::uint64_t uart1_frame_cycles() const noexcept;
     void update_uart1_interrupt(uc_struct *uc) noexcept;
+    void deliver_uart1_rx() noexcept;
 
     uc_struct *uc_{};
     std::size_t code_hook_{};
@@ -91,6 +98,8 @@ private:
     bool uart1_tx_active_{};
     std::deque<std::uint8_t> uart1_tx_waiting_;
     bool uart1_irq_requested_{};
+    std::deque<std::uint8_t> uart1_rx_queue_;
+    std::uint8_t uart1_rx_byte_{};
     std::string uart0_output_;
     std::string uart1_output_;
     std::ostream *trace_output_{};

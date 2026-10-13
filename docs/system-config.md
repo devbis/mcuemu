@@ -23,8 +23,9 @@ devices:
       - id: main
         model: tlsr8258    # tlsr8258 | ca51f253l3
         variant: F1K       # tlsr8258 only: F512 (default) | F1K
-        firmware: fw/a.bin # relative to this file
+        firmware: fw/a.bin # relative to this file; or a list of flash pieces, see below
         clock_hz: 48MHz    # 48000000 | 48MHz | 32kHz
+        supply_mv: 3300    # tlsr8258 only: supply seen by the ADC's VBAT input (default 3300)
         start_at: 100us    # power-on delay on the world timeline
         rtt: { address: 0x20000100 }   # optional: SEGGER RTT control block
         radio:             # optional: attach to a medium
@@ -62,6 +63,60 @@ scenario:
 ```
 
 Durations: `ns`, `us`, `ms`, `s` (fractions allowed, `0` is accepted bare).
+
+## Firmware layout
+
+`firmware:` is one file loaded at flash address 0. For an image that is linked
+for another layout (for instance an application that normally runs behind a
+bootloader, so that part of it lives at an offset) give a list of pieces:
+
+```yaml
+firmware:
+  - { file: app.bin, offset: 0, size: 0x1ad0 }                  # vectors + RAM code
+  - { file: app.bin, offset: 0x9ad0, from: 0x1ad0 }             # the rest, at +0x8000
+```
+
+`offset` is where the piece goes in the flash, `from` the byte offset in the
+file where it starts (default 0) and `size` its length (default: the rest of
+the file); numbers may be decimal or `0x` hex. Only `tlsr8258` accepts more
+than a single image at offset 0.
+
+## Inserting devices from files
+
+A `devices` entry may be an insertion instead of an inline device:
+
+```yaml
+devices:
+  - include: devices/plug.yaml     # relative to this file
+    id: plug2                      # optional: replaces the device id
+    params: { position: [3, 0, 0], power_w: 60 }
+```
+
+The included file is a document of its own:
+
+```yaml
+version: 1
+params: { position: [0, 0, 0], power_w: 0 }   # defaults for ${...} in the device
+device:
+  id: plug
+  mcus:
+    - { id: zb, model: tlsr8258, firmware: fw/plug.bin,
+        radio: { air: air0, position: "${position}" } }
+  parts:
+    - { id: meter, type: script, script: bl0937.lua, pins: {cf: cf, cf1: cf1},
+        params: { power_w: "${power_w}" } }
+```
+
+A scalar that is exactly `${name}` takes the parameter's whole value (lists
+and numbers keep their type); `${name}` inside a longer string is spliced in
+as text. Every parameter used must be declared in the file's `params:`, and the
+inserting entry may only set declared parameters. Paths in the included file
+(`firmware`, `script`) are relative to that file, and the same file can be
+inserted several times under different ids. Errors inside it carry the file
+name and its line (`devices/plug.yaml: line 7: ...`); a duplicate device id is
+reported at the insertion. Insertions do not nest. When the system is loaded
+through the control API, included files are confined to the server's `--root`
+like every other file. `examples/` has a world built this way.
 
 ## Parts
 

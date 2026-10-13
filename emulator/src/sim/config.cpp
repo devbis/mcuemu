@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
+#include <map>
 #include <set>
 #include <sstream>
 
@@ -14,8 +15,19 @@ namespace sim {
 
 namespace {
 
+// Name of the included file being parsed, for error messages.
+thread_local std::string current_file;
+
+struct FileScope {
+    std::string saved;
+    explicit FileScope(const std::string &file) : saved(current_file) { current_file = file; }
+    ~FileScope() { current_file = saved; }
+};
+
 [[noreturn]] void fail(const YAML::Node &node, const std::string &message) {
     std::ostringstream out;
+    if (!current_file.empty())
+        out << current_file << ": ";
     if (node.Mark().line >= 0)
         out << "line " << node.Mark().line + 1 << ": ";
     out << message;
@@ -342,8 +354,8 @@ PartConfig parse_part(const YAML::Node &node, const std::string &base_dir) {
 McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
     require_map(node, "mcu");
     check_keys(node, "mcu",
-               {"id", "model", "variant", "firmware", "clock_hz", "start_at",
-                "radio", "rtt"});
+               {"id", "model", "variant", "firmware", "clock_hz", "supply_mv",
+                "start_at", "radio", "rtt"});
     McuConfig mcu;
     mcu.line = node.Mark().line + 1;
     mcu.id = required_string(node, "id", "mcu");
@@ -351,13 +363,53 @@ McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
     mcu.model = required_string(node, "model", "mcu");
     if (const YAML::Node variant = node["variant"])
         mcu.variant = scalar(variant, "variant");
-    const std::string firmware = required_string(node, "firmware", "mcu");
-    std::filesystem::path path(firmware);
-    if (path.is_relative())
-        path = std::filesystem::path(base_dir) / path;
-    mcu.firmware = path.lexically_normal().string();
+    const YAML::Node firmware = node["firmware"];
+    if (!firmware)
+        fail(node, "mcu requires 'firmware'");
+    auto resolve = [&](const std::string &file) {
+        std::filesystem::path path(file);
+        if (path.is_relative())
+            path = std::filesystem::path(base_dir) / path;
+        return path.lexically_normal().string();
+    };
+    if (firmware.IsSequence()) {
+        for (const YAML::Node &entry : firmware) {
+            require_map(entry, "firmware image");
+            check_keys(entry, "a firmware image", {"file", "offset", "from", "size"});
+            FirmwareImage image;
+            image.file = resolve(required_string(entry, "file", "firmware image"));
+            if (const YAML::Node offset = entry["offset"]) {
+                const std::uint64_t value = config_integer(offset, "'offset'");
+                if (value > 0xffffffffull)
+                    fail(offset, "offset is out of range");
+                image.offset = static_cast<std::uint32_t>(value);
+            }
+            for (const char *key : {"from", "size"}) {
+                const YAML::Node field = entry[key];
+                if (!field)
+                    continue;
+                const std::uint64_t value = config_integer(field, std::string("'") + key + "'");
+                if (value > 0xffffffffull)
+                    fail(field, std::string("'") + key + "' is out of range");
+                (key[0] == 'f' ? image.skip : image.size) = static_cast<std::uint32_t>(value);
+            }
+            mcu.images.push_back(image);
+        }
+        if (mcu.images.empty())
+            fail(firmware, "'firmware' lists no images");
+        mcu.firmware = mcu.images.front().file;
+    } else {
+        mcu.firmware = resolve(scalar(firmware, "'firmware'"));
+        mcu.images.push_back({mcu.firmware, 0});
+    }
     if (const YAML::Node clock = node["clock_hz"])
         mcu.clock_hz = config_frequency(clock, "clock_hz");
+    if (const YAML::Node supply = node["supply_mv"]) {
+        const std::uint64_t value = config_uint(supply, "supply_mv");
+        if (value < 1000 || value > 5500)
+            fail(supply, "supply_mv must be between 1000 and 5500");
+        mcu.supply_mv = static_cast<std::uint32_t>(value);
+    }
     if (const YAML::Node start = node["start_at"])
         mcu.start_at_ns = config_duration(start, "start_at");
     if (const YAML::Node radio = node["radio"])
@@ -476,8 +528,143 @@ std::uint32_t parse_frequency_hz(const std::string &text) {
                                 "' (use e.g. 48000000, 48MHz, 32kHz)");
 }
 
+namespace {
+
+constexpr std::size_t MaxIncludeBytes = 1u << 20;
+
+std::string read_include_file(const std::string &path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input)
+        throw ConfigError("cannot open included file: " + path);
+    std::ostringstream text;
+    text << input.rdbuf();
+    return text.str();
+}
+
+// Replaces ${name} in every scalar below `node`, in place. A scalar that is
+// exactly one reference takes the parameter's whole value (so lists and
+// numbers keep their type); otherwise the parameter's text is spliced in.
+void substitute(YAML::Node node, const std::map<std::string, YAML::Node> &params) {
+    if (node.IsSequence()) {
+        for (std::size_t i = 0; i < node.size(); ++i) {
+            YAML::Node item = node[i];
+            substitute(item, params);
+        }
+        return;
+    }
+    if (node.IsMap()) {
+        for (auto entry : node)
+            substitute(entry.second, params);
+        return;
+    }
+    if (!node.IsScalar())
+        return;
+    const std::string text = node.Scalar();
+    if (text.find("${") == std::string::npos)
+        return;
+    auto lookup = [&](const std::string &name) -> const YAML::Node & {
+        const auto found = params.find(name);
+        if (found == params.end())
+            fail(node, "unknown parameter '" + name + "'");
+        return found->second;
+    };
+    if (text.size() > 3 && text.compare(0, 2, "${") == 0 && text.back() == '}' &&
+        text.find('}') == text.size() - 1) {
+        const YAML::Node &value = lookup(text.substr(2, text.size() - 3));
+        node = YAML::Clone(value);
+        return;
+    }
+    std::string result;
+    for (std::size_t pos = 0; pos < text.size();) {
+        const std::size_t open = text.find("${", pos);
+        if (open == std::string::npos) {
+            result += text.substr(pos);
+            break;
+        }
+        const std::size_t close = text.find('}', open);
+        if (close == std::string::npos)
+            fail(node, "unterminated '${' in '" + text + "'");
+        result += text.substr(pos, open - pos);
+        const YAML::Node &value = lookup(text.substr(open + 2, close - open - 2));
+        if (!value.IsScalar())
+            fail(node, "parameter '" + text.substr(open + 2, close - open - 2) +
+                           "' is not a scalar and cannot be part of a string");
+        result += value.Scalar();
+        pos = close + 1;
+    }
+    node = result;
+}
+
+// Loads `{include, id?, params?}` and returns the parsed device.
+DeviceConfig parse_include(const YAML::Node &entry, const std::string &base_dir,
+                           const IncludeReader &reader) {
+    check_keys(entry, "an include", {"include", "id", "params"});
+    const std::string relative = scalar(entry["include"], "'include'");
+    const std::filesystem::path resolved =
+        (std::filesystem::path(base_dir) / relative).lexically_normal();
+    std::string text;
+    try {
+        text = reader ? reader(resolved.string()) : read_include_file(resolved.string());
+    } catch (const ConfigError &) {
+        throw;
+    } catch (const std::exception &error) {
+        fail(entry["include"], error.what());
+    }
+    if (text.size() > MaxIncludeBytes)
+        fail(entry["include"], "included file '" + relative + "' is larger than 1 MiB");
+
+    const FileScope scope(relative);
+    YAML::Node document;
+    try {
+        document = YAML::Load(text);
+    } catch (const YAML::Exception &error) {
+        std::ostringstream out;
+        out << relative << ": line " << error.mark.line + 1 << ": " << error.msg;
+        throw ConfigError(out.str());
+    }
+    if (!document.IsMap())
+        throw ConfigError(relative + ": the document must be a mapping");
+    check_keys(document, "a device file", {"version", "params", "device"});
+    if (!document["version"] || scalar(document["version"], "'version'") != "1")
+        fail(document, "a device file needs 'version: 1'");
+    if (!document["device"])
+        fail(document, "a device file needs 'device'");
+
+    std::map<std::string, YAML::Node> params;
+    if (const YAML::Node defaults = document["params"])
+        for (const auto &item : require_map(defaults, "'params'"))
+            params[item.first.Scalar()] = item.second;
+    // The including document names the values; reject names the file lacks so
+    // that a typo does not silently fall back to a default.
+    std::set<std::string> known;
+    for (const auto &item : params)
+        known.insert(item.first);
+    {
+        const FileScope outer(""); // errors below are in the including file
+        if (const YAML::Node given = entry["params"])
+            for (const auto &item : require_map(given, "'params'")) {
+                if (!known.count(item.first.Scalar()))
+                    fail(item.first, "unknown parameter '" + item.first.Scalar() +
+                                         "' for " + relative);
+                params[item.first.Scalar()] = item.second;
+            }
+    }
+    YAML::Node device = document["device"];
+    require_map(device, "'device'");
+    substitute(device, params);
+    if (entry["id"])
+        device["id"] = scalar(entry["id"], "'id'");
+    DeviceConfig parsed = parse_device(
+        device, std::filesystem::path(resolved).parent_path().string());
+    parsed.line = entry.Mark().line + 1; // duplicates are reported at the include
+    return parsed;
+}
+
+} // namespace
+
 SystemConfig parse_system_config(const std::string &yaml_text,
-                                 const std::string &base_dir) {
+                                 const std::string &base_dir,
+                                 const IncludeReader &reader) {
     YAML::Node root;
     try {
         root = YAML::Load(yaml_text);
@@ -520,8 +707,12 @@ SystemConfig parse_system_config(const std::string &yaml_text,
     const YAML::Node devices = root["devices"];
     if (!devices)
         throw ConfigError("'devices' is required");
-    for (const YAML::Node &device : require_seq(devices, "'devices'"))
-        config.devices.push_back(parse_device(device, base_dir));
+    for (const YAML::Node &device : require_seq(devices, "'devices'")) {
+        if (device.IsMap() && device["include"])
+            config.devices.push_back(parse_include(device, base_dir, reader));
+        else
+            config.devices.push_back(parse_device(device, base_dir));
+    }
     if (config.devices.empty())
         fail(devices, "'devices' is empty");
     if (const YAML::Node nets = root["nets"])

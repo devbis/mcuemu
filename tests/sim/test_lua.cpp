@@ -198,3 +198,59 @@ at(1 * US, function() local t = {} for i = 1, 1e9 do t[i] = ("x"):rep(1000) .. i
 }
 
 } // namespace tc32emu_tests
+
+namespace tc32emu_tests {
+
+// Counts falling edges of a net over a window, from the net's change log.
+void test_bl0937_example_part() {
+    const std::string script =
+        std::string(TC32EMU_SOURCE_DIR) + "/examples/parts/bl0937.lua";
+    auto system = sim::build_system(sim::parse_system_config(
+        "version: 1\ndevices:\n  - id: d\n    mcus:\n"
+        "      - {id: m, model: tlsr8258, firmware: " + (scratch_dir() / "idle.bin").string() + "}\n"
+        "    nets:\n      - { id: cf }\n      - { id: cf1 }\n      - { id: sel }\n"
+        "    parts:\n      - id: meter\n        type: script\n        script: " + script + "\n"
+        "        pins: { cf: cf, cf1: cf1, sel: sel }\n"
+        "        params: { power_w: 460, voltage_v: 230, cf_hz_per_w: 0.5, cf1_hz_per_a: 100, cf1_hz_per_v: 8 }\n"
+        "  - id: sel_driver\n    mcus:\n"
+        "      - {id: m, model: tlsr8258, firmware: " + (scratch_dir() / "idle.bin").string() + "}\n"));
+    sim::World &world = system->world();
+    sim::Net &cf = world.net("d.cf");
+    sim::Net &cf1 = world.net("d.cf1");
+    sim::Net &sel = world.net("d.sel");
+    auto falls = [](sim::Net &net, int &count) {
+        net.subscribe([&count](const sim::NetChange &change) {
+            if (change.level == sim::Level::Low)
+                ++count;
+        });
+    };
+    int cf_falls = 0, cf1_falls = 0;
+    falls(cf, cf_falls);
+    falls(cf1, cf1_falls);
+
+    // 460 W at 0.5 Hz/W = 230 Hz on CF; 2 A at 100 Hz/A = 200 Hz on CF1 (SEL low).
+    CHECK(std::abs(number(world, "d.meter.cf_hz") - 230.0) < 1e-6);
+    CHECK(std::abs(number(world, "d.meter.cf1_hz") - 200.0) < 1e-6);
+    world.run_until(1000000000ull);
+    CHECK(cf_falls >= 229 && cf_falls <= 231);
+    CHECK(cf1_falls >= 199 && cf1_falls <= 201);
+
+    // SEL high switches CF1 to the voltage: 230 V * 8 Hz/V = 1840 Hz.
+    sim::Pin &driver = sel.attach("test");
+    driver.set_drive(sim::Drive::High, world.now());
+    CHECK(std::abs(number(world, "d.meter.cf1_hz") - 1840.0) < 1e-6);
+    cf1_falls = 0;
+    world.run_until(world.now() + 100000000ull);
+    CHECK(cf1_falls >= 183 && cf1_falls <= 185);
+
+    // A new load takes effect at once; zero power stops the pulses.
+    world.endpoints().at("d.meter.power_w").set(sim::Value{920.0});
+    CHECK(std::abs(number(world, "d.meter.cf_hz") - 460.0) < 1e-6);
+    world.endpoints().at("d.meter.power_w").set(sim::Value{0.0});
+    cf_falls = 0;
+    world.run_until(world.now() + 100000000ull);
+    CHECK(cf_falls == 0);
+    CHECK(cf.level() == sim::Level::High);
+}
+
+} // namespace tc32emu_tests
