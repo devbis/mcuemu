@@ -25,6 +25,12 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if(MSVC)
+    set(MCUEMU_WARNING_FLAGS /W4)
+else()
+    set(MCUEMU_WARNING_FLAGS -Wall -Wextra -Wpedantic)
+endif()
+
 add_library(mcuemu-core
     emulator/src/cpu.cpp
     emulator/src/tlsr8258.cpp
@@ -34,7 +40,7 @@ add_library(mcuemu-core
     emulator/src/api.cpp
 )
 target_include_directories(mcuemu-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
-target_compile_options(mcuemu-core PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(mcuemu-core PRIVATE ${MCUEMU_WARNING_FLAGS})
 target_link_libraries(mcuemu-core PUBLIC unicorn)
 
 add_executable(mcuemu emulator/src/main.cpp)
@@ -44,7 +50,7 @@ add_library(mcs51emu
     emulator/src/mcs51/ca51f253l3.cpp
 )
 target_include_directories(mcs51emu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
-target_compile_options(mcs51emu PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(mcs51emu PRIVATE ${MCUEMU_WARNING_FLAGS})
 target_link_libraries(mcs51emu PUBLIC unicorn)
 
 add_executable(mcs51-emu emulator/src/mcs51/main.cpp)
@@ -121,7 +127,7 @@ add_library(simcore
     emulator/src/sim/ca51f253l3_mcu.cpp
 )
 target_include_directories(simcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
-target_compile_options(simcore PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(simcore PRIVATE ${MCUEMU_WARNING_FLAGS})
 target_link_libraries(simcore PUBLIC mcuemu-core mcs51emu ${MCUEMU_YAML_TARGET} lua54
     nlohmann_json::nlohmann_json)
 
