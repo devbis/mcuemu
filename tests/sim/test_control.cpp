@@ -333,10 +333,13 @@ void test_rpc_sandbox() {
 
     // A symlink inside the root that points outside is refused too.
     std::error_code ignored;
+    // (Windows needs a privilege for symlinks; the check is skipped without it.)
     fs::create_symlink("/tmp", root_dir() / "escape", ignored);
-    CHECK(code_of(call(rpc, "load", {{"yaml", yaml_with("escape/x.bin")}})) == -32001);
-    CHECK(code_of(call(rpc, "load", {{"yaml", yaml_with("idle.bin",
-                                                        "attach:\n  - {endpoint: d.m.uart0, sink: \"file:escape/x.log\"}\n")}})) == -32001);
+    if (fs::is_symlink(root_dir() / "escape", ignored)) {
+        CHECK(code_of(call(rpc, "load", {{"yaml", yaml_with("escape/x.bin")}})) == -32001);
+        CHECK(code_of(call(rpc, "load", {{"yaml", yaml_with("idle.bin",
+                                                            "attach:\n  - {endpoint: d.m.uart0, sink: \"file:escape/x.log\"}\n")}})) == -32001);
+    }
     CHECK(code_of(call(rpc, "load", {{"yaml", yaml_with("idle.bin",
                                                         "attach:\n  - {endpoint: d.m.uart0, sink: stdout}\n")}})) == -32001);
 
