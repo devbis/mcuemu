@@ -29,6 +29,9 @@ if(MSVC)
     # <windows.h> (pulled in by WinSock) must not define min/max macros.
     add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
     set(MCUEMU_WARNING_FLAGS /W4)
+    # A Tlsr8258 holds ~130 KiB of inline RAM and tests keep several on the
+    # stack; the 1 MiB Windows default overflows, other platforms give 8 MiB.
+    add_link_options(/STACK:8388608)
 else()
     set(MCUEMU_WARNING_FLAGS -Wall -Wextra -Wpedantic)
 endif()

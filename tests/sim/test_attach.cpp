@@ -31,7 +31,9 @@ const std::filesystem::path &scratch() {
 }
 
 std::string idle() { return (scratch() / "idle.bin").string(); }
-std::string path_of(const std::string &name) { return (scratch() / name).string(); }
+// Forward slashes: the paths are embedded in YAML double-quoted strings, where
+// a Windows backslash would start an escape sequence.
+std::string path_of(const std::string &name) { return (scratch() / name).generic_string(); }
 
 std::string read_file(const std::string &path) {
     std::ifstream in(path, std::ios::binary);
