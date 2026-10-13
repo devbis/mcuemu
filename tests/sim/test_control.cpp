@@ -334,7 +334,9 @@ void test_rpc_sandbox() {
     // A symlink inside the root that points outside is refused too.
     std::error_code ignored;
     // (Windows needs a privilege for symlinks; the check is skipped without it.)
-    fs::create_symlink("/tmp", root_dir() / "escape", ignored);
+    // The target must be a real directory outside the root: the temp directory
+    // that holds it (a dangling link, as "/tmp" is on Windows, would not escape).
+    fs::create_directory_symlink(fs::temp_directory_path(), root_dir() / "escape", ignored);
     if (fs::is_symlink(root_dir() / "escape", ignored)) {
         CHECK(code_of(call(rpc, "load", {{"yaml", yaml_with("escape/x.bin")}})) == -32001);
         CHECK(code_of(call(rpc, "load", {{"yaml", yaml_with("idle.bin",
