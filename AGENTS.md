@@ -52,6 +52,8 @@ cmake --build build -j8
 ctest --test-dir build --output-on-failure
 ```
 
+- The build type defaults to `Release`; an unoptimised build is about 5x
+  slower (the firmware tests take minutes). Pass `-DCMAKE_BUILD_TYPE=Debug` to debug.
 - Test binaries: `mcuemu-tests` (TC32 core, machine, radio), `mcs51emu-tests`,
   `simcore-tests` (the whole system layer, about 9 s). `ctest -E firmware` runs
   just those three.

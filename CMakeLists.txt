@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
 project(mcuemu VERSION 0.1.0 LANGUAGES C CXX)
 
+# An unset build type compiles without optimisation, which makes the emulator
+# about 5x slower; default to Release for single-config generators.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 option(MCUEMU_BUILD_TESTS "Build the emulator self-tests" ON)
 
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/engine/unicorn/CMakeLists.txt")
