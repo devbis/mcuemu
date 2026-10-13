@@ -168,7 +168,7 @@ void test_system_build_errors() {
         "      - {id: m, model: tlsr8258, firmware: IMG}\n";
     CHECK(contains(build("version: 1\ndevices:\n  - id: d\n    mcus:\n"
                          "      - {id: m, model: nope, firmware: IMG}\n"),
-                   "unknown mcu model 'nope' (known: ca51f253l3, tlsr8258)"));
+                   "unknown mcu model 'nope' (known: ca51f253l3, nrf52840, tlsr8258)"));
     CHECK(contains(build("version: 1\ndevices:\n  - id: d\n    mcus:\n"
                          "      - {id: m, model: tlsr8258, firmware: /no/such.bin}\n"),
                    "cannot open firmware image"));
@@ -334,6 +334,12 @@ void test_shipped_examples() {
         }
     CHECK(found_power);
     CHECK(config.events.size() == 4 && config.attach.size() == 2);
+
+    // The nRF52840 board and its example world.
+    const sim::SystemConfig nrf = sim::load_system_config(dir + "/nrf52840_promicro.yaml");
+    CHECK(nrf.devices.size() == 1 && nrf.devices[0].mcus.size() == 1);
+    CHECK(nrf.devices[0].mcus[0].model == "nrf52840");
+    CHECK(nrf.devices[0].nets.size() == 2 && nrf.devices[0].parts.size() == 2);
 
     // Both devices are valid on their own too, with the defaults.
     for (const char *file : {"/devices/tuya_plug.yaml", "/devices/tuya_thermostat.yaml"}) {

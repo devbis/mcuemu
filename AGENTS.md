@@ -6,12 +6,15 @@ the code. Human-facing docs are in `README.md` and `docs/`.
 
 ## What this project is
 
-`mcuemu` is a microcontroller emulator built on a Unicorn fork. It models two
+`mcuemu` is a microcontroller emulator built on a Unicorn fork. It models three
 chips and a declarative system layer on top:
 
 - **TLSR8258** (Telink, TC32 core, 2.4 GHz radio: Zigbee/BLE-style frames): board
   model in `emulator/src/` (`cpu.cpp`, `tlsr8258*.cpp`, `radio.cpp`).
 - **CA51F253L3** (Cmsemicron, MCS-51 core): `emulator/src/mcs51/`.
+- **nRF52840** (Nordic, Cortex-M4F): generic core glue in `emulator/src/cortexm/`
+  (`cortexm::Core`), the chip in `emulator/src/nrf52/` (`nrf52emu::Nrf52840`).
+  See `docs/nrf52840.md`.
 - **`sim` layer** (`emulator/src/sim/`, `emulator/include/sim/`): YAML-described
   systems of devices, nets, parts (built-in and Lua), a shared radio medium,
   endpoints and sinks, a scenario runner, and a JSON-RPC 2.0 control API over
@@ -20,7 +23,8 @@ chips and a declarative system layer on top:
 Naming: the executable is `mcuemu`; the TC32/TLSR8258 core library is
 `mcuemu-core` (C++ namespace `mcuemu`, headers in `emulator/include/mcuemu/`,
 C API prefix `mcuemu_`); the MCS-51 library is `mcs51emu` (namespace
-`mcs51emu`); the system layer is `simcore` (namespace `sim`). The repository
+`mcs51emu`); the Cortex-M core is `cortexm` and the nRF52840 chip `nrf52emu`
+(namespaces of the same names); the system layer is `simcore` (namespace `sim`). The repository
 folder may still be called `tc32-emu`; never hard-code absolute paths.
 
 ## Layout
@@ -29,9 +33,11 @@ folder may still be called `tc32-emu`; never hard-code absolute paths.
 emulator/include/{mcuemu,mcs51emu,sim}/   public and internal headers
 emulator/src/                              TLSR8258 + CPU wrapper, CLI main, C API
 emulator/src/mcs51/                        CA51F253L3 model and its `mcuemu run` runner
+emulator/src/cortexm/                      generic Cortex-M core (NVIC glue, SysTick, WFI/WFE, cycle clock)
+emulator/src/nrf52/                        nRF52840: peripherals, FICR/UICR, `mcuemu run` runner
 emulator/src/sim/                          system layer (config, world, rpc, server, sinks, parts)
 engine/unicorn/                            Unicorn fork: SEPARATE git repo, git-ignored here
-tests/{tc32,machine,radio,mcs51,sim,firmware}/
+tests/{tc32,machine,radio,mcs51,nrf52,sim,firmware}/
 examples/                                  world.yaml, thermostat_only.yaml, devices/, parts/
 docs/                                      architecture, config reference, control API, mcs51, scripting
 firmware/                                  local images only (ignored by git except .gitkeep)
@@ -55,13 +61,17 @@ ctest --test-dir build --output-on-failure
 - The build type defaults to `Release`; an unoptimised build is about 5x
   slower (the firmware tests take minutes). Pass `-DCMAKE_BUILD_TYPE=Debug` to debug.
 - Test binaries: `mcuemu-tests` (TC32 core, machine, radio), `mcs51emu-tests`,
-  `simcore-tests` (the whole system layer, about 9 s). `ctest -E firmware` runs
-  just those three.
+  `nrf52emu-tests` (Cortex-M core and the nRF52840 peripherals), `simcore-tests`
+  (the whole system layer, about 9 s). `ctest -E firmware` runs just those four.
+  The nrf52 test programs are assembly in `tests/nrf52/programs/*.s`; after
+  editing one, run `tests/nrf52/programs/build.py` (needs `arm-none-eabi-as`) and
+  commit the regenerated `tests/nrf52/programs.hpp`.
 - Firmware tests (`firmware_zigbee_join`, `firmware_zigbee_button_light`,
   `firmware_zephyr_pm_wake`, `firmware_vendor_sleep_1s`) exist only when the
   images are in `firmware/` at configure time (`samplegw_tb03f.bin`,
   `samplelight_tb03f.bin`, `zephyr-pmtest.bin`, `vendor_sleep_1s.bin`) and
-  Python 3 is available. They take about 80 s together. **Run them after any
+  Python 3 is available. They take about 80 s together. `firmware_nrf52840_boot`
+  (image `nrf52840-sensor.bin`) takes under a second. **Run them after any
   change to CPU execution, timing or peripherals**: they are the only check that
   catches subtle timing regressions across nodes.
 - Run ctest from the repository root with `--test-dir build`; running it from
@@ -70,8 +80,8 @@ ctest --test-dir build --output-on-failure
   CMake cache stores the absolute source path).
 - Firmware images are local and ignored; never commit `*.bin`, `*.hex`, `*.elf`.
   The examples expect `firmware/osrctherm_r02_zrd.bin`,
-  `firmware/osrctherm_r02_v1.02_CA51F253L3.bin`, `firmware/samplegw_tb03f.bin`
-  and `firmware/tlsr8258-plug.bin`.
+  `firmware/osrctherm_r02_v1.02_CA51F253L3.bin`, `firmware/samplegw_tb03f.bin`,
+  `firmware/tlsr8258-plug.bin` and `firmware/nrf52840-sensor.bin`.
 - `mcuemu sim` writes its sink outputs (`thermostat-*.log`, `air.pcap`,
   `*.vcd`) into the current directory. Run experiments from a scratch
   directory, or delete the files; do not commit them.
@@ -96,6 +106,17 @@ Facts about the fork that bit us:
 - On Apple Silicon each entry into translated code toggles JIT write protection
   (`pthread_jit_write_protect_np`), which is expensive. That is why both cores
   run many instructions per `uc_emu_start`.
+
+- The ARM backend is stock Unicorn plus our additions. Its Cortex-M exception
+  model was dead code (`v7m_exception_taken` and `do_v7m_exception_exit` returned
+  immediately, the NVIC was commented out), so `nvic.c` and the revived
+  `m_helper.c` paths are ours, as are `uc_arm_nvic()` and `uc->guest_exception`.
+  `UC_MODE_MCLASS` used to force Cortex-M33; an explicit M-profile model is now
+  honoured. Without `uc->guest_exception` every M-profile exception (even SVC)
+  would stop the engine with `UC_ERR_EXCEPTION`.
+- On Cortex-M the code hook sees every instruction; WFI/WFE are decoded there
+  and must never reach the engine (it would raise EXCP_YIELD, which the fork
+  treats as an invalid instruction).
 
 ## Architecture notes
 
@@ -161,6 +182,25 @@ paths equivalent. Details in `docs/mcs51.md`.
   because its ZT3L app image is linked for a bootloader the emulator does not run.
 - Lua parts run in a sandbox with instruction and memory limits (`docs/scripting.md`).
 
+### Cortex-M core and nRF52840 (`emulator/src/cortexm/`, `emulator/src/nrf52/`)
+
+`docs/nrf52840.md` is the reference. Rules that are easy to break:
+
+- Time is core cycles. Peripherals compute their state from `core.cycles()` on
+  demand (counters) and schedule only events: return the next due cycle from
+  `service()` and call `request_service()` from register writes that move it
+  earlier. A peripheral that ignores this works until the core sleeps and the
+  clock jumps past the event.
+- A new peripheral raises its interrupt level through `set_irq_level()` (the
+  line is level-sensitive, like the hardware) and routes events through
+  `event_raised()` so PPI sees them. Unimplemented peripherals are
+  `StubPeripheral`s: they read back what was written and never raise events.
+- Flash is read-only to the CPU; stores arrive in the write-protect handler
+  (`Nvmc::on_store`) and are fixed up by `Core::defer`. Invalidate translated
+  code (`Core::invalidate_code`) only when the program image itself changes.
+- The generic core knows nothing about the nRF52840: keep chip facts in
+  `nrf52/` so other Cortex-M chips can reuse `cortexm/`.
+
 ### TLSR8258 model notes
 
 Peripheral behaviour is documented in `docs/tlsr8258-register-model.md`; check
@@ -205,5 +245,8 @@ rather than guessing.
 - UART timing for the CA51F253L3 RX path is not bit-accurate.
 - The plug example uses the pins of the Zbeacon TS011F board. Without a coordinator the plug firmware only scans and requests steering, so the relay does not react to the button.
 - Realtime pacing cannot reach 1x for busy firmware; use `speed` below 1.
+- nRF52840: no radio (IEEE 802.15.4 first, BLE later), no SPIM/PWM/CCM/USBD; one
+  cycle per instruction; lazy FP stacking is not modelled (eager stacking is
+  architecturally invisible).
 - Stage 8 of the original plan (Python host/client, snapshot/restore) is not
   started and has not been approved.

@@ -18,6 +18,19 @@ TLSR8258 wrapper maps fetches from `0x840000` through the selected flash
 capacity to flash offset zero; regular data reads and writes in the same
 addresses still access SRAM.
 
+## ARM / Cortex-M
+
+`UNICORN_ARCH` also builds the `arm` backend for the Cortex-M models. Stock
+Unicorn executes Cortex-M instructions but has no working exception model, so the
+fork carries `qemu/target/arm/nvic.c` (a self-contained NVIC and System Control
+Space), re-enabled exception entry and return in `m_helper.c`, `uc_arm_nvic()`
+for the host, `uc->guest_exception` (SVC, faults and exception return are taken
+by the guest rather than reported to `UC_HOOK_INTR`) and a CPU-model fix for
+`UC_MODE_MCLASS`. `cortexm::Core` maps memory with `uc_mem_map_ptr`, forwards the
+peripheral windows with `uc_mmio_map`, hooks every instruction for cycle
+counting and WFI/WFE, and stops the engine with `uc_emu_stop` from the hook.
+See [`nrf52840.md`](nrf52840.md).
+
 ## Source checkout
 
 The engine is intentionally kept as a separate Git checkout under `engine/`.

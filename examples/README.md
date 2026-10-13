@@ -9,6 +9,8 @@
 | `lywsd03mmc.yaml` | A Xiaomi LYWSD03MMC (hardware 1.4) joining a network run by the sampleGW coordinator, with the climate changed from the scenario. |
 | `devices/lywsd03mmc_v14.yaml` | LYWSD03MMC hardware B1.4: TLSR8258-class module, SHTC3 sensor and an I2C segment LCD (0x3C) on PC2/PC3, two test-point buttons. The display is decoded by `parts/lcd_lywsd03mmc.lua`. |
 | `devices/lywsd03mmc_v15.yaml` | LYWSD03MMC with the UART display (38400 baud, TX PD7) and an SHT4x sensor; the display frames are logged, not decoded. |
+| `devices/nrf52840_promicro.yaml` | An nRF52840 on a Pro Micro-style board (nice!nano v2 pins): status LED P0.15, button P0.11; everything else on the header is free to wire. |
+| `nrf52840_promicro.yaml` | The board running the Embassy Zigbee sensor image, with a button press from the scenario. The radio is not modelled yet, so it starts, configures the radio and sleeps. |
 | `parts/shtc3.lua`, `parts/sht4x.lua`, `parts/lcd_lywsd03mmc.lua` | The two sensors and the I2C segment display of the LYWSD03MMC. |
 | `parts/bl0937.lua` | The BL0937 as a scripted part (CF / CF1 pulse outputs, SEL input). |
 | `parts/ds18b20.lua`, `parts/sht3x.lua` | Reference sensor scripts (see `docs/scripting.md`). |
@@ -49,6 +51,7 @@ No firmware image is stored in the repository. Put the images where the
 | thermostat, main board | the CA51F253L3 image | `firmware/osrctherm_r02_v1.02_CA51F253L3.bin` |
 | LYWSD03MMC | `z03mmc.bin` from the z03mmc project | `firmware/z03mmc.bin` |
 | plug | `tlsr8258-plug.bin` from `zigbee-rs-plugs` (`build-tuya.sh`, 512 KiB board) | `firmware/tlsr8258-plug.bin` |
+| nRF52840 board | `nrf52840-sensor.bin`, the Embassy Zigbee sensor image of `zigbee-rs` (built for the nRF52840-DK) | `firmware/nrf52840-sensor.bin` |
 
 The plug's pins and BL0937 ratios default to the Zbeacon TS011F board (relay
 PD2, LED PB1 active low, button PA0, CF PB4, CF1 PB5, SEL PD3); for another
@@ -67,5 +70,9 @@ board pass `relay_pin`, `cf_pin`, `variant`, ... as params.
   carries the current or the voltage depending on SEL. Change the load with the
   `plug.meter.power_w` endpoint (also a scenario event or an API call). The
   calibration ratios are round numbers; use the ones your firmware expects.
+* **nRF52840**: the CPU, interrupts, clocks, pads, timers, RTC, SAADC, TWIM,
+  UARTE and the crypto/random blocks are modelled (see `docs/nrf52840.md`); the
+  RADIO is not, so a Zigbee or BLE image configures it and then waits. Pins are
+  `P0.xx`/`P1.xx`.
 * **Radio**: log-distance path loss with shadowing; BLE is not connected to
   the TLSR8258 registers, so only Zigbee devices are shown.

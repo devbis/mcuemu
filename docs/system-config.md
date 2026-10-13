@@ -21,7 +21,7 @@ devices:
   - id: node               # letters, digits, '_' and '-'
     mcus:
       - id: main
-        model: tlsr8258    # tlsr8258 | ca51f253l3
+        model: tlsr8258    # tlsr8258 | ca51f253l3 | nrf52840
         variant: F1K       # tlsr8258 only: F512 (default) | F1K
         firmware: fw/a.bin # relative to this file; or a list of flash pieces, see below
         clock_hz: 48MHz    # 48000000 | 48MHz | 32kHz
@@ -252,10 +252,11 @@ so BLE traffic comes from scripted parts, which can use the `radio` API in
 - MCU instance: `device.mcu` (for example `node.main`).
 - Net: `device.net` for device-scope nets, the plain id for world-scope nets.
   Every net is also an endpoint with the same name.
-- Pads: `tlsr8258` has `PA0`..`PE7`. `ca51f253l3` has no GPIO model yet, so no
-  pad can be wired.
-- UART: `uartN`. `tlsr8258` has `uart0`; `ca51f253l3` has `uart0`/`uart1`
-  (transmit only), so a link to it is one-way and reports a warning.
+- Pads: `tlsr8258` has `PA0`..`PE7`. `nrf52840` has `P0.00`..`P0.31` and
+  `P1.00`..`P1.15`. `ca51f253l3` has no GPIO model yet, so no pad can be wired.
+- UART: `uartN`. `tlsr8258` has `uart0`; `nrf52840` has `uart0`/`uart1` (UARTE0
+  and UARTE1); `ca51f253l3` has `uart0`/`uart1` (transmit only), so a link to
+  it is one-way and reports a warning.
 
 ## Semantics
 

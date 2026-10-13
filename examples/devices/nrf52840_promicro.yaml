@@ -1,0 +1,39 @@
+# nRF52840 on a Pro Micro-style board (nice!nano v2 and compatible clones such
+# as the SuperMini nRF52840): the bare module with a status LED and a push
+# button on the board's own pins.
+#
+#   mcu.P0.15  -> blue status LED   (high = lit; nice!nano v2)
+#   mcu.P0.11  <- push button       (internal pull-up expected, low = pressed)
+#
+# The nice!nano also gates its 3.3 V regulator with P0.13; that is outside the
+# MCU model, so it is not wired. Firmware built for the nRF52840-DK blinks LED1
+# on P0.13: pass `led_pin: P0.13` for such an image (the DK's LEDs are active
+# low, but the status_led part only shows the level). Everything else on the
+# header (D0..D10, A0..A3) is free: wire it from the world file, e.g. an I2C
+# sensor on `mcu.P0.17` (SDA) and `mcu.P0.20` (SCL).
+#
+# The firmware is not in the repository: pass `firmware` or copy it to the
+# default path (see examples/README.md).
+version: 1
+
+params:
+  firmware: ../../firmware/nrf52840-sensor.bin
+  supply_mv: 3300                 # seen by the SAADC's VDD input
+  led_pin: P0.15
+  button_pin: P0.11
+  rtt_address: 0x20000008         # SEGGER RTT control block (the sample image logs with defmt-rtt)
+
+device:
+  id: promicro
+  mcus:
+    - id: mcu
+      model: nrf52840
+      firmware: "${firmware}"
+      supply_mv: "${supply_mv}"
+      rtt: { address: "${rtt_address}" }
+  nets:
+    - { id: led,    pins: ["mcu.${led_pin}"] }
+    - { id: button, pull: up, pins: ["mcu.${button_pin}"] }
+  parts:
+    - { id: status_led, type: led, pins: { in: led } }
+    - { id: key, type: button, pins: { out: button } }

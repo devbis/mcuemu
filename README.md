@@ -11,7 +11,7 @@ radio medium in YAML, and mcuemu runs them on one virtual timeline.
 - **Control API.** `mcuemu serve` exposes a JSON-RPC 2.0 API over WebSocket for
   driving and inspecting a running system, with optional realtime pacing.
 - **Chip models.** Each MCU is a separate model on top of a Unicorn CPU backend
-  (TC32 and MCS-51 are provided by the fork). Models map flash, SRAM, MMIO,
+  (TC32, MCS-51 and the Cortex-M interrupt machinery are provided by the fork). Models map flash, SRAM, MMIO,
   virtual time, and interrupts around the engine; adding a chip means adding a
   model, not changing the system layer.
 
@@ -21,6 +21,7 @@ radio medium in YAML, and mcuemu runs them on one virtual timeline.
 | --- | --- | --- |
 | Telink TLSR8258 (`TLSR8258F512`, `TLSR8258F1K`) | TC32 | GPIO, timers, UART (incl. DMA), ADC, AES, sleep/wake, Zigbee RF; vendor Zigbee and Zephyr firmware tested |
 | Cmsemicron CA51F253L3 | MCS-51 | CPU, Timer0, UART1, PWM; no GPIO, ADC or radio |
+| Nordic nRF52840 (Pro Micro / nice!nano board) | Cortex-M4F | NVIC, SysTick, FPU, WFE; clocks, GPIO/GPIOTE, UARTE, TWIM, SAADC, TIMER, RTC, RNG, ECB, WDT, NVMC, PPI; the Embassy Zigbee sensor image boots to idle; no radio yet |
 
 Support is partial and driven by the firmware tested so far. See
 [`docs/status.md`](docs/status.md) and the per-chip docs.
@@ -33,7 +34,9 @@ Support is partial and driven by the firmware tested so far. See
 - [`docs/architecture.md`](docs/architecture.md) — architecture notes.
 - [`docs/tlsr8258.md`](docs/tlsr8258.md) (usage, firmware tests, status),
   [`docs/tlsr8258-register-model.md`](docs/tlsr8258-register-model.md),
-  [`docs/mcs51.md`](docs/mcs51.md) — chip models.
+  [`docs/mcs51.md`](docs/mcs51.md),
+  [`docs/nrf52840.md`](docs/nrf52840.md) (Cortex-M core, peripherals, status) —
+  chip models.
 - [`examples/`](examples/) — ready-made systems (`mcuemu sim examples/world.yaml`).
 
 ## Running a system
@@ -65,11 +68,13 @@ timing or peripherals. `firmware/` is local-only and ignored by git;
 
 ## Project layout
 
-- `engine/unicorn/` — separate Unicorn fork checkout (TC32 and MCS-51 backends).
+- `engine/unicorn/` — separate Unicorn fork checkout (TC32 and MCS-51 backends,
+  Cortex-M NVIC).
 - `emulator/include/` and `emulator/src/` — chip models, CPU adapters, radio,
-  C API, and CLI; `mcs51/` holds the CA51F253L3 model and `sim/` the system layer.
-- `tests/` — tests grouped by layer (`tc32`, `machine`, `radio`, `mcs51`, `sim`,
-  `firmware`).
+  C API, and CLI; `mcs51/` holds the CA51F253L3 model, `cortexm/` the generic
+  Cortex-M core, `nrf52/` the nRF52840 and `sim/` the system layer.
+- `tests/` — tests grouped by layer (`tc32`, `machine`, `radio`, `mcs51`,
+  `nrf52`, `sim`, `firmware`).
 - `examples/` — system YAML, device descriptions, and Lua parts.
 - `docs/` — reference documentation.
 - `firmware/` — local-only vendor firmware images.

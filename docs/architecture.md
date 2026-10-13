@@ -22,6 +22,16 @@ first 32 KiB of CODE is loadable from firmware. Future CC2530 support should be
 a separate device wrapper with its banked code mapping and SoC-specific
 peripherals; it can reuse the CPU backend.
 
+## Cortex-M / nRF52840
+
+Cortex-M chips run on the fork's ARM backend through `cortexm::Core`, a generic
+core wrapper (memory map, NVIC/SCS access, SysTick, WFI/WFE, cycle clock and a
+service hook). A chip model implements `cortexm::Bus` for its peripheral windows
+and calls the core with an absolute cycle limit; peripherals derive their state
+from the cycle clock and ask for service only when an event is due, so an idle
+chip costs nothing. Details and the fork changes are in
+[`nrf52840.md`](nrf52840.md).
+
 ## Address space
 
 The initial board exposes:

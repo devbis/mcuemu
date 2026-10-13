@@ -361,6 +361,9 @@ void test_part_errors_and_events();
 void test_pad_pulls_and_functions();
 void test_adc_reads_net_voltage();
 void test_i2c_master_with_sensor();
+void test_nrf52_pads_follow_nets();
+void test_nrf52_twim_talks_to_an_i2c_device();
+void test_nrf52_uart_bytes_through_the_mcu_interface();
 }
 
 // Names each test on stderr before it runs, so a crash in CI shows where.
@@ -414,6 +417,9 @@ int main() {
     RUN(test_pad_pulls_and_functions);
     RUN(test_adc_reads_net_voltage);
     RUN(test_i2c_master_with_sensor);
+    RUN(test_nrf52_pads_follow_nets);
+    RUN(test_nrf52_twim_talks_to_an_i2c_device);
+    RUN(test_nrf52_uart_bytes_through_the_mcu_interface);
     RUN(test_scheduler_order_and_cancel);
     RUN(test_net_push_pull_resolution);
     RUN(test_net_open_drain_is_wired_and);

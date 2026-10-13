@@ -16,7 +16,7 @@ endif()
 
 # The board wrapper depends on the TC32 architecture implemented in this local
 # Unicorn checkout. Keep the engine as a separate Git repository under ./engine.
-set(UNICORN_ARCH "tc32;mcs51" CACHE STRING "Architectures built for device emulators" FORCE)
+set(UNICORN_ARCH "tc32;mcs51;arm" CACHE STRING "Architectures built for device emulators" FORCE)
 set(UNICORN_BUILD_TESTS OFF CACHE BOOL "Build Unicorn tests through the wrapper" FORCE)
 set(UNICORN_INSTALL OFF CACHE BOOL "Install Unicorn through the wrapper" FORCE)
 add_subdirectory(engine/unicorn EXCLUDE_FROM_ALL)
@@ -49,7 +49,7 @@ target_compile_options(mcuemu-core PRIVATE ${MCUEMU_WARNING_FLAGS})
 target_link_libraries(mcuemu-core PUBLIC unicorn)
 
 add_executable(mcuemu emulator/src/main.cpp)
-target_link_libraries(mcuemu PRIVATE mcuemu-core mcs51emu simcore)
+target_link_libraries(mcuemu PRIVATE mcuemu-core mcs51emu nrf52emu simcore)
 
 add_library(mcs51emu
     emulator/src/mcs51/ca51f253l3.cpp
@@ -58,6 +58,31 @@ add_library(mcs51emu
 target_include_directories(mcs51emu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(mcs51emu PRIVATE ${MCUEMU_WARNING_FLAGS})
 target_link_libraries(mcs51emu PUBLIC unicorn)
+
+# Generic Cortex-M core on the Unicorn fork's ARM backend (NVIC, SysTick, WFI/WFE).
+add_library(cortexm emulator/src/cortexm/core.cpp)
+target_include_directories(cortexm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
+target_compile_options(cortexm PRIVATE ${MCUEMU_WARNING_FLAGS})
+target_link_libraries(cortexm PUBLIC unicorn)
+
+add_library(nrf52emu
+    emulator/src/nrf52/nrf52840.cpp
+    emulator/src/nrf52/power_clock.cpp
+    emulator/src/nrf52/nvmc.cpp
+    emulator/src/nrf52/gpio.cpp
+    emulator/src/nrf52/rtc.cpp
+    emulator/src/nrf52/timer.cpp
+    emulator/src/nrf52/misc.cpp
+    emulator/src/nrf52/saadc.cpp
+    emulator/src/nrf52/ecb.cpp
+    emulator/src/nrf52/uarte.cpp
+    emulator/src/nrf52/twim.cpp
+    emulator/src/nrf52/run_command.cpp
+)
+target_include_directories(nrf52emu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/emulator/src)
+target_include_directories(nrf52emu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
+target_compile_options(nrf52emu PRIVATE ${MCUEMU_WARNING_FLAGS})
+target_link_libraries(nrf52emu PUBLIC cortexm)
 
 find_package(yaml-cpp QUIET)
 if(NOT yaml-cpp_FOUND)
@@ -128,10 +153,11 @@ add_library(simcore
     emulator/src/sim/cli.cpp
     emulator/src/sim/tlsr8258_mcu.cpp
     emulator/src/sim/ca51f253l3_mcu.cpp
+    emulator/src/sim/nrf52840_mcu.cpp
 )
 target_include_directories(simcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(simcore PRIVATE ${MCUEMU_WARNING_FLAGS})
-target_link_libraries(simcore PUBLIC mcuemu-core mcs51emu ${MCUEMU_YAML_TARGET} lua54
+target_link_libraries(simcore PUBLIC mcuemu-core mcs51emu nrf52emu ${MCUEMU_YAML_TARGET} lua54
     nlohmann_json::nlohmann_json)
 if(WIN32)
     target_link_libraries(simcore PUBLIC ws2_32)
@@ -155,6 +181,15 @@ if(MCUEMU_BUILD_TESTS)
     target_link_libraries(mcs51emu-tests PRIVATE mcs51emu)
     add_test(NAME mcs51emu-tests COMMAND mcs51emu-tests)
 
+    add_executable(nrf52emu-tests
+        tests/nrf52/test_main.cpp
+        tests/nrf52/test_cortexm.cpp
+        tests/nrf52/test_chip.cpp
+    )
+    target_include_directories(nrf52emu-tests PRIVATE tests/nrf52)
+    target_link_libraries(nrf52emu-tests PRIVATE nrf52emu)
+    add_test(NAME nrf52emu-tests COMMAND nrf52emu-tests)
+
     add_executable(simcore-tests
         tests/sim/test_sim.cpp
         tests/sim/test_config.cpp
@@ -163,6 +198,7 @@ if(MCUEMU_BUILD_TESTS)
         tests/sim/test_lua.cpp
         tests/sim/test_radio_medium.cpp
         tests/sim/test_attach.cpp
+        tests/sim/test_nrf52.cpp
         tests/sim/test_control.cpp
     )
     target_link_libraries(simcore-tests PRIVATE simcore)
@@ -227,6 +263,30 @@ if(MCUEMU_BUILD_TESTS)
             message(STATUS
                 "Skipping firmware_zephyr_pm_wake: Python 3 interpreter not found")
         endif()
+    endif()
+
+    set(MCUEMU_NRF52840_SENSOR_FIRMWARE
+        "${CMAKE_CURRENT_SOURCE_DIR}/firmware/nrf52840-sensor.bin")
+    if(EXISTS "${MCUEMU_NRF52840_SENSOR_FIRMWARE}")
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            add_test(
+                NAME firmware_nrf52840_boot
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_nrf52840_boot.py"
+                        "$<TARGET_FILE:mcuemu>"
+                        "${MCUEMU_NRF52840_SENSOR_FIRMWARE}")
+            set_tests_properties(firmware_nrf52840_boot PROPERTIES
+                TIMEOUT 120
+                LABELS "firmware"
+            )
+        else()
+            message(STATUS
+                "Skipping firmware_nrf52840_boot: Python 3 interpreter not found")
+        endif()
+    else()
+        message(STATUS
+            "Skipping firmware_nrf52840_boot: local nrf52840-sensor.bin not found in firmware/")
     endif()
 
     set(MCUEMU_VENDOR_SLEEP_1S_FIRMWARE

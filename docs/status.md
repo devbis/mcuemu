@@ -14,6 +14,9 @@ Unicorn C API. End-to-end vendor-firmware acceptance is still outstanding.
 | Zigbee `sampleLight` + `sampleGW` | With the light starting at 5 seconds, the run recorded 70 transmissions and 36 successful receptions. The capture includes the coordinator's Beacon Response, the light's association request, the coordinator's association response, and subsequent bidirectional traffic. At 11.25 seconds, `zb_isDeviceJoinedNwk()` is true for the light (`g_zbNwkCtx + 0x2d` is `0x04`) and the coordinator (`0x96`, also with `permit_join` and `joinAccept` set). The RX DMA layout now counts the two FCS bytes expected by the SDK MAC parser; without them it discarded the Beacon Response. This confirms joining for this firmware pair on channel 15. Source SDK and firmware artifacts remain outside this repository. |
 | Zephyr PM | `firmware/zephyr-pmtest.bin` exercises repeated deep timer sleep/wake; the conditional `firmware_zephyr_pm_wake` CTest requires at least four sleep entries and no stuck-sleep result. It passes. The full local Zephyr sleepy-ED image now boots and scans Zigbee channels, but the current sampleGW network run does not show Zephyr joining or entering PM. Therefore the reported 3–5-cycle failure has not yet been reproduced in the full application image. Firmware images remain local and ignored. |
 
+The nRF52840 (Cortex-M4F) has its own page, [`nrf52840.md`](nrf52840.md): core,
+peripherals and what is missing (the radio first).
+
 Two behaviors are explicit inferences. The datasheet documents the register
 window at `0x800000..0x83ffff`, while vendor `LoadTblCmdSet` code forms writes
 at `0x1000000 + offset`; that observed address range is mapped as a compatibility

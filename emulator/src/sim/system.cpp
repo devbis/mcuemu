@@ -1,6 +1,7 @@
 #include "sim/system.hpp"
 
 #include "sim/ca51f253l3_mcu.hpp"
+#include "sim/nrf52840_mcu.hpp"
 #include "sim/tlsr8258_mcu.hpp"
 
 #include <algorithm>
@@ -56,6 +57,17 @@ const McuRegistry &McuRegistry::builtin() {
                     "ca51f253l3 does not model its supply; remove 'supply_mv'");
             return std::make_unique<Ca51F253L3Mcu>(
                 name, config.clock_hz.value_or(24000000));
+        });
+        r.add("nrf52840", [](const McuConfig &config, const std::string &name) {
+            if (config.variant)
+                throw std::invalid_argument("nrf52840 has no variants; remove 'variant'");
+            if (config.clock_hz)
+                throw std::invalid_argument(
+                    "nrf52840 runs at a fixed 64 MHz; remove 'clock_hz'");
+            auto mcu = std::make_unique<Nrf52840Mcu>(name);
+            if (config.supply_mv)
+                mcu->chip().set_supply_mv(*config.supply_mv);
+            return mcu;
         });
         return r;
     }();

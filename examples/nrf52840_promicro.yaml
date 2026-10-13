@@ -1,0 +1,28 @@
+# A Pro Micro nRF52840 board running a firmware image, for bring-up.
+#
+#   mkdir -p /tmp/nrf && cd /tmp/nrf
+#   /path/to/build/mcuemu sim /path/to/examples/nrf52840_promicro.yaml --for 10s
+#
+# The image is not in the repository, see examples/README.md. The radio is not
+# modelled yet, so a Zigbee or BLE firmware starts up, configures the radio and
+# then waits.
+version: 1
+
+world:
+  seed: 1
+  duration: 10s
+
+devices:
+  - include: devices/nrf52840_promicro.yaml
+    id: board
+    params:
+      led_pin: P0.13        # the sample image was built for the nRF52840-DK (LED1 = P0.13)
+
+attach:
+  - { endpoint: board.led, sink: "file:led.log" }
+  - { endpoint: board.mcu.rtt, sink: "text" }  # defmt frames: strings are readable, the rest is binary (decode with defmt-print)
+
+scenario:
+  events:
+    - { at: 2s, endpoint: board.key.pressed, set: true }
+    - { at: 2200ms, endpoint: board.key.pressed, set: false }

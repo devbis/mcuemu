@@ -3,6 +3,7 @@
 #include "mcuemu/radio.hpp"
 #include "mcuemu/tlsr8258.hpp"
 #include "mcs51emu/run_command.hpp"
+#include "nrf52emu/run_command.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -59,7 +60,7 @@ void usage(std::ostream &out) {
            "       [--trace-nets]\n"
            "       mcuemu serve --root DIR [--port N] [--bind ADDR] [--token T]\n"
            "       [--allow-origin ORIGIN]... [--max-sessions N] [--idle-timeout SEC]\n\n"
-           "Models: TLSR8258F512, TLSR8258F1K, CA51F253L3 (run only; MCS-51)\n"
+           "Models: TLSR8258F512, TLSR8258F1K, CA51F253L3 (MCS-51), NRF52840 (Cortex-M4)\n"
            "Firmware is loaded as a raw image at flash address 0.\n"
            "Trace ranges are inclusive; addresses accept decimal or 0x hex.\n";
 }
@@ -286,11 +287,14 @@ void require_model(const std::string &model) {
 }
 
 bool is_mcs51_model(const std::string &model) { return model.rfind("CA51", 0) == 0; }
+bool is_nrf52_model(const std::string &model) { return model.rfind("NRF52", 0) == 0; }
 
 int run_command(int argc, char **argv) {
     for (int i = 2; i + 1 < argc; ++i)
         if (std::string(argv[i]) == "--model" && is_mcs51_model(argv[i + 1]))
             return mcs51emu::run_command(argc, argv);
+        else if (std::string(argv[i]) == "--model" && is_nrf52_model(argv[i + 1]))
+            return nrf52emu::run_command(argc, argv);
 
     std::string firmware;
     std::string model;
@@ -852,7 +856,8 @@ int main(int argc, char **argv) {
         if (std::string(argv[1]) == "models") {
             std::cout << "TLSR8258F512 (512 KiB flash, 64 KiB SRAM)\n"
                          "TLSR8258F1K (1 MiB flash, 64 KiB SRAM)\n"
-                         "CA51F253L3 (32 KiB code flash, MCS-51; `run` and `sim`)\n";
+                         "CA51F253L3 (32 KiB code flash, MCS-51; `run` and `sim`)\n"
+                         "NRF52840 (1 MiB flash, 256 KiB RAM, Cortex-M4F; `run`)\n";
             return 0;
         }
         if (std::string(argv[1]) == "network")
