@@ -11,7 +11,7 @@
 | `devices/lywsd03mmc_v15.yaml` | LYWSD03MMC with the UART display (38400 baud, TX PD7) and an SHT4x sensor; the display frames are logged, not decoded. |
 | `devices/nrf52840_promicro.yaml` | An nRF52840 on a Pro Micro-style board (nice!nano v2 pins): status LED P0.15, button P0.11; everything else on the header is free to wire. |
 | `nrf52840_promicro.yaml` | The board running the Embassy Zigbee sensor image on its own, with a button press from the scenario (it scans and finds nothing). |
-| `nrf52840_zigbee.yaml` | The same board on one radio medium with the TLSR8258 sampleGW coordinator: the nRF52840 joins the network (about 20.9 s in). Different chips and cores in one world. |
+| `nrf52840_zigbee.yaml` | The same board with the SHT31 image on one radio medium with the TLSR8258 sampleGW coordinator: the nRF52840 joins the network, completes the TCLK exchange and reports temperature and humidity read from a simulated SHT31 on P0.26/P0.27. Different chips and cores in one world. |
 | `parts/shtc3.lua`, `parts/sht4x.lua`, `parts/lcd_lywsd03mmc.lua` | The two sensors and the I2C segment display of the LYWSD03MMC. |
 | `parts/bl0937.lua` | The BL0937 as a scripted part (CF / CF1 pulse outputs, SEL input). |
 | `parts/ds18b20.lua`, `parts/sht3x.lua` | Reference sensor scripts (see `docs/scripting.md`). |
@@ -52,7 +52,8 @@ No firmware image is stored in the repository. Put the images where the
 | thermostat, main board | the CA51F253L3 image | `firmware/osrctherm_r02_v1.02_CA51F253L3.bin` |
 | LYWSD03MMC | `z03mmc.bin` from the z03mmc project | `firmware/z03mmc.bin` |
 | plug | `tlsr8258-plug.bin` from `zigbee-rs-plugs` (`build-tuya.sh`, 512 KiB board) | `firmware/tlsr8258-plug.bin` |
-| nRF52840 board | `nrf52840-sensor.bin`, the Embassy Zigbee sensor image of `zigbee-rs` (built for the nRF52840-DK) | `firmware/nrf52840-sensor.bin` |
+| nRF52840 board | `nrf52840-sensor.bin`, the Embassy Zigbee sensor image of `zigbee-rs` (built for the nRF52840-DK; the CI artifact `nrf52840-sensor-firmware`) | `firmware/nrf52840-sensor.bin` |
+| nRF52840 board with SHT31 | the `sensor-sht31` variant of the same image (CI artifact `nrf52840-sensor-sht31-firmware`) | `firmware/nrf52840-sensor-sht31.bin` (used by `nrf52840_zigbee.yaml`) |
 
 The plug's pins and BL0937 ratios default to the Zbeacon TS011F board (relay
 PD2, LED PB1 active low, button PA0, CF PB4, CF1 PB5, SEL PD3); for another

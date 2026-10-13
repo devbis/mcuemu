@@ -103,11 +103,17 @@ void test_nrf52_twim_talks_to_an_i2c_device() {
     sim::Nrf52840Mcu &mcu = mcu_of(*system);
     auto run_for = [&](std::uint64_t ns) { world.run_for(ns); };
 
+    // The SDK leaves the pads as outputs with OUT = 0; once TWIM owns them an
+    // idle bus is both lines released.
+    write(mcu, P0 + 0x700 + 4 * 17, 0x601);
+    write(mcu, P0 + 0x700 + 4 * 20, 0x601);
+    CHECK(world.net("d.sda").level() == sim::Level::Low);
     write(mcu, Twim0 + 0x508, 20);        // PSEL.SCL = P0.20
     write(mcu, Twim0 + 0x50c, 17);        // PSEL.SDA = P0.17
     write(mcu, Twim0 + 0x524, 0x01980000); // 100 kHz
     write(mcu, Twim0 + 0x588, 0x44);      // ADDRESS
     write(mcu, Twim0 + 0x500, 6);         // ENABLE
+    CHECK(world.net("d.sda").level() == sim::Level::High && world.net("d.scl").level() == sim::Level::High);
 
     // Write register 0x10 = 0x5c (two bytes: pointer, value), then STOP.
     std::uint8_t *ram = mcu.chip().ram();

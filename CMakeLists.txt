@@ -291,7 +291,7 @@ if(MCUEMU_BUILD_TESTS)
             "Skipping firmware_nrf52840_boot: local nrf52840-sensor.bin not found in firmware/")
     endif()
 
-    if(EXISTS "${MCUEMU_NRF52840_SENSOR_FIRMWARE}" AND
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/firmware/nrf52840-sensor-sht31.bin" AND
        EXISTS "${MCUEMU_SAMPLE_GW_FIRMWARE}")
         find_package(Python3 COMPONENTS Interpreter QUIET)
         if(Python3_Interpreter_FOUND)

@@ -1,5 +1,7 @@
 -- SHT3x-style I2C temperature/humidity sensor (single-shot, no clock
--- stretching): the master writes a 16-bit command, then reads 6 bytes.
+-- stretching): the master writes a 16-bit command, then reads 6 bytes. Also
+-- answers soft reset (0x30A2), clear status (0x3041) and read status (0xF32D,
+-- 3 bytes), which drivers send during start-up.
 -- Terminals: sda, scl. Params: address (0x44), temperature_c (25),
 -- humidity (50). Exposes: temperature_c, humidity.
 
@@ -22,6 +24,13 @@ end
 local command, command_bytes = 0, 0
 local reply, reply_index = {}, 0
 
+local function status()
+  -- 0x8010 is the datasheet's value right after reset (alert pending, reset
+  -- detected).
+  reply = {0x80, 0x10, crc8(0x80, 0x10)}
+  reply_index = 0
+end
+
 local function measure()
   local t = math.floor((temperature + 45) / 175 * 65535 + 0.5)
   local h = math.floor(humidity / 100 * 65535 + 0.5)
@@ -39,7 +48,10 @@ i2c_slave {
     command = (command << 8) | byte
     command_bytes = command_bytes + 1
     if command_bytes == 2 then
-      if command == 0x2400 or command == 0x2c06 then measure() else return false end
+      if command == 0x2400 or command == 0x2c06 then measure()
+      elseif command == 0xf32d then status()
+      elseif command == 0x30a2 or command == 0x3041 then reply, reply_index = {}, 0
+      else return false end
     end
     return command_bytes <= 2
   end,

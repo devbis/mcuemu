@@ -33,8 +33,16 @@ devices:
     params:
       led_pin: P0.13        # the sample image was built for the nRF52840-DK (LED1 = P0.13)
       position: [4, 0, 1]
+      firmware: ../../firmware/nrf52840-sensor-sht31.bin   # the SHT31 variant (reads an I2C sensor)
+
+scenario:
+  events:
+    - { at: 70s, endpoint: board.sensor.temperature_c, set: 31.5 }
+    - { at: 70s, endpoint: board.sensor.humidity, set: 70 }
 
 attach:
   - { endpoint: air0, sink: "pcap:nrf-air.pcap" }
+  - { endpoint: board.sda, sink: "vcd:nrf-i2c.vcd" }
+  - { endpoint: board.scl, sink: "vcd:nrf-i2c.vcd" }
   - { endpoint: board.mcu.rtt, sink: "text" }
   - { endpoint: board.led, sink: "file:led.log" }

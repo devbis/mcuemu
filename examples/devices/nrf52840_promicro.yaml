@@ -5,6 +5,10 @@
 #   mcu.P0.15  -> blue status LED   (high = lit; nice!nano v2)
 #   mcu.P0.11  <- push button       (internal pull-up expected, low = pressed)
 #
+# An SHT31 sits on P0.26 (SDA) / P0.27 (SCL), where the DK-built sensor image
+# with `sensor-sht31` expects it; endpoints `<device>.sensor.temperature_c` and
+# `.humidity` set the climate.
+#
 # The nice!nano also gates its 3.3 V regulator with P0.13; that is outside the
 # MCU model, so it is not wired. Firmware built for the nRF52840-DK blinks LED1
 # on P0.13: pass `led_pin: P0.13` for such an image (the DK's LEDs are active
@@ -24,6 +28,11 @@ params:
   tx_power_dbm: 4
   led_pin: P0.15
   button_pin: P0.11
+  sda_pin: P0.26                  # the external sensor header of the nRF52840-DK image
+  scl_pin: P0.27
+  temperature_c: 22.5
+  humidity: 45
+  sensor_script: ../parts/sht3x.lua
   rtt_address: 0x20000008         # SEGGER RTT control block (the sample image logs with defmt-rtt)
 
 device:
@@ -42,6 +51,15 @@ device:
   nets:
     - { id: led,    pins: ["mcu.${led_pin}"] }
     - { id: button, pull: up, pins: ["mcu.${button_pin}"] }
+    - { id: sda, kind: open_drain, pull: up, pins: ["mcu.${sda_pin}"] }
+    - { id: scl, kind: open_drain, pull: up, pins: ["mcu.${scl_pin}"] }
   parts:
     - { id: status_led, type: led, pins: { in: led } }
     - { id: key, type: button, pins: { out: button } }
+    # The SHT31 of the `sht31` image variant (address 0x44). An image without an
+    # external sensor (the default one reads the on-chip TEMP) never talks to it.
+    - id: sensor
+      type: script
+      script: "${sensor_script}"
+      pins: { sda: sda, scl: scl }
+      params: { temperature_c: "${temperature_c}", humidity: "${humidity}" }

@@ -379,6 +379,7 @@ private:
     void push_stop(std::uint64_t at);
     void apply_lines(bool sda_low, bool scl_low);
     void release_lines();
+    void hand_back();
     std::uint64_t quarter_cycles() const;
     bool connected() const { return psel_[0] != ~0u && psel_[1] != ~0u && enable_ == 6; }
     std::uint64_t next_step() const { return steps_.empty() ? Never : steps_.front().at; }

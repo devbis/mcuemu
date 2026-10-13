@@ -43,7 +43,7 @@ std::uint32_t Twim::event_register(unsigned bit) {
 }
 
 void Twim::reset() {
-    release_lines();
+    hand_back();
     events_ = inten_ = shorts_ = enable_ = errorsrc_ = 0;
     frequency_ = 0x04000000;
     psel_[0] = psel_[1] = ~0u;
@@ -96,14 +96,26 @@ void Twim::apply_lines(bool sda_low, bool scl_low) {
     lines_driven_ = true;
 }
 
-void Twim::release_lines() {
-    if (!lines_driven_)
-        return;
-    Gpio &gpio = chip_.gpio();
+// Gives the pads back to the GPIO registers.
+void Twim::hand_back() {
     for (std::uint32_t psel : psel_)
         if (const unsigned pad = decode_pad(psel); pad != NoPad)
-            gpio.set_override(pad, std::nullopt);
+            chip_.gpio().set_override(pad, std::nullopt);
     lines_driven_ = false;
+    sda_low_ = scl_low_ = false;
+}
+
+// While the block is enabled it owns the pads, whatever the GPIO registers say
+// (the SDK leaves OUT at 0): an idle bus is both lines released (open-drain
+// high). Disabling hands them back.
+void Twim::release_lines() {
+    Gpio &gpio = chip_.gpio();
+    const bool owned = connected();
+    for (std::uint32_t psel : psel_)
+        if (const unsigned pad = decode_pad(psel); pad != NoPad)
+            gpio.set_override(pad, owned ? std::optional<Gpio::Override>(Gpio::Override{true, true})
+                                         : std::nullopt);
+    lines_driven_ = owned;
     sda_low_ = scl_low_ = false;
 }
 
@@ -342,15 +354,24 @@ void Twim::write(std::uint32_t offset, std::uint32_t value) {
     case 0x4c4: errorsrc_ &= ~value; break;
     case 0x500:
         enable_ = value & 0xfu;
-        if (enable_ != 6) {
-            steps_.clear();
-            step_index_ = 0;
-            bus_started_ = false;
+        steps_.clear();
+        step_index_ = 0;
+        bus_started_ = false;
+        if (enable_ == 6)
             release_lines();
-        }
+        else
+            hand_back();
         break;
-    case 0x508: psel_[0] = value; break;
-    case 0x50c: psel_[1] = value; break;
+    case 0x508:
+        hand_back();
+        psel_[0] = value;
+        release_lines();
+        break;
+    case 0x50c:
+        hand_back();
+        psel_[1] = value;
+        release_lines();
+        break;
     case 0x524: frequency_ = value; break;
     case 0x534: rx_ptr_ = value; break;
     case 0x538: rx_max_ = value & 0x7fffu; break;
