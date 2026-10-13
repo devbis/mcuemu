@@ -53,6 +53,11 @@ target_link_libraries(mcs51-emu PRIVATE mcs51emu)
 find_package(yaml-cpp QUIET)
 if(NOT yaml-cpp_FOUND)
     include(FetchContent)
+    # yaml-cpp 0.8.0 declares cmake_minimum_required(VERSION 3.4), which CMake 4
+    # rejects; accept it instead of patching the dependency.
+    if(NOT DEFINED CMAKE_POLICY_VERSION_MINIMUM)
+        set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+    endif()
     set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
     set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
     set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "" FORCE)
