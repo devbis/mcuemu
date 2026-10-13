@@ -1,0 +1,42 @@
+# A LYWSD03MMC (hardware 1.4, I2C display) joining a Zigbee network run by the
+# sampleGW coordinator, for firmware bring-up.
+#
+#   mkdir -p /tmp/sensor && cd /tmp/sensor
+#   /path/to/build/mcuemu sim /path/to/examples/lywsd03mmc.yaml --for 20s
+#
+# For hardware 1.5 (UART display, SHT4x) include devices/lywsd03mmc_v15.yaml
+# instead. The images are not in the repository, see examples/README.md.
+version: 1
+
+world:
+  seed: 1
+  duration: 20s
+  radio:
+    - id: air0
+      model: log_distance
+      reference_loss_db: 40
+      path_loss_exponent: 2.5
+
+devices:
+  - id: coordinator
+    mcus:
+      - id: zb
+        model: tlsr8258
+        variant: F1K
+        firmware: ../firmware/samplegw_tb03f.bin
+        radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+  - include: devices/lywsd03mmc_v14.yaml
+    id: sensor
+    params:
+      position: [3, 0, 1]
+
+attach:
+  - { endpoint: air0, sink: "pcap:sensor-air.pcap" }
+  - { endpoint: sensor.sda, sink: "vcd:sensor-i2c.vcd" }
+  - { endpoint: sensor.scl, sink: "vcd:sensor-i2c.vcd" }
+
+scenario:
+  events:
+    - { at: 8s, endpoint: sensor.sensor.temperature_c, set: 26.3 }
+    - { at: 8s, endpoint: sensor.sensor.humidity, set: 61 }

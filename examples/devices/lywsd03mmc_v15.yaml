@@ -1,0 +1,56 @@
+# Xiaomi LYWSD03MMC, hardware B1.5 (the Zigbee firmware calls this class B1.6):
+# the same module, but the segment LCD is driven over a UART instead of I2C
+# (38400 8N1, TX PD7) and the sensor is an SHT4x at I2C 0x44. The firmware
+# detects this by finding nothing at I2C 0x3C/0x3E. See lywsd03mmc_v14.yaml for
+# the I2C-display board.
+#
+# The display frame (lcd.c `uart_send_lcd`) is 13 bytes:
+#   00 00 00 00 AA  b6 b5 b4 b3 b2 b1  XOR(b1..b6)  55
+# with b1..b6 the six LCD RAM bytes in the order of the I2C board. The frames
+# go to the `lcd_log` sink (hex lines on stdout by default); no part decodes
+# them yet.
+version: 1
+
+params:
+  firmware: ../../firmware/z03mmc.bin
+  air: air0                       # radio medium defined in the world
+  position: [0, 0, 0]             # meters
+  tx_power_dbm: 4
+  supply_mv: 3000                 # CR2032; seen by the ADC's VBAT input
+  sda_pin: PC2
+  scl_pin: PC3
+  button1_pin: PA5                # reset test point
+  button2_pin: PA6                # test point P8
+  temperature_c: 22.5
+  humidity: 45
+  sensor_script: ../parts/sht4x.lua
+  lcd_log: "hex:2ms"              # sink for the display frames
+
+device:
+  id: lywsd03mmc
+  mcus:
+    - id: zb
+      model: tlsr8258
+      variant: F512
+      firmware: "${firmware}"
+      supply_mv: "${supply_mv}"
+      radio:
+        air: "${air}"
+        position: "${position}"
+        tx_power_dbm: "${tx_power_dbm}"
+        protocols: [zigbee]
+  nets:
+    - { id: sda, kind: open_drain, pull: up, pins: ["zb.${sda_pin}"] }
+    - { id: scl, kind: open_drain, pull: up, pins: ["zb.${scl_pin}"] }
+    - { id: button1, pull: up, pins: ["zb.${button1_pin}"] }
+    - { id: button2, pull: up, pins: ["zb.${button2_pin}"] }
+  parts:
+    - id: sensor
+      type: script
+      script: "${sensor_script}"
+      pins: { sda: sda, scl: scl }
+      params: { temperature_c: "${temperature_c}", humidity: "${humidity}" }
+    - { id: key1, type: button, pins: { out: button1 } }
+    - { id: key2, type: button, pins: { out: button2 } }
+  attach:
+    - { endpoint: zb.uart0, sink: "${lcd_log}" }

@@ -1,0 +1,59 @@
+# Xiaomi LYWSD03MMC, hardware B1.4: a TLSR8251-class Telink module (modeled as
+# a TLSR8258 with 512 KiB flash), an SHTC3 sensor at I2C 0x70 and a segment LCD
+# at I2C 0x3C, both on the same bus (SDA PC2, SCL PC3). Two test-point buttons:
+# PA5 (the reset pad, pulled up) and PA6 (pad P8). The Zigbee firmware is
+# devbis/z03mmc (board_8258_03mmc.h); it probes 0x3C, then 0x3E, and falls back
+# to a UART display when neither answers (hardware B1.5/B1.6, see
+# lywsd03mmc_v15.yaml).
+#
+# The firmware is not in the repository: build z03mmc and pass `firmware` or
+# copy it to the default path. Read the display with the `lcd` part's
+# endpoints (`<device>.lcd.temperature`, `.humidity`, `.unit`) and set the
+# climate with `<device>.sensor.temperature_c` / `.humidity`.
+version: 1
+
+params:
+  firmware: ../../firmware/z03mmc.bin
+  air: air0                       # radio medium defined in the world
+  position: [0, 0, 0]             # meters
+  tx_power_dbm: 4
+  supply_mv: 3000                 # CR2032; seen by the ADC's VBAT input
+  sda_pin: PC2
+  scl_pin: PC3
+  button1_pin: PA5                # reset test point
+  button2_pin: PA6                # test point P8
+  temperature_c: 22.5
+  humidity: 45
+  sensor_script: ../parts/shtc3.lua
+  lcd_script: ../parts/lcd_lywsd03mmc.lua
+
+device:
+  id: lywsd03mmc
+  mcus:
+    - id: zb
+      model: tlsr8258
+      variant: F512
+      firmware: "${firmware}"
+      supply_mv: "${supply_mv}"
+      radio:
+        air: "${air}"
+        position: "${position}"
+        tx_power_dbm: "${tx_power_dbm}"
+        protocols: [zigbee]
+  nets:
+    - { id: sda, kind: open_drain, pull: up, pins: ["zb.${sda_pin}"] }
+    - { id: scl, kind: open_drain, pull: up, pins: ["zb.${scl_pin}"] }
+    - { id: button1, pull: up, pins: ["zb.${button1_pin}"] }
+    - { id: button2, pull: up, pins: ["zb.${button2_pin}"] }
+  parts:
+    - id: sensor
+      type: script
+      script: "${sensor_script}"
+      pins: { sda: sda, scl: scl }
+      params: { temperature_c: "${temperature_c}", humidity: "${humidity}" }
+    - id: lcd
+      type: script
+      script: "${lcd_script}"
+      pins: { sda: sda, scl: scl }
+    - { id: key1, type: button, pins: { out: button1 } }
+    - { id: key2, type: button, pins: { out: button2 } }
