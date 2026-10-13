@@ -1,5 +1,7 @@
 #include "sim/sink.hpp"
 
+#include "sim/config.hpp"
+
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/in.h>
@@ -56,6 +58,73 @@ public:
         std::cout.write(text.data(), static_cast<std::streamsize>(text.size()));
         std::cout.flush();
     }
+};
+
+} // namespace
+
+void HexLog::flush(const Pending &pending) {
+    static const char digits[] = "0123456789abcdef";
+    std::string line;
+    char stamp[48];
+    std::snprintf(stamp, sizeof stamp, "[%11.6f s] ",
+                  static_cast<double>(pending.first_ns) / 1e9);
+    line = stamp;
+    line += pending.endpoint;
+    line += "  ";
+    line += std::to_string(pending.bytes.size());
+    line += pending.bytes.size() == 1 ? " byte:" : " bytes:";
+    for (std::uint8_t byte : pending.bytes) {
+        line.push_back(' ');
+        line.push_back(digits[byte >> 4]);
+        line.push_back(digits[byte & 15]);
+    }
+    line.push_back('\n');
+    std::cout.write(line.data(), static_cast<std::streamsize>(line.size()));
+    std::cout.flush();
+}
+
+void HexLog::add(const EndpointEvent &event) {
+    const auto *bytes = std::get_if<Bytes>(&event.value);
+    if (!bytes || bytes->empty())
+        return;
+    // Everything that has been quiet for a gap is complete; print it oldest first.
+    for (auto it = pending_.begin(); it != pending_.end();) {
+        if (event.time_ns > it->last_ns && event.time_ns - it->last_ns > gap_ns_) {
+            flush(*it);
+            it = pending_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (Pending &pending : pending_) {
+        if (pending.endpoint == event.endpoint) {
+            pending.bytes.insert(pending.bytes.end(), bytes->begin(), bytes->end());
+            pending.last_ns = event.time_ns;
+            return;
+        }
+    }
+    pending_.push_back({event.endpoint, event.time_ns, event.time_ns, *bytes});
+}
+
+void HexLog::flush_all() {
+    std::sort(pending_.begin(), pending_.end(),
+              [](const Pending &a, const Pending &b) { return a.first_ns < b.first_ns; });
+    for (const Pending &pending : pending_)
+        flush(pending);
+    pending_.clear();
+}
+
+namespace {
+
+class HexSink final : public Sink {
+public:
+    explicit HexSink(std::shared_ptr<HexLog> log) : log_(std::move(log)) {}
+    ~HexSink() override { log_->flush_all(); }
+    void consume(const EndpointEvent &event) override { log_->add(event); }
+    void finish() override { log_->flush_all(); }
+
+private:
+    std::shared_ptr<HexLog> log_;
 };
 
 class FileSink final : public Sink {
@@ -346,6 +415,13 @@ std::size_t Session::attach(const std::string &endpoint_name, const std::string 
     std::unique_ptr<Sink> sink;
     if (kind == "stdout" && colon == std::string::npos) {
         sink = std::make_unique<StdoutSink>();
+    } else if (kind == "hex") {
+        // hex or hex:GAP (a duration such as 500us); the default gap is 1 ms.
+        const std::uint64_t gap = arg.empty() ? 1000000u : parse_duration_ns(arg);
+        auto &log = hex_logs_[gap];
+        if (!log)
+            log = std::make_shared<HexLog>(gap);
+        sink = std::make_unique<HexSink>(log);
     } else if (kind == "file" && !arg.empty()) {
         sink = std::make_unique<FileSink>(arg);
     } else if (kind == "tcp" && !arg.empty()) {
@@ -383,7 +459,7 @@ std::size_t Session::attach(const std::string &endpoint_name, const std::string 
     } else {
         throw std::invalid_argument(
             "unknown sink '" + spec +
-            "' (use stdout, file:PATH, tcp:PORT, vcd:PATH or pcap:PATH[,ble])");
+            "' (use stdout, hex[:GAP], file:PATH, tcp:PORT, vcd:PATH or pcap:PATH[,ble])");
     }
     Sink *raw = sink.get();
     const std::size_t subscription =

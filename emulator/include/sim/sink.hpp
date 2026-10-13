@@ -55,6 +55,29 @@ private:
     bool written_{false};
 };
 
+// Prints byte streams as hex lines on stdout. Bytes of one endpoint that follow
+// each other closer than `gap_ns` form one line, so a UART frame is one line.
+// Lines come out in time order across all the endpoints sharing the log; a
+// line is written once the next event (of any endpoint) shows the gap has
+// passed, or when the log is flushed.
+class HexLog {
+public:
+    explicit HexLog(std::uint64_t gap_ns) : gap_ns_(gap_ns) {}
+    void add(const EndpointEvent &event);
+    void flush_all();
+
+private:
+    struct Pending {
+        std::string endpoint;
+        std::uint64_t first_ns;
+        std::uint64_t last_ns;
+        Bytes bytes;
+    };
+    void flush(const Pending &pending);
+    std::uint64_t gap_ns_;
+    std::vector<Pending> pending_;
+};
+
 class TcpSink;
 
 // Owns the sinks attached to the endpoints of a registry.
@@ -86,6 +109,7 @@ private:
     EndpointRegistry &registry_;
     std::vector<Attachment> attachments_;
     std::map<std::string, std::shared_ptr<VcdWriter>> vcd_files_;
+    std::map<std::uint64_t, std::shared_ptr<HexLog>> hex_logs_;
     std::size_t next_id_{1};
 };
 

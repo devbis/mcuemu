@@ -342,6 +342,7 @@ void test_led_and_button();
 void test_sinks_file_stdout_vcd_pcap();
 void test_tcp_sink();
 void test_attach_config_and_errors();
+void test_hex_sink_groups_frames();
 void test_websocket_primitives();
 void test_rpc_basics();
 void test_rpc_run_events_and_memory();
@@ -384,6 +385,7 @@ int main() {
     test_rtt_endpoint();
     test_led_and_button();
     test_sinks_file_stdout_vcd_pcap();
+    test_hex_sink_groups_frames();
     test_tcp_sink();
     test_attach_config_and_errors();
     test_websocket_primitives();

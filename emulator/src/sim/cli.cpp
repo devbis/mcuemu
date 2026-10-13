@@ -14,7 +14,10 @@ namespace sim {
 void print_sim_usage(std::ostream &out) {
     out << "       tc32-emu sim SYSTEM.yaml [--for DURATION] [--quantum DURATION]\n"
            "       [--trace-nets] [--attach ENDPOINT=SINK]... [--list-endpoints]\n"
-           "       sinks: stdout, file:PATH, tcp:PORT, vcd:PATH, pcap:PATH[,ble]\n";
+           "       [--trace-uart PATTERN]...\n"
+           "       sinks: stdout, hex[:GAP], file:PATH, tcp:PORT, vcd:PATH, pcap:PATH[,ble]\n"
+           "       --trace-uart prints the bytes of every UART endpoint whose name contains\n"
+           "       PATTERN (or all of them for '*') as hex lines, one per frame\n";
 }
 
 void print_serve_usage(std::ostream &out) {
@@ -85,6 +88,7 @@ int sim_command(int argc, char **argv) {
     std::optional<std::uint64_t> duration, quantum;
     bool trace_nets = false;
     bool list_endpoints = false;
+    std::vector<std::string> uart_patterns;
     std::vector<std::pair<std::string, std::string>> attachments;
     for (int i = 2; i < argc; ++i) {
         const std::string arg = argv[i];
@@ -96,6 +100,8 @@ int sim_command(int argc, char **argv) {
             trace_nets = true;
         else if (arg == "--list-endpoints")
             list_endpoints = true;
+        else if (arg == "--trace-uart" && i + 1 < argc)
+            uart_patterns.push_back(argv[++i]);
         else if (arg == "--attach" && i + 1 < argc) {
             const std::string spec = argv[++i];
             const std::size_t equals = spec.find('=');
@@ -134,6 +140,21 @@ int sim_command(int argc, char **argv) {
             throw std::invalid_argument("--attach: unknown endpoint '" + endpoint +
                                         "' (see --list-endpoints)");
         }
+    }
+
+    for (const std::string &pattern : uart_patterns) {
+        bool matched = false;
+        for (const std::string &name : world.endpoints().names()) {
+            if (world.endpoints().at(name).kind() != "uart")
+                continue;
+            if (pattern != "*" && name.find(pattern) == std::string::npos)
+                continue;
+            system->session().attach(name, "hex");
+            matched = true;
+        }
+        if (!matched)
+            throw std::invalid_argument("--trace-uart: no UART endpoint matches '" + pattern +
+                                        "' (see --list-endpoints)");
     }
 
     const std::optional<std::uint64_t> run_for =

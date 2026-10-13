@@ -302,6 +302,37 @@ world: { radio: [ { id: air0 } ] }
     CHECK(read_file(path_of("detached.log")).empty());
 }
 
+void test_hex_sink_groups_frames() {
+    const auto system = build(mcu_yaml(""));
+    sim::World &world = system->world();
+    sim::Session &session = system->session();
+    std::ostringstream captured;
+    auto *old = std::cout.rdbuf(captured.rdbuf());
+    session.attach("d.m.uart0", "hex");        // default gap: 1 ms
+    transmit_uart(device_of(*system), 'o');
+    world.run_for(100000);
+    transmit_uart(device_of(*system), 'k');    // within the gap: same line
+    world.run_for(100000);
+    session.finish();
+    std::cout.rdbuf(old);
+    CHECK(contains(captured.str(), "d.m.uart0  2 bytes: 6f 6b\n"));
+
+    // A shorter gap splits the same traffic into two lines.
+    const auto split = build(mcu_yaml(""));
+    sim::Session &split_session = split->session();
+    std::ostringstream split_captured;
+    old = std::cout.rdbuf(split_captured.rdbuf());
+    split_session.attach("d.m.uart0", "hex:50us");
+    transmit_uart(device_of(*split), 'o');
+    split->world().run_for(100000);
+    transmit_uart(device_of(*split), 'k');
+    split->world().run_for(100000);
+    split_session.finish();
+    std::cout.rdbuf(old);
+    CHECK(contains(split_captured.str(), "d.m.uart0  1 byte: 6f\n"));
+    CHECK(contains(split_captured.str(), "d.m.uart0  1 byte: 6b\n"));
+}
+
 void test_tcp_sink() {
     const auto system = build(mcu_yaml());
     sim::World &world = system->world();

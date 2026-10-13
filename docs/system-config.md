@@ -160,6 +160,17 @@ from a spec; the same specs work in `attach:` (device scope may use names
 relative to the device, e.g. `m.uart0`) and in `--attach ENDPOINT=SINK`
 (repeatable). Relative output paths are relative to the working directory.
 
+To watch UART traffic without touching the YAML, `tc32-emu sim` has
+`--trace-uart PATTERN` (repeatable): it attaches a `hex` sink to every UART
+endpoint whose name contains PATTERN (`'*'` is all of them):
+
+    tc32-emu sim examples/thermostat_only.yaml --for 3s \
+        --trace-uart thermostat.main.uart1 --trace-uart thermostat.zb.uart0
+
+Frames sent back to back (less than 1 ms apart) end up on one line; use
+`--attach thermostat.main.uart1=hex:300us` to split them. Remote clients cannot
+use `stdout` or `hex`.
+
 | endpoint | kind | events | `set` |
 |---|---|---|---|
 | `device.mcu.uartN` | `uart` | bytes the UART transmitted | bytes/string to receive (queued until the FIFO has room) |
@@ -171,6 +182,7 @@ relative to the device, e.g. `m.uart0`) and in `--attach ENDPOINT=SINK`
 | sink | for | does |
 |---|---|---|
 | `stdout` | any | bytes raw (a console), other values as `t_ns name = value` |
+| `hex` or `hex:GAP` | uart, rtt | hex lines on stdout: `[ time s] endpoint  N bytes: ..`. Bytes of one endpoint closer together than GAP (a duration, default `1ms`) share a line, so a frame is a line; lines from all `hex` sinks are merged in time order. A line appears once a later event (of any endpoint) shows the gap has passed, and at the end of the run |
 | `file:PATH` | any | the same, into a file |
 | `tcp:PORT` or `tcp:HOST:PORT` | any; useful for uart/rtt | listens (default `127.0.0.1`; `tcp:0` picks a port); one client gets the events and what it sends is fed into the endpoint; a new connection replaces the old one; a client that does not read loses data |
 | `vcd:PATH` | `net` and numeric `param` | a waveform, written when the run ends; several endpoints can share one file |

@@ -51,8 +51,8 @@ std::string Simulation::confine_sink(const std::string &spec) const {
     const std::size_t colon = spec.find(':');
     const std::string kind = spec.substr(0, colon);
     const std::string arg = colon == std::string::npos ? "" : spec.substr(colon + 1);
-    if (kind == "stdout")
-        throw SimulationError("the stdout sink is not available to remote clients");
+    if (kind == "stdout" || kind == "hex")
+        throw SimulationError("the " + kind + " sink is not available to remote clients");
     if (kind == "file" || kind == "vcd")
         return kind + ":" + confine_path(arg);
     if (kind == "pcap") {
