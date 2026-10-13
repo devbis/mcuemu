@@ -4,7 +4,8 @@
 |---|---|
 | `world.yaml` | A Zigbee network of three devices on one radio medium: a coordinator, a thermostat and a smart plug. The devices come from `devices/` through `include:`. |
 | `devices/tuya_thermostat.yaml` | A Tuya-style thermostat: CA51F253L3 main board + ZT3L (TLSR8258) Zigbee module, joined by a UART running the "serial v2" protocol. |
-| `devices/tuya_plug.yaml` | A Tuya-style smart plug: TLSR8258 module, relay, LED, button and a BL0937 energy meter on three GPIOs. |
+| `devices/tuya_plug.yaml` | A smart plug: TLSR8258 module, relay, LED, button and a BL0937 energy meter on three GPIOs. Defaults are the Zbeacon TS011F board of `zigbee-rs-plugs` (pins and vendor calibration). |
+| `plug_only.yaml` | The plug on its own radio medium, with a scenario (load change, button press) and VCD/pcap sinks, for firmware bring-up. |
 | `parts/bl0937.lua` | The BL0937 as a scripted part (CF / CF1 pulse outputs, SEL input). |
 | `parts/ds18b20.lua`, `parts/sht3x.lua` | Reference sensor scripts (see `docs/scripting.md`). |
 
@@ -42,10 +43,11 @@ No firmware image is stored in the repository. Put the images where the
 | coordinator | the coordinator sample | `firmware/samplegw_tb03f.bin` |
 | thermostat, ZT3L module | the application built by the thermostat project | `firmware/osrctherm_r02_zrd.bin` |
 | thermostat, main board | the CA51F253L3 image | `firmware/osrctherm_r02_v1.02_CA51F253L3.bin` |
-| plug | your plug firmware | `firmware/tuya_plug.bin` |
+| plug | `tlsr8258-plug.bin` from `zigbee-rs-plugs` (`build-tuya.sh`, 512 KiB board) | `firmware/tlsr8258-plug.bin` |
 
-The pin numbers of the plug (`relay_pin`, `cf_pin`, ...) are typical
-placeholders; take the real ones from your firmware or schematic.
+The plug's pins and BL0937 ratios default to the Zbeacon TS011F board (relay
+PD2, LED PB1 active low, button PA0, CF PB4, CF1 PB5, SEL PD3); for another
+board pass `relay_pin`, `cf_pin`, `variant`, ... as params.
 
 ## What is and is not modeled
 

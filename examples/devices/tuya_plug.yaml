@@ -10,27 +10,35 @@
 #   zb.<cf1_pin>     <- BL0937 CF1         (current or voltage, per SEL)
 #   zb.<sel_pin>     -> BL0937 SEL         (low = current, high = voltage)
 #
-# No plug firmware ships with the repository: put your image at the default
-# path or pass `firmware`. The pin numbers are typical placeholders; take the
-# real ones from your board's schematic or firmware and pass them as params.
+# Pin map and calibration are those of the Zbeacon TS011F plug board
+# (zigbee-rs-plugs, board `tlsr8258-zbeacon-ts011f-bl0937`, 512 KiB flash):
+# relay PD2 (active high), status LED PB1 (active low), button PA0 (active low),
+# CF PB4, CF1 PB5, SEL PD3 (low = current, high = voltage). The calibration is
+# the vendor's: current = CF1 * 200 / 16.162 mA, voltage = CF1 * 5 / 39.136 V,
+# power = CF * 36 / 23.532 W. For another board pass its pins as params.
+#
+# No plug firmware ships with the repository: build it in zigbee-rs-plugs
+# (build-tuya.sh) and pass `firmware`, or copy it to the default path.
 version: 1
 
 params:
-  firmware: ../../firmware/tuya_plug.bin
+  firmware: ../../firmware/tlsr8258-plug.bin
+  variant: F512                   # flash size of the module (F512 or F1K)
   air: air0                       # radio medium defined in the world
   position: [0, 0, 0]             # meters
   tx_power_dbm: 10
   relay_pin: PD2
-  led_pin: PD3
-  button_pin: PB4
-  cf_pin: PB5
-  cf1_pin: PC2
-  sel_pin: PB1
+  led_pin: PB1
+  led_active: low
+  button_pin: PA0
+  cf_pin: PB4
+  cf1_pin: PB5
+  sel_pin: PD3
   voltage_v: 230                  # mains voltage
   power_w: 0                      # load; change it at run time via <plug>.meter.power_w
-  cf_hz_per_w: 0.5                # BL0937 calibration (see parts/bl0937.lua)
-  cf1_hz_per_v: 8
-  cf1_hz_per_a: 100
+  cf_hz_per_w: 0.6537             # 23.532 / 36
+  cf1_hz_per_v: 7.827             # 39.136 / 5
+  cf1_hz_per_a: 80.81             # 16.162 / 0.2
   meter_script: ../parts/bl0937.lua
 
 device:
@@ -38,7 +46,7 @@ device:
   mcus:
     - id: zb
       model: tlsr8258
-      variant: F1K
+      variant: "${variant}"
       firmware: "${firmware}"
       radio:
         air: "${air}"
@@ -54,7 +62,7 @@ device:
     - { id: sel,    pins: ["zb.${sel_pin}"] }
   parts:
     - { id: relay_led, type: led, pins: { in: relay } }
-    - { id: status_led, type: led, pins: { in: led } }
+    - { id: status_led, type: led, pins: { in: led }, params: { active: "${led_active}" } }
     - { id: key, type: button, pins: { out: button } }
     - id: meter
       type: script

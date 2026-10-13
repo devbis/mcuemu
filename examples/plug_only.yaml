@@ -1,0 +1,39 @@
+# A single BL0937 smart plug on its own radio medium, for firmware bring-up.
+# The plug is the device in devices/tuya_plug.yaml (pins and calibration of the
+# Zbeacon TS011F board); the firmware is not in the repository, see
+# examples/README.md.
+#
+#   mkdir -p /tmp/plug && cd /tmp/plug
+#   /path/to/build/mcuemu sim /path/to/examples/plug_only.yaml --for 10s
+#
+# Sinks write into the current directory. The CF and CF1 traces show the
+# pulses the firmware counts; open plug-meter.vcd in a waveform viewer.
+version: 1
+
+world:
+  seed: 1
+  duration: 10s
+  radio:
+    - id: air0
+      model: log_distance
+      reference_loss_db: 40
+      path_loss_exponent: 2.5
+
+devices:
+  - include: devices/tuya_plug.yaml
+    id: plug
+    params:
+      power_w: 60              # a lamp
+
+attach:
+  - { endpoint: plug.cf,  sink: "vcd:plug-meter.vcd" }
+  - { endpoint: plug.cf1, sink: "vcd:plug-meter.vcd" }
+  - { endpoint: plug.sel, sink: "vcd:plug-meter.vcd" }
+  - { endpoint: air0, sink: "pcap:plug-air.pcap" }
+
+scenario:
+  events:
+    - { at: 3s, endpoint: plug.meter.power_w, set: 1500 }   # a kettle starts
+    - { at: 6s, endpoint: plug.key.pressed, set: true }     # short button press
+    - { at: 6200ms, endpoint: plug.key.pressed, set: false }
+    - { at: 8s, endpoint: plug.meter.power_w, set: 0 }

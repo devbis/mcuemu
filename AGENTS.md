@@ -69,7 +69,7 @@ ctest --test-dir build --output-on-failure
 - Firmware images are local and ignored; never commit `*.bin`, `*.hex`, `*.elf`.
   The examples expect `firmware/osrctherm_r02_zrd.bin`,
   `firmware/osrctherm_r02_v1.02_CA51F253L3.bin`, `firmware/samplegw_tb03f.bin`
-  and `firmware/tuya_plug.bin` (the plug image is a placeholder path).
+  and `firmware/tlsr8258-plug.bin`.
 - `mcuemu sim` writes its sink outputs (`thermostat-*.log`, `air.pcap`,
   `*.vcd`) into the current directory. Run experiments from a scratch
   directory, or delete the files; do not commit them.
@@ -201,7 +201,7 @@ rather than guessing.
 
 - No BLE at register level; CA51 has no GPIO/ADC/radio; no TLS on the control API.
 - UART timing for the CA51F253L3 RX path is not bit-accurate.
-- The smart plug example's firmware path and pin numbers are placeholders.
+- The plug example uses the pins of the Zbeacon TS011F board. Without a coordinator the plug firmware only scans and requests steering, so the relay does not react to the button.
 - Realtime pacing cannot reach 1x for busy firmware; use `speed` below 1.
 - Stage 8 of the original plan (Python host/client, snapshot/restore) is not
   started and has not been approved.
