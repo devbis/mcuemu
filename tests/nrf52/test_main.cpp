@@ -23,6 +23,9 @@ void test_nrf52_watchdog_resets_unless_fed();
 void test_nrf52_uarte_transmit_and_receive();
 void test_nrf52_saadc_reads_vdd();
 void test_nrf52_clock_start_events();
+void test_nrf52_radio_frame_exchange();
+void test_nrf52_radio_cca_sees_a_frame_on_air();
+void test_nrf52_radio_ramp_and_state();
 } // namespace mcuemu_tests
 
 // Names each test on stderr before it runs, so a crash in CI shows where.
@@ -54,6 +57,9 @@ int main() {
     RUN(test_nrf52_uarte_transmit_and_receive);
     RUN(test_nrf52_saadc_reads_vdd);
     RUN(test_nrf52_clock_start_events);
+    RUN(test_nrf52_radio_frame_exchange);
+    RUN(test_nrf52_radio_cca_sees_a_frame_on_air);
+    RUN(test_nrf52_radio_ramp_and_state);
     if (failures != 0) {
         std::cerr << failures << " check(s) failed\n";
         return 1;

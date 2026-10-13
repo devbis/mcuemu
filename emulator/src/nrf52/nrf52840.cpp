@@ -104,6 +104,7 @@ void Nrf52840::build_peripherals() {
     peripherals_[36] = std::make_unique<Rtc>(*this, 36, 4);
     peripherals_[Saadc::Id] = std::make_unique<Saadc>(*this);
     peripherals_[Ecb::Id] = std::make_unique<Ecb>(*this);
+    peripherals_[Radio::Id] = std::make_unique<Radio>(*this);
     peripherals_[Temp::Id] = std::make_unique<Temp>(*this);
     peripherals_[Rng::Id] = std::make_unique<Rng>(*this);
     peripherals_[Wdt::Id] = std::make_unique<Wdt>(*this);
@@ -226,6 +227,10 @@ std::vector<std::uint8_t> Nrf52840::uart_take_tx(unsigned index) {
     return uart ? uart->take_tx() : std::vector<std::uint8_t>{};
 }
 
+void Nrf52840::connect_radio(mcuemu::VirtualAir &air, const std::string &node) {
+    static_cast<Radio *>(peripherals_[Radio::Id].get())->connect(air, node);
+}
+
 std::uint32_t Nrf52840::analog_input_mv(unsigned pad) const {
     if (analog_provider_)
         return analog_provider_(pad);
@@ -262,7 +267,7 @@ std::uint32_t Nrf52840::read(std::uint32_t address, unsigned size) {
     }
     if (trace_)
         *trace_ << "R 0x" << std::hex << address << " -> 0x" << value << " pc=0x" << core_->pc()
-                << std::dec << '\n';
+                << std::dec << " t=" << time_ns() << '\n';
     if (size < 4)
         value = (value >> ((address & 3u) * 8)) & (size == 1 ? 0xffu : 0xffffu);
     return value;
@@ -271,7 +276,7 @@ std::uint32_t Nrf52840::read(std::uint32_t address, unsigned size) {
 void Nrf52840::write(std::uint32_t address, std::uint32_t value, unsigned size) {
     if (trace_)
         *trace_ << "W 0x" << std::hex << address << " <- 0x" << value << " pc=0x" << core_->pc()
-                << std::dec << '\n';
+                << std::dec << " t=" << time_ns() << '\n';
     if (size < 4)
         value <<= (address & 3u) * 8;
     if (address >= GpioBase)

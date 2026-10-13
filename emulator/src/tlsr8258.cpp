@@ -750,10 +750,11 @@ void Tlsr8258::start_radio_transmit() {
 
     if (radio_air_ && payload_size != 0 && payload_size <= 125u &&
         (registers_[0xf02] & 0x10u) != 0) {
-        radio_air_->transmit(radio_node_name_, {}, RadioProtocol::Zigbee802154,
-                             radio_channel_, network_time_ns(),
-                             std::move(payload));
-        radio_tx_finish_ns_ = radio_air_->frames().back().end_ns;
+        const std::uint64_t id = radio_air_->transmit(
+            radio_node_name_, {}, RadioProtocol::Zigbee802154, radio_channel_,
+            network_time_ns(), std::move(payload));
+        // Look the frame up by id: the medium may have answered it with an ACK.
+        radio_tx_finish_ns_ = radio_air_->frames()[id - 1].end_ns;
         radio_tx_busy_ = true;
         registers_[0xf20] &= static_cast<std::uint8_t>(~0x02u);
         return;

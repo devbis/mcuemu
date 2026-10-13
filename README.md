@@ -21,7 +21,7 @@ radio medium in YAML, and mcuemu runs them on one virtual timeline.
 | --- | --- | --- |
 | Telink TLSR8258 (`TLSR8258F512`, `TLSR8258F1K`) | TC32 | GPIO, timers, UART (incl. DMA), ADC, AES, sleep/wake, Zigbee RF; vendor Zigbee and Zephyr firmware tested |
 | Cmsemicron CA51F253L3 | MCS-51 | CPU, Timer0, UART1, PWM; no GPIO, ADC or radio |
-| Nordic nRF52840 (Pro Micro / nice!nano board) | Cortex-M4F | NVIC, SysTick, FPU, WFE; clocks, GPIO/GPIOTE, UARTE, TWIM, SAADC, TIMER, RTC, RNG, ECB, WDT, NVMC, PPI; the Embassy Zigbee sensor image boots to idle; no radio yet |
+| Nordic nRF52840 (Pro Micro / nice!nano board) | Cortex-M4F | NVIC, SysTick, FPU, WFE; clocks, GPIO/GPIOTE, UARTE, TWIM, SAADC, TIMER, RTC, RNG, ECB, WDT, NVMC, PPI; 802.15.4 RADIO; the Embassy Zigbee sensor image joins a TLSR8258 coordinator; no BLE yet |
 
 Support is partial and driven by the firmware tested so far. See
 [`docs/status.md`](docs/status.md) and the per-chip docs.

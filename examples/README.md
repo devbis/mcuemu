@@ -10,7 +10,8 @@
 | `devices/lywsd03mmc_v14.yaml` | LYWSD03MMC hardware B1.4: TLSR8258-class module, SHTC3 sensor and an I2C segment LCD (0x3C) on PC2/PC3, two test-point buttons. The display is decoded by `parts/lcd_lywsd03mmc.lua`. |
 | `devices/lywsd03mmc_v15.yaml` | LYWSD03MMC with the UART display (38400 baud, TX PD7) and an SHT4x sensor; the display frames are logged, not decoded. |
 | `devices/nrf52840_promicro.yaml` | An nRF52840 on a Pro Micro-style board (nice!nano v2 pins): status LED P0.15, button P0.11; everything else on the header is free to wire. |
-| `nrf52840_promicro.yaml` | The board running the Embassy Zigbee sensor image, with a button press from the scenario. The radio is not modelled yet, so it starts, configures the radio and sleeps. |
+| `nrf52840_promicro.yaml` | The board running the Embassy Zigbee sensor image on its own, with a button press from the scenario (it scans and finds nothing). |
+| `nrf52840_zigbee.yaml` | The same board on one radio medium with the TLSR8258 sampleGW coordinator: the nRF52840 joins the network (about 20.9 s in). Different chips and cores in one world. |
 | `parts/shtc3.lua`, `parts/sht4x.lua`, `parts/lcd_lywsd03mmc.lua` | The two sensors and the I2C segment display of the LYWSD03MMC. |
 | `parts/bl0937.lua` | The BL0937 as a scripted part (CF / CF1 pulse outputs, SEL input). |
 | `parts/ds18b20.lua`, `parts/sht3x.lua` | Reference sensor scripts (see `docs/scripting.md`). |
@@ -71,8 +72,7 @@ board pass `relay_pin`, `cf_pin`, `variant`, ... as params.
   `plug.meter.power_w` endpoint (also a scenario event or an API call). The
   calibration ratios are round numbers; use the ones your firmware expects.
 * **nRF52840**: the CPU, interrupts, clocks, pads, timers, RTC, SAADC, TWIM,
-  UARTE and the crypto/random blocks are modelled (see `docs/nrf52840.md`); the
-  RADIO is not, so a Zigbee or BLE image configures it and then waits. Pins are
-  `P0.xx`/`P1.xx`.
+  UARTE, the crypto/random blocks and the 802.15.4 RADIO are modelled (see
+  `docs/nrf52840.md`); BLE is not. Pins are `P0.xx`/`P1.xx`.
 * **Radio**: log-distance path loss with shadowing; BLE is not connected to
   the TLSR8258 registers, so only Zigbee devices are shown.

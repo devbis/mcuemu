@@ -127,6 +127,15 @@ void Nrf52840Mcu::drive_pad(unsigned pad) {
         pin->set_drive(to_drive(chip_.pad_drive(pad)), time_ns());
 }
 
+void Nrf52840Mcu::attach_radio(mcuemu::VirtualAir &air, const std::string &node,
+                               const std::vector<std::string> &protocols) {
+    for (const std::string &protocol : protocols)
+        if (protocol != "zigbee")
+            throw std::invalid_argument("nrf52840: '" + protocol +
+                                        "' is not connected to the RADIO yet (only zigbee)");
+    chip_.connect_radio(air, node);
+}
+
 void Nrf52840Mcu::read_memory(std::uint32_t address, std::uint8_t *out, std::size_t length) {
     if (!chip_.core().read_memory(address, out, length))
         throw std::runtime_error("address 0x" + std::to_string(address) + " is not mapped");

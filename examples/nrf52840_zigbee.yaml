@@ -1,0 +1,40 @@
+# An nRF52840 (Pro Micro board, Embassy Zigbee sensor image) joining a network
+# run by the TLSR8258 sampleGW coordinator: two chips with different cores on
+# one radio medium.
+#
+#   mkdir -p /tmp/nrf && cd /tmp/nrf
+#   /path/to/build/mcuemu sim /path/to/examples/nrf52840_zigbee.yaml --for 30s
+#
+# The images are not in the repository, see examples/README.md. `nrf-air.pcap`
+# opens in Wireshark (802.15.4 without FCS); the sensor's defmt log is on
+# board.mcu.rtt.
+version: 1
+
+world:
+  seed: 1
+  duration: 30s
+  radio:
+    - id: air0
+      model: log_distance
+      reference_loss_db: 40
+      path_loss_exponent: 2.5
+
+devices:
+  - id: coordinator
+    mcus:
+      - id: zb
+        model: tlsr8258
+        variant: F1K
+        firmware: ../firmware/samplegw_tb03f.bin
+        radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+  - include: devices/nrf52840_promicro.yaml
+    id: board
+    params:
+      led_pin: P0.13        # the sample image was built for the nRF52840-DK (LED1 = P0.13)
+      position: [4, 0, 1]
+
+attach:
+  - { endpoint: air0, sink: "pcap:nrf-air.pcap" }
+  - { endpoint: board.mcu.rtt, sink: "text" }
+  - { endpoint: board.led, sink: "file:led.log" }

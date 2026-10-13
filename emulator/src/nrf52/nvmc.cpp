@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <ostream>
 
 namespace nrf52emu {
 
@@ -69,7 +70,10 @@ std::uint8_t *Nvmc::target(std::uint32_t address, unsigned size) {
     return nullptr;
 }
 
-bool Nvmc::on_store(std::uint32_t address, unsigned size, std::uint32_t) {
+bool Nvmc::on_store(std::uint32_t address, unsigned size, std::uint32_t value) {
+    if (chip_.trace())
+        *chip_.trace() << "FLASH store 0x" << std::hex << address << " size " << std::dec << size
+                       << " <- 0x" << std::hex << value << " config=" << std::dec << config_ << '\n';
     std::uint8_t *where = target(address, size);
     if (!where)
         return true; // reserved space: the store is dropped by the bus

@@ -26,6 +26,9 @@ public:
 
     std::vector<std::string> pin_names() const override;
     void connect_pin(std::string_view pad, Pin &pin) override;
+    // IEEE 802.15.4 only: the model has no BLE radio.
+    void attach_radio(mcuemu::VirtualAir &air, const std::string &node,
+                      const std::vector<std::string> &protocols) override;
     void read_memory(std::uint32_t address, std::uint8_t *out, std::size_t length) override;
     void write_memory(std::uint32_t address, const std::uint8_t *data, std::size_t length) override;
 

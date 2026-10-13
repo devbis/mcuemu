@@ -4,7 +4,9 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 #include <vector>
+#include "mcuemu/radio.hpp"
 
 namespace nrf52emu {
 
@@ -396,6 +398,74 @@ private:
     std::uint32_t pending_tx_ack_{0};
     bool segment_is_write_{false};
     bool suspended_{false};
+};
+
+
+// RADIO in IEEE 802.15.4 mode (MODE = 15), bridged to the shared `VirtualAir`.
+//
+// Evidence: nRF52840 Product Specification, chapter "RADIO" (task/event names,
+// SHORTS bits, INTEN positions, state values) and the packet layout the Nordic
+// 802.15.4 drivers use: PACKETPTR holds the length byte (PHR, counting the two
+// FCS bytes), the MAC frame, and on reception the FCS and then one energy
+// detect byte. Inferred, not documented: ramp-up 40 us (fast, MODECNF0.RU) or
+// 130 us, disable 6 us; the receiver polls the medium every 16 us; CCA and ED
+// treat any overlapping frame whose energy reaches the threshold as busy; the
+// ED byte is clamp(RSSI + 92, 0, 63); the FCS written on reception is the real
+// CRC-16 of the frame. Other modes (BLE) only run the state machine: no frame
+// reaches the medium.
+class Radio final : public Peripheral {
+public:
+    static constexpr int Id = 1;
+    explicit Radio(Nrf52840 &chip) : Peripheral(chip, peripheral_address(Id), Id) {}
+    std::uint32_t read(std::uint32_t offset) override;
+    void write(std::uint32_t offset, std::uint32_t value) override;
+    void task(std::uint32_t offset) override;
+    std::uint64_t service(std::uint64_t now) override;
+    void reset() override;
+    void connect(mcuemu::VirtualAir &air, std::string node) {
+        air_ = &air;
+        node_ = std::move(node);
+    }
+
+private:
+    enum class State : std::uint32_t {
+        Disabled = 0, RxRu = 1, RxIdle = 2, Rx = 3, RxDisable = 4,
+        TxRu = 9, TxIdle = 10, Tx = 11, TxDisable = 12,
+    };
+    void raise(unsigned event_index);
+    void update_irq();
+    void apply_shorts(unsigned event_index);
+    void enable(bool transmit);
+    void disable();
+    void start();
+    void begin_transmit(std::uint64_t ns);
+    void finish_transmit();
+    void poll_air(std::uint64_t ns);
+    void deliver(const mcuemu::RadioFrame &frame, std::uint64_t ns);
+    void start_cca();
+    void finish_cca(std::uint64_t ns);
+    void start_ed();
+    std::uint8_t energy_at(std::uint64_t from_ns, std::uint64_t to_ns, bool strongest_only) const;
+    std::uint64_t ramp_cycles() const;
+    std::uint8_t channel() const;
+    std::uint64_t to_ns(std::uint64_t cycles) const;
+    std::uint64_t reschedule();
+
+    mcuemu::VirtualAir *air_{nullptr};
+    std::string node_;
+    State state_{State::Disabled};
+    std::uint32_t events_{0}, inten_{0}, shorts_{0};
+    std::uint32_t packetptr_{0}, frequency_{0}, txpower_{0}, mode_{0}, pcnf0_{0}, pcnf1_{0};
+    std::uint32_t crccnf_{0}, crcpoly_{0}, crcinit_{0}, modecnf0_{0}, sfd_{0xa7};
+    std::uint32_t edcnt_{0}, edsample_{0}, ccactrl_{0}, crcstatus_{0}, rxcrc_{0}, rssisample_{0};
+    std::uint32_t tifs_{0}, bcc_{0}, power_{1};
+    std::uint64_t phase_end_{Never};       // ramp-up or ramp-down completes (cycles)
+    std::uint64_t tx_end_ns_{0};
+    bool tx_active_{false};
+    std::uint64_t rx_start_ns_{0}, last_poll_ns_{0};
+    std::uint64_t cca_end_{Never}, ed_end_{Never}, rssi_end_{Never};
+    std::uint64_t cca_start_ns_{0};
+    bool cca_active_{false}, ed_active_{false};
 };
 
 } // namespace nrf52emu

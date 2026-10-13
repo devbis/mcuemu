@@ -245,7 +245,7 @@ rather than guessing.
 - UART timing for the CA51F253L3 RX path is not bit-accurate.
 - The plug example uses the pins of the Zbeacon TS011F board. Without a coordinator the plug firmware only scans and requests steering, so the relay does not react to the button.
 - Realtime pacing cannot reach 1x for busy firmware; use `speed` below 1.
-- nRF52840: no radio (IEEE 802.15.4 first, BLE later), no SPIM/PWM/CCM/USBD; one
+- nRF52840: the RADIO is 802.15.4 only (no BLE), no SPIM/PWM/CCM/USBD; one
   cycle per instruction; lazy FP stacking is not modelled (eager stacking is
   architecturally invisible).
 - Stage 8 of the original plan (Python host/client, snapshot/restore) is not

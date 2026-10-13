@@ -75,6 +75,7 @@ add_library(nrf52emu
     emulator/src/nrf52/misc.cpp
     emulator/src/nrf52/saadc.cpp
     emulator/src/nrf52/ecb.cpp
+    emulator/src/nrf52/radio.cpp
     emulator/src/nrf52/uarte.cpp
     emulator/src/nrf52/twim.cpp
     emulator/src/nrf52/run_command.cpp
@@ -82,7 +83,7 @@ add_library(nrf52emu
 target_include_directories(nrf52emu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/emulator/src)
 target_include_directories(nrf52emu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(nrf52emu PRIVATE ${MCUEMU_WARNING_FLAGS})
-target_link_libraries(nrf52emu PUBLIC cortexm)
+target_link_libraries(nrf52emu PUBLIC cortexm mcuemu-core)
 
 find_package(yaml-cpp QUIET)
 if(NOT yaml-cpp_FOUND)
@@ -185,6 +186,7 @@ if(MCUEMU_BUILD_TESTS)
         tests/nrf52/test_main.cpp
         tests/nrf52/test_cortexm.cpp
         tests/nrf52/test_chip.cpp
+        tests/nrf52/test_radio.cpp
     )
     target_include_directories(nrf52emu-tests PRIVATE tests/nrf52)
     target_link_libraries(nrf52emu-tests PRIVATE nrf52emu)
@@ -287,6 +289,23 @@ if(MCUEMU_BUILD_TESTS)
     else()
         message(STATUS
             "Skipping firmware_nrf52840_boot: local nrf52840-sensor.bin not found in firmware/")
+    endif()
+
+    if(EXISTS "${MCUEMU_NRF52840_SENSOR_FIRMWARE}" AND
+       EXISTS "${MCUEMU_SAMPLE_GW_FIRMWARE}")
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            add_test(
+                NAME firmware_nrf52840_zigbee_join
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_nrf52840_zigbee_join.py"
+                        "$<TARGET_FILE:mcuemu>"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/examples/nrf52840_zigbee.yaml")
+            set_tests_properties(firmware_nrf52840_zigbee_join PROPERTIES
+                TIMEOUT 300
+                LABELS "firmware;zigbee"
+            )
+        endif()
     endif()
 
     set(MCUEMU_VENDOR_SLEEP_1S_FIRMWARE

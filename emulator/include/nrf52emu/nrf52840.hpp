@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cortexm/core.hpp"
+#include "mcuemu/radio.hpp"
 
 #include <array>
 #include <cstdint>
@@ -115,6 +116,10 @@ public:
     bool uart_can_receive(unsigned index);
     bool uart_receive(unsigned index, std::uint8_t byte);
     std::vector<std::uint8_t> uart_take_tx(unsigned index);
+
+    // Connects the RADIO to a shared medium under the node name `node`
+    // (IEEE 802.15.4 frames; the node's position and power are the medium's).
+    void connect_radio(mcuemu::VirtualAir &air, const std::string &node);
 
     // Identity: DEVICEID, DEVICEADDR and the encryption/identity roots in FICR
     // derive from `id`.

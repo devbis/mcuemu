@@ -245,7 +245,8 @@ TX power comes from the node's `tx_power_dbm`, not from the chip's registers.
 `protocols` lists what the node uses. The TLSR8258 model connects only the
 Zigbee RF path; `ble` on it is rejected (its BLE registers are not modeled),
 so BLE traffic comes from scripted parts, which can use the `radio` API in
-[scripting.md](scripting.md). `ca51f253l3` has no radio.
+[scripting.md](scripting.md). `nrf52840` connects the 802.15.4 RADIO (`zigbee`)
+and rejects `ble`. `ca51f253l3` has no radio.
 
 ## Naming
 

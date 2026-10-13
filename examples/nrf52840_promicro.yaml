@@ -11,6 +11,11 @@ version: 1
 world:
   seed: 1
   duration: 10s
+  radio:
+    - id: air0
+      model: log_distance
+      reference_loss_db: 40
+      path_loss_exponent: 2.5
 
 devices:
   - include: devices/nrf52840_promicro.yaml
