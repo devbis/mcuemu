@@ -25,22 +25,34 @@ void Ca51F253L3Mcu::reset() {
     uart_taken_[0] = uart_taken_[1] = 0;
 }
 
+namespace {
+
+constexpr std::uint64_t NsPerSecond = 1000000000u;
+
+// floor(cycles * 1e9 / hz) without a 128-bit intermediate (cycles * 1e9
+// overflows 64 bits after ~18 s of 1 GHz-equivalent time): split off whole
+// seconds of cycles, so the remainder product stays below 2^62 for hz < 2^32.
+std::uint64_t cycles_to_ns(std::uint64_t cycles, std::uint32_t hz) {
+    return (cycles / hz) * NsPerSecond + (cycles % hz) * NsPerSecond / hz;
+}
+
+// ceil(ns * hz / 1e9), the same way.
+std::uint64_t ns_to_cycles_ceil(std::uint64_t ns, std::uint32_t hz) {
+    return (ns / NsPerSecond) * hz +
+           ((ns % NsPerSecond) * hz + NsPerSecond - 1) / NsPerSecond;
+}
+
+} // namespace
+
 std::uint64_t Ca51F253L3Mcu::time_ns() const {
-    // 128-bit intermediate: cycles * 1e9 overflows 64 bits after ~18 s of
-    // 1 GHz-equivalent time.
-    return offset_ns_ + static_cast<std::uint64_t>(
-                            static_cast<unsigned __int128>(cycles_) *
-                            1000000000u / clock_hz_);
+    return offset_ns_ + cycles_to_ns(cycles_, clock_hz_);
 }
 
 McuState Ca51F253L3Mcu::run_until(std::uint64_t target_ns) {
     while (state_ == McuState::Running && time_ns() < target_ns) {
         // time_ns() is the cycle count scaled by the clock, so the first cycle
         // whose time is at or past the target is the engine's limit.
-        const unsigned __int128 scaled =
-            static_cast<unsigned __int128>(target_ns) * clock_hz_;
-        const std::uint64_t target_cycle =
-            static_cast<std::uint64_t>((scaled + 999999999u) / 1000000000u);
+        const std::uint64_t target_cycle = ns_to_cycles_ceil(target_ns, clock_hz_);
         const mcs51emu::RunResult result =
             device_.run(std::numeric_limits<std::size_t>::max(), target_cycle);
         cycles_ = result.cycles;

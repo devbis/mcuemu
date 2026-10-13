@@ -1,14 +1,7 @@
 #include "sim/server.hpp"
 
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 #include <algorithm>
-#include <cerrno>
 #include <cstring>
 
 namespace sim {
@@ -18,10 +11,6 @@ namespace {
 constexpr std::size_t SoftOutputLimit = 4u << 20;  // stop advancing a slow reader
 constexpr std::size_t HardOutputLimit = 64u << 20; // drop a client that never reads
 
-void set_nonblocking(int fd) {
-    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
-}
-
 bool is_loopback(const std::string &host) {
     return host == "127.0.0.1" || host == "localhost" || host.rfind("127.", 0) == 0;
 }
@@ -29,7 +18,7 @@ bool is_loopback(const std::string &host) {
 } // namespace
 
 struct Server::Client {
-    int fd{-1};
+    sock::socket_t fd{sock::invalid_socket};
     std::string in, out;
     bool upgraded{false};
     bool closing{false}; // close once `out` is flushed
@@ -49,29 +38,24 @@ Server::Server(ServerOptions options) : options_(std::move(options)) {
     addr.sin_port = htons(options_.port);
     if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1)
         throw std::invalid_argument("bind address must be an IPv4 address, got '" + host + "'");
-    listener_ = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (listener_ < 0)
+    listener_ = sock::open_tcp();
+    if (!sock::valid(listener_))
         throw std::runtime_error("cannot create a socket");
-    const int yes = 1;
-    setsockopt(listener_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
-    if (::bind(listener_, reinterpret_cast<sockaddr *>(&addr), sizeof addr) != 0 ||
-        ::listen(listener_, 16) != 0) {
-        const std::string reason = std::strerror(errno);
-        ::close(listener_);
+    std::string reason;
+    if (!sock::bind_listen(listener_, addr, 16, reason)) {
+        sock::close_socket(listener_);
         throw std::runtime_error("cannot listen on " + host + ":" +
                                  std::to_string(options_.port) + ": " + reason);
     }
-    set_nonblocking(listener_);
-    socklen_t length = sizeof addr;
-    getsockname(listener_, reinterpret_cast<sockaddr *>(&addr), &length);
-    port_ = ntohs(addr.sin_port);
+    sock::set_nonblocking(listener_);
+    port_ = sock::local_port(listener_);
 }
 
 Server::~Server() {
     for (auto &client : clients_)
-        ::close(client->fd);
-    if (listener_ >= 0)
-        ::close(listener_);
+        sock::close_socket(client->fd);
+    if (sock::valid(listener_))
+        sock::close_socket(listener_);
 }
 
 bool Server::authorized(const ws::Request &request) const {
@@ -156,7 +140,7 @@ void Server::queue_close(Client &client, std::uint16_t code, const std::string &
 void Server::read_client(Client &client) {
     char buffer[65536];
     for (;;) {
-        const ssize_t n = ::recv(client.fd, buffer, sizeof buffer, 0);
+        const std::ptrdiff_t n = sock::recv_some(client.fd, buffer, sizeof buffer);
         if (n > 0) {
             client.last_activity = std::chrono::steady_clock::now();
             if (client.closing)
@@ -203,7 +187,7 @@ void Server::read_client(Client &client) {
             client.out.clear(); // peer is gone
             return;
         } else {
-            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            if (!sock::would_block()) {
                 client.closing = true;
                 client.out.clear();
             }
@@ -214,14 +198,10 @@ void Server::read_client(Client &client) {
 
 void Server::write_client(Client &client) {
     while (!client.out.empty()) {
-#ifdef MSG_NOSIGNAL
-        const ssize_t n = ::send(client.fd, client.out.data(), client.out.size(), MSG_NOSIGNAL);
-#else
-        const ssize_t n = ::send(client.fd, client.out.data(), client.out.size(), 0);
-#endif
+        const std::ptrdiff_t n = sock::send_some(client.fd, client.out.data(), client.out.size());
         if (n > 0) {
             client.out.erase(0, static_cast<std::size_t>(n));
-        } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        } else if (n < 0 && sock::would_block()) {
             return;
         } else {
             client.out.clear();
@@ -233,16 +213,12 @@ void Server::write_client(Client &client) {
 
 void Server::accept_clients() {
     for (;;) {
-        const int fd = ::accept(listener_, nullptr, nullptr);
-        if (fd < 0)
+        const sock::socket_t fd = ::accept(listener_, nullptr, nullptr);
+        if (!sock::valid(fd))
             return;
-        set_nonblocking(fd);
-#ifdef SO_NOSIGPIPE
-        const int yes = 1;
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof yes);
-#endif
+        sock::configure_client(fd);
         if (clients_.size() >= options_.max_sessions * 4) { // handshakes included
-            ::close(fd);
+            sock::close_socket(fd);
             continue;
         }
         auto client = std::make_unique<Client>();
@@ -252,7 +228,7 @@ void Server::accept_clients() {
 }
 
 void Server::run_once(int timeout_ms) {
-    std::vector<pollfd> fds;
+    std::vector<sock::PollFd> fds;
     fds.push_back({listener_, POLLIN, 0});
     bool busy = false;
     int wait_ms = timeout_ms;
@@ -268,7 +244,7 @@ void Server::run_once(int timeout_ms) {
                 busy = true;
         }
     }
-    ::poll(fds.data(), static_cast<nfds_t>(fds.size()), busy ? 0 : wait_ms);
+    sock::poll(fds.data(), fds.size(), busy ? 0 : wait_ms);
 
     if (fds[0].revents & POLLIN)
         accept_clients();
@@ -296,7 +272,7 @@ void Server::run_once(int timeout_ms) {
     clients_.erase(std::remove_if(clients_.begin(), clients_.end(),
                                   [](const std::unique_ptr<Client> &client) {
                                       if (client->closing && client->out.empty()) {
-                                          ::close(client->fd);
+                                          sock::close_socket(client->fd);
                                           return true;
                                       }
                                       return false;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sim/endpoint.hpp"
+#include "sim/socket.hpp"
 
 #include <map>
 #include <memory>
@@ -124,8 +125,8 @@ public:
 private:
     void drop_client();
     Endpoint &endpoint_;
-    int listener_{-1};
-    int client_{-1};
+    sock::socket_t listener_{sock::invalid_socket};
+    sock::socket_t client_{sock::invalid_socket};
     unsigned short port_{0};
     bool warned_{false};
 };

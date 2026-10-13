@@ -1,16 +1,11 @@
 #include "../test_support.hpp"
 
 #include "sim/rpc.hpp"
+#include "sim/socket.hpp"
 #include "sim/server.hpp"
 #include "sim/websocket.hpp"
 
 #include <nlohmann/json.hpp>
-
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 #include <filesystem>
 #include <fstream>
@@ -374,29 +369,29 @@ namespace {
 // A WebSocket test client over a real loopback socket. The server runs in the
 // same thread: every wait pumps Server::run_once().
 struct WsClient {
-    int fd{-1};
+    sim::sock::socket_t fd{sim::sock::invalid_socket};
     std::string buffer;
 
     explicit WsClient(unsigned short port) {
-        fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        fd = sim::sock::open_tcp();
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
         addr.sin_port = htons(port);
         inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
         CHECK(::connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof addr) == 0);
     }
-    ~WsClient() { if (fd >= 0) ::close(fd); }
+    ~WsClient() { if (sim::sock::valid(fd)) sim::sock::close_socket(fd); }
 
-    void send_raw(const std::string &bytes) { CHECK(::send(fd, bytes.data(), bytes.size(), 0) == static_cast<ssize_t>(bytes.size())); }
+    void send_raw(const std::string &bytes) { CHECK(sim::sock::send_some(fd, bytes.data(), bytes.size()) == static_cast<std::ptrdiff_t>(bytes.size())); }
 
     std::string pump_until(sim::Server &server, const std::function<bool(const std::string &)> &done,
                            int rounds = 200) {
         for (int i = 0; i < rounds; ++i) {
             server.run_once(5);
-            pollfd p{fd, POLLIN, 0};
-            while (::poll(&p, 1, 0) == 1 && (p.revents & POLLIN)) {
+            sim::sock::PollFd p{fd, POLLIN, 0};
+            while (sim::sock::poll(&p, 1, 0) == 1 && (p.revents & POLLIN)) {
                 char chunk[65536];
-                const ssize_t n = ::recv(fd, chunk, sizeof chunk, 0);
+                const std::ptrdiff_t n = sim::sock::recv_some(fd, chunk, sizeof chunk);
                 if (n <= 0)
                     return buffer;
                 buffer.append(chunk, static_cast<std::size_t>(n));
@@ -473,10 +468,10 @@ struct WsClient {
         Json response;
         for (int i = 0; i < 400 && response.is_null(); ++i) {
             server.run_once(5);
-            pollfd p{fd, POLLIN, 0};
-            while (::poll(&p, 1, 0) == 1 && (p.revents & POLLIN)) {
+            sim::sock::PollFd p{fd, POLLIN, 0};
+            while (sim::sock::poll(&p, 1, 0) == 1 && (p.revents & POLLIN)) {
                 char chunk[65536];
-                const ssize_t n = ::recv(fd, chunk, sizeof chunk, 0);
+                const std::ptrdiff_t n = sim::sock::recv_some(fd, chunk, sizeof chunk);
                 if (n <= 0) break;
                 buffer.append(chunk, static_cast<std::size_t>(n));
             }

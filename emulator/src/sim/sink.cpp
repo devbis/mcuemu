@@ -2,12 +2,6 @@
 
 #include "sim/config.hpp"
 
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -264,11 +258,6 @@ private:
     std::shared_ptr<bool> alive_;
 };
 
-void set_nonblocking(int fd) {
-    const int flags = fcntl(fd, F_GETFL, 0);
-    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-}
-
 } // namespace
 
 // ---- VCD ---------------------------------------------------------------
@@ -357,51 +346,42 @@ TcpSink::TcpSink(const std::string &address, Endpoint &endpoint)
     if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1)
         throw std::invalid_argument("tcp sink needs an IPv4 address, got '" + host + "'");
 
-    listener_ = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (listener_ < 0)
+    listener_ = sock::open_tcp();
+    if (!sock::valid(listener_))
         throw std::runtime_error("cannot create a socket");
-    const int yes = 1;
-    setsockopt(listener_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes);
-    if (::bind(listener_, reinterpret_cast<sockaddr *>(&addr), sizeof addr) != 0 ||
-        ::listen(listener_, 1) != 0) {
-        const std::string reason = std::strerror(errno);
-        ::close(listener_);
+    std::string reason;
+    if (!sock::bind_listen(listener_, addr, 1, reason)) {
+        sock::close_socket(listener_);
         throw std::invalid_argument("tcp sink cannot listen on " + host + ":" +
                                     port_text + ": " + reason);
     }
-    set_nonblocking(listener_);
-    socklen_t length = sizeof addr;
-    getsockname(listener_, reinterpret_cast<sockaddr *>(&addr), &length);
-    port_ = ntohs(addr.sin_port);
+    sock::set_nonblocking(listener_);
+    port_ = sock::local_port(listener_);
 }
 
 TcpSink::~TcpSink() {
     drop_client();
-    if (listener_ >= 0)
-        ::close(listener_);
+    if (sock::valid(listener_))
+        sock::close_socket(listener_);
 }
 
 void TcpSink::drop_client() {
-    if (client_ >= 0) {
-        ::close(client_);
-        client_ = -1;
+    if (sock::valid(client_)) {
+        sock::close_socket(client_);
+        client_ = sock::invalid_socket;
     }
 }
 
 void TcpSink::consume(const EndpointEvent &event) {
-    if (client_ < 0)
+    if (!sock::valid(client_))
         return;
     const std::string text = render(event);
     std::size_t sent = 0;
     while (sent < text.size()) {
-#ifdef MSG_NOSIGNAL
-        const ssize_t n = ::send(client_, text.data() + sent, text.size() - sent, MSG_NOSIGNAL);
-#else
-        const ssize_t n = ::send(client_, text.data() + sent, text.size() - sent, 0);
-#endif
+        const std::ptrdiff_t n = sock::send_some(client_, text.data() + sent, text.size() - sent);
         if (n > 0) {
             sent += static_cast<std::size_t>(n);
-        } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        } else if (n < 0 && sock::would_block()) {
             return; // a client that does not read loses data rather than stalling
         } else {
             drop_client();
@@ -412,21 +392,17 @@ void TcpSink::consume(const EndpointEvent &event) {
 
 void TcpSink::poll() {
     // A new connection replaces the old one.
-    const int fresh = ::accept(listener_, nullptr, nullptr);
-    if (fresh >= 0) {
+    const sock::socket_t fresh = ::accept(listener_, nullptr, nullptr);
+    if (sock::valid(fresh)) {
         drop_client();
         client_ = fresh;
-        set_nonblocking(client_);
-#ifdef SO_NOSIGPIPE
-        const int yes = 1;
-        setsockopt(client_, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof yes);
-#endif
+        sock::configure_client(client_);
     }
-    if (client_ < 0)
+    if (!sock::valid(client_))
         return;
     std::uint8_t buffer[512];
     for (;;) {
-        const ssize_t n = ::recv(client_, buffer, sizeof buffer, 0);
+        const std::ptrdiff_t n = sock::recv_some(client_, buffer, sizeof buffer);
         if (n > 0) {
             try {
                 endpoint_.set(Value{Bytes(buffer, buffer + n)});
@@ -440,7 +416,7 @@ void TcpSink::poll() {
             drop_client();
             return;
         } else {
-            if (errno != EAGAIN && errno != EWOULDBLOCK)
+            if (!sock::would_block())
                 drop_client();
             return;
         }

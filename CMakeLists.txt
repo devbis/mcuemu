@@ -26,6 +26,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 if(MSVC)
+    # <windows.h> (pulled in by WinSock) must not define min/max macros.
+    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
     set(MCUEMU_WARNING_FLAGS /W4)
 else()
     set(MCUEMU_WARNING_FLAGS -Wall -Wextra -Wpedantic)
@@ -130,6 +132,9 @@ target_include_directories(simcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/i
 target_compile_options(simcore PRIVATE ${MCUEMU_WARNING_FLAGS})
 target_link_libraries(simcore PUBLIC mcuemu-core mcs51emu ${MCUEMU_YAML_TARGET} lua54
     nlohmann_json::nlohmann_json)
+if(WIN32)
+    target_link_libraries(simcore PUBLIC ws2_32)
+endif()
 
 if(MCUEMU_BUILD_TESTS)
     enable_testing()

@@ -1,14 +1,9 @@
 #include "../test_support.hpp"
 
 #include "sim/config.hpp"
+#include "sim/socket.hpp"
 #include "sim/system.hpp"
 #include "sim/tlsr8258_mcu.hpp"
-
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 #include <filesystem>
 #include <fstream>
@@ -361,7 +356,7 @@ void test_tcp_sink() {
     if (!tcp)
         return;
 
-    const int client = ::socket(AF_INET, SOCK_STREAM, 0);
+    const sim::sock::socket_t client = sim::sock::open_tcp();
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(tcp->port());
@@ -370,9 +365,9 @@ void test_tcp_sink() {
     session.poll(); // accept
 
     // Client -> UART RX FIFO.
-    CHECK(::send(client, "xyz", 3, 0) == 3);
+    CHECK(sim::sock::send_some(client, "xyz", 3) == 3);
     for (int i = 0; i < 50 && (device_of(*system).read8(Tlsr8258::UartBufferCount) & 0x0f) < 3; ++i) {
-        ::usleep(2000);
+        sim::sock::sleep_us(2000);
         session.poll();
         world.run_for(10000);
     }
@@ -382,12 +377,12 @@ void test_tcp_sink() {
     // UART TX -> client.
     transmit_uart(device_of(*system), 'Q');
     world.run_for(100000);
-    pollfd waiting{client, POLLIN, 0};
-    CHECK(::poll(&waiting, 1, 1000) == 1);
+    sim::sock::PollFd waiting{client, POLLIN, 0};
+    CHECK(sim::sock::poll(&waiting, 1, 1000) == 1);
     char received = 0;
-    CHECK(::recv(client, &received, 1, 0) == 1);
+    CHECK(sim::sock::recv_some(client, &received, 1) == 1);
     CHECK(received == 'Q');
-    ::close(client);
+    sim::sock::close_socket(client);
     session.poll(); // notices the disconnect
     transmit_uart(device_of(*system), 'R');
     world.run_for(100000); // no client: the byte is dropped, nothing breaks

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sim/rpc.hpp"
+#include "sim/socket.hpp"
 #include "sim/websocket.hpp"
 
 #include <chrono>
@@ -56,7 +57,7 @@ private:
     bool authorized(const ws::Request &request) const;
 
     ServerOptions options_;
-    int listener_{-1};
+    sock::socket_t listener_{sock::invalid_socket};
     unsigned short port_{0};
     bool stopping_{false};
     std::vector<std::unique_ptr<Client>> clients_;
