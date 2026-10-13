@@ -44,6 +44,31 @@ matches the firmware's timer setup assumptions but is not a calibrated wall
 clock. Other reset values and peripheral semantics still need CA51F253L3
 documentation or hardware traces.
 
+## Execution engine
+
+The interpreter (`helper.c` in the Unicorn fork) used to go through the soft MMU
+for every register access and ended each translated block after one
+instruction, which made it about 100x slower than real time. The host now hands
+it direct pointers to the code, IDATA and SFR arrays (`UC_MCS51_REG_FAST_MEMORY`)
+and it runs stretches of instructions inside one helper call:
+
+- SFRs without side effects (ACC, B, PSW, SP, DPTR, ports, ...) are plain memory.
+  Only the registers the host must see, listed in `sfr_special_read/write`
+  (UART buffers and control, PWMUPD, Timer0 control, mode and counter, IE), go
+  through the mapped SFR region and its callbacks.
+- Timer0 and the UART1 transmitter are lazy. The host computes the cycle of the
+  next event and sets `UC_MCS51_REG_EVENT_CYCLES`; the engine stops before the
+  first instruction at or after it, the host catches the peripherals up and
+  restarts. They are also caught up before any special SFR access, so a read of
+  TL0/TH0 or a write to IE sees the state of the current cycle.
+- `Ca51F253L3::run(instruction_limit, cycle_limit)` stops at a cycle limit, at
+  most one instruction late, which is how `Ca51F253L3Mcu::run_until` follows the
+  world clock. `UC_MCS51_REG_BREAK_PC` stops at the UART1 vector so the pending
+  interrupt can be re-armed, as the per-instruction hook used to do.
+- With a trace stream set, the old path is used: a code hook sees every
+  instruction. A test runs the same programs on both paths and compares the
+  complete state, so tracing does not change behaviour.
+
 ## Running
 
 ```sh

@@ -188,12 +188,10 @@ Ca51F253L3::Ca51F253L3() {
                                  uc_strerror(open_error));
     uc_ = reinterpret_cast<uc_struct *>(engine);
     try {
-        check_error(uc_mem_map(engine, 0, CodeSize,
-                               UC_PROT_READ | UC_PROT_EXEC),
+        code_.fill(0xff); // erased flash
+        check_error(uc_mem_map_ptr(engine, 0, CodeSize,
+                                   UC_PROT_READ | UC_PROT_EXEC, code_.data()),
                     "map code space");
-        std::vector<std::uint8_t> erased_code(CodeSize, 0xff);
-        check_error(uc_mem_write(engine, 0, erased_code.data(), erased_code.size()),
-                    "initialize erased flash");
         check_error(uc_mem_map(engine, XdataBase, XdataFlashPageOffset,
                                UC_PROT_ALL),
                     "map XDATA");
@@ -201,11 +199,28 @@ Ca51F253L3::Ca51F253L3() {
                                 XdataFlashPageSize, xdata_flash_read, this,
                                 xdata_flash_write, this),
                     "map data flash registers");
-        check_error(uc_mem_map(engine, IdataBase, MappedInternalSize, UC_PROT_ALL),
+        check_error(uc_mem_map_ptr(engine, IdataBase, MappedInternalSize,
+                                   UC_PROT_ALL, idata_.data()),
                     "map IDATA");
         check_error(uc_mmio_map(engine, SfrBase, MappedInternalSize,
                                 sfr_mmio_read, this, sfr_mmio_write, this),
                     "map SFR and UART");
+        // SFRs with side effects keep going through the mapped region above;
+        // the interpreter treats every other SFR as plain memory.
+        for (const std::uint8_t address :
+             {SfrUart0Buffer, SfrUart1Buffer, SfrUart1Control, SfrPwmUpdate,
+              SfrTimer0Control, SfrTimerMode, SfrTimer0Low, SfrTimer0High,
+              SfrInterruptEnable})
+            sfr_flag(sfr_special_write_, address);
+        for (const std::uint8_t address :
+             {SfrUart1Buffer, SfrTimer0Low, SfrTimer0High})
+            sfr_flag(sfr_special_read_, address);
+        const uc_mcs51_fast_memory fast{code_.data(), idata_.data(), sfr_.data(),
+                                        sfr_special_read_.data(),
+                                        sfr_special_write_.data()};
+        const uc_mcs51_fast_memory *fast_pointer = &fast;
+        check_error(uc_reg_write(engine, UC_MCS51_REG_FAST_MEMORY, &fast_pointer),
+                    "install fast memory");
         data_flash_.fill(0xff);
         reset();
     } catch (...) {
@@ -366,6 +381,8 @@ std::uint64_t Ca51F253L3::sfr_mmio_read(uc_struct *opaque_uc,
                                         void *user_data) {
     (void)opaque_uc;
     auto *self = static_cast<Ca51F253L3 *>(user_data);
+    if (offset == SfrTimer0Low || offset == SfrTimer0High)
+        self->sync_peripherals(opaque_uc); // the counter is lazy
     std::uint64_t value = 0;
     for (unsigned i = 0; i < size; ++i) {
         const std::uint64_t address = offset + i;
@@ -381,8 +398,9 @@ std::uint64_t Ca51F253L3::sfr_mmio_read(uc_struct *opaque_uc,
 void Ca51F253L3::sfr_mmio_write(uc_struct *opaque_uc, std::uint64_t offset,
                                 unsigned size, std::uint64_t value,
                                 void *user_data) {
-    (void)opaque_uc;
     auto *self = static_cast<Ca51F253L3 *>(user_data);
+    // Peripheral state changes below are relative to the current cycle.
+    self->sync_peripherals(opaque_uc);
     for (unsigned i = 0; i < size; ++i) {
         const std::uint64_t address = offset + i;
         if (address >= self->sfr_.size())
@@ -413,13 +431,7 @@ void Ca51F253L3::sfr_mmio_write(uc_struct *opaque_uc, std::uint64_t offset,
     }
     self->deliver_uart1_rx(); // RI1 may just have been acknowledged
     self->update_uart1_interrupt(opaque_uc);
-    const bool timer0_active =
-        (self->sfr_[SfrTimer0Control] & Timer0Run) != 0 &&
-        (self->sfr_[SfrTimerMode] & 0x0f) == 0x01;
-    if (self->fast_mode_ &&
-        (timer0_active || self->uart1_irq_requested_ ||
-         self->uart1_tx_active_))
-        (void)uc_emu_stop(reinterpret_cast<uc_engine *>(opaque_uc));
+    self->schedule_events();
 }
 
 std::uint64_t Ca51F253L3::uart1_frame_cycles() const noexcept {
@@ -544,31 +556,50 @@ void Ca51F253L3::advance_timer0(std::uint64_t cycle_delta) noexcept {
     sfr_[SfrTimer0High] = static_cast<std::uint8_t>(value >> 8);
 }
 
-void Ca51F253L3::code_hook(uc_struct *opaque_uc, std::uint64_t address,
-                           std::uint32_t size, void *user_data) {
-    auto *self = static_cast<Ca51F253L3 *>(user_data);
+void Ca51F253L3::sync_peripherals(uc_struct *opaque_uc) noexcept {
     auto *engine = reinterpret_cast<uc_engine *>(opaque_uc);
-    self->advance_uart1(opaque_uc);
-    const bool timer0_active = (self->sfr_[SfrTimer0Control] & Timer0Run) != 0 &&
-                               (self->sfr_[SfrTimerMode] & 0x0f) == 0x01;
+    advance_uart1(opaque_uc);
+    const bool timer0_active = (sfr_[SfrTimer0Control] & Timer0Run) != 0 &&
+                               (sfr_[SfrTimerMode] & 0x0f) == 0x01;
     if (timer0_active) {
         std::uint64_t cycles = 0;
         if (uc_reg_read(engine, UC_MCS51_REG_CYCLES, &cycles) == UC_ERR_OK) {
-            if (cycles >= self->timer0_last_cycles_)
-                self->advance_timer0(cycles - self->timer0_last_cycles_);
-            self->timer0_last_cycles_ = cycles;
+            if (cycles >= timer0_last_cycles_)
+                advance_timer0(cycles - timer0_last_cycles_);
+            timer0_last_cycles_ = cycles;
         }
     }
+}
+
+void Ca51F253L3::schedule_events() noexcept {
+    // The engine stops before the first instruction at or after this cycle.
+    std::uint64_t event = run_cycle_limit_;
+    if ((sfr_[SfrTimer0Control] & Timer0Run) != 0 &&
+        (sfr_[SfrTimerMode] & 0x0f) == 0x01) {
+        const std::uint32_t timer =
+            (static_cast<std::uint32_t>(sfr_[SfrTimer0High]) << 8) |
+            sfr_[SfrTimer0Low];
+        // advance_timer0() flags the overflow once timer + delta > 0xffff.
+        event = std::min<std::uint64_t>(event, timer0_last_cycles_ + (0x10000u - timer));
+    }
+    if (uart1_tx_active_)
+        event = std::min(event, uart1_last_cycles_ + uart1_tx_cycles_remaining_);
+    (void)uc_reg_write(reinterpret_cast<uc_engine *>(uc_),
+                       UC_MCS51_REG_EVENT_CYCLES, &event);
+}
+
+void Ca51F253L3::code_hook(uc_struct *opaque_uc, std::uint64_t address,
+                           std::uint32_t size, void *user_data) {
+    // Only installed while tracing: it services the peripherals before every
+    // instruction, as the event-driven run() does at its stops.
+    auto *self = static_cast<Ca51F253L3 *>(user_data);
+    auto *engine = reinterpret_cast<uc_engine *>(opaque_uc);
+    self->sync_peripherals(opaque_uc);
     if (address == Uart1InterruptVector) {
         // The CPU consumed the pending vector. Re-arm it if the device flag
         // remains set, such as when an ISR has not acknowledged the source.
         self->uart1_irq_requested_ = false;
         self->update_uart1_interrupt(opaque_uc);
-    }
-    if (!self->trace_output_ && !timer0_active &&
-        !self->uart1_irq_requested_ && !self->uart1_tx_active_) {
-        (void)uc_emu_stop(engine);
-        return;
     }
     if (!self->trace_output_)
         return;
@@ -603,44 +634,75 @@ void Ca51F253L3::set_code_hook_enabled(bool enabled) {
         code_hook_ = 0;
         code_hook_installed_ = false;
     }
+    // Translated blocks bake in whether a hook wants every instruction.
+    check_error(uc_ctl_flush_tb(engine), "flush translated blocks");
 }
 
-RunResult Ca51F253L3::run(std::size_t instruction_limit) {
+RunResult Ca51F253L3::run(std::size_t instruction_limit,
+                          std::uint64_t cycle_limit) {
     RunResult result;
     auto *engine = reinterpret_cast<uc_engine *>(uc_);
     std::uint64_t before = 0;
     check_error(uc_reg_read(engine, UC_MCS51_REG_INSTRUCTIONS, &before),
                 "read instruction counter");
+    const bool tracing = trace_output_ != nullptr;
+    set_code_hook_enabled(tracing);
     uc_err error = UC_ERR_OK;
+    std::uint64_t cycles = 0;
+    std::uint64_t current = before;
     while (result.instructions < instruction_limit) {
-        const bool timer0_active =
-            (sfr_[SfrTimer0Control] & Timer0Run) != 0 &&
-            (sfr_[SfrTimerMode] & 0x0f) == 0x01;
-        const bool hook_needed = trace_output_ || timer0_active ||
-                                 uart1_irq_requested_ || uart1_tx_active_;
-        set_code_hook_enabled(hook_needed);
-        fast_mode_ = !hook_needed;
-
+        check_error(uc_reg_read(engine, UC_MCS51_REG_CYCLES, &cycles),
+                    "read cycle counter");
+        if (cycles >= cycle_limit && result.instructions != 0)
+            break;
         std::uint16_t pc = 0;
         check_error(uc_reg_read(engine, UC_MCS51_REG_PC, &pc), "read PC");
-        error = uc_emu_start(engine, pc, CodeSize, 0,
-                             instruction_limit - result.instructions);
-        fast_mode_ = false;
+
+        if (tracing) {
+            // The hook sees every instruction; count them with the engine's
+            // own counter, one chunk at a time.
+            const std::uint64_t left = cycle_limit > cycles ? cycle_limit - cycles : 1;
+            const std::size_t count = static_cast<std::size_t>(std::min<std::uint64_t>(
+                instruction_limit - result.instructions, left));
+            error = uc_emu_start(engine, pc, CodeSize, 0, count);
+        } else {
+            // Bring everything up to the current cycle, then let the engine
+            // run until the next peripheral event, the pending interrupt
+            // vector re-arm point, or one of the limits.
+            sync_peripherals(uc_);
+            if (pc == Uart1InterruptVector) {
+                uart1_irq_requested_ = false;
+                update_uart1_interrupt(uc_);
+            }
+            run_cycle_limit_ = cycle_limit;
+            schedule_events();
+            const std::uint64_t instruction_stop =
+                instruction_limit > UINT64_MAX - before ? UINT64_MAX
+                                                        : before + instruction_limit;
+            const std::uint32_t break_pc = Uart1InterruptVector;
+            check_error(uc_reg_write(engine, UC_MCS51_REG_INSTRUCTION_LIMIT,
+                                     &instruction_stop),
+                        "set instruction limit");
+            check_error(uc_reg_write(engine, UC_MCS51_REG_BREAK_PC, &break_pc),
+                        "set break address");
+            error = uc_emu_start(engine, pc, CodeSize, 0, 0);
+            run_cycle_limit_ = UINT64_MAX;
+        }
         if (error != UC_ERR_OK)
             break;
 
-        std::uint64_t current = 0;
         check_error(uc_reg_read(engine, UC_MCS51_REG_INSTRUCTIONS, &current),
                     "read instruction counter");
-        result.instructions = static_cast<std::size_t>(current - before);
-        if (result.instructions >= instruction_limit)
-            break;
-
-        if (result.instructions == 0) {
+        const std::size_t executed = static_cast<std::size_t>(current - before);
+        if (executed == result.instructions) {
             error = UC_ERR_EXCEPTION;
             break;
         }
+        result.instructions = executed;
     }
+    // The timer and the UART run lazily; leave the registers current for
+    // whoever reads them between runs.
+    sync_peripherals(uc_);
     std::uint64_t after = 0;
     check_error(uc_reg_read(engine, UC_MCS51_REG_INSTRUCTIONS, &after),
                 "read instruction counter");

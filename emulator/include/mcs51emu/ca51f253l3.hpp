@@ -42,7 +42,12 @@ public:
 
     void load_firmware(const std::string &path);
     void reset();
-    RunResult run(std::size_t instruction_limit);
+    // Runs at most `instruction_limit` instructions, and stops at the first
+    // instruction boundary where the cycle counter has reached `cycle_limit`
+    // (instructions take at least one cycle, so it overshoots by less than one
+    // instruction).
+    RunResult run(std::size_t instruction_limit,
+                  std::uint64_t cycle_limit = UINT64_MAX);
 
     std::uint8_t read_sfr(std::uint8_t address) const;
     std::uint8_t read_idata(std::uint8_t address) const;
@@ -71,7 +76,15 @@ private:
                                void *user_data);
     static void code_hook(uc_struct *uc, std::uint64_t address,
                           std::uint32_t size, void *user_data);
+    static void sfr_flag(std::array<std::uint8_t, 256> &table,
+                         std::uint8_t address) noexcept {
+        table[address] = 1;
+    }
     void set_code_hook_enabled(bool enabled);
+    // Brings the timer and the UART transmitter up to the current cycle.
+    void sync_peripherals(uc_struct *uc) noexcept;
+    // Tells the engine when the next peripheral event is due.
+    void schedule_events() noexcept;
     void check_error(int error, const char *operation) const;
     void rebase_timer0() noexcept;
     void advance_timer0(std::uint64_t cycle_delta) noexcept;
@@ -84,7 +97,12 @@ private:
     uc_struct *uc_{};
     std::size_t code_hook_{};
     bool code_hook_installed_{};
-    bool fast_mode_{};
+    std::uint64_t run_cycle_limit_{UINT64_MAX};
+    // Memory the engine reads and writes directly (see unicorn/mcs51.h).
+    std::array<std::uint8_t, CodeSize> code_{};
+    std::array<std::uint8_t, MappedInternalSize> idata_{};
+    std::array<std::uint8_t, 256> sfr_special_read_{};
+    std::array<std::uint8_t, 256> sfr_special_write_{};
     std::array<std::uint8_t, 256> sfr_{};
     std::array<std::uint8_t, XdataFlashPageSize> xdata_flash_page_{};
     std::array<std::uint8_t, DataFlashSize> data_flash_{};

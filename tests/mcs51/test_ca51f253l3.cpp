@@ -5,7 +5,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
+#include <sstream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -515,6 +518,133 @@ void test_ca51_rejects_oversized_raw_image() {
     std::filesystem::remove(path);
 }
 
+// Two small programs that exercise the event-driven peripherals. TIMER reloads
+// Timer0 in its ISR and echoes a counter on UART0; UART1 sends a counter byte
+// over UART1 forever, waiting for TI1 between frames.
+std::vector<std::uint8_t> timer_isr_program() {
+    std::vector<std::uint8_t> image(0x300, 0xff);
+    auto put = [&](std::size_t at, std::initializer_list<std::uint8_t> bytes) {
+        std::copy(bytes.begin(), bytes.end(), image.begin() + at);
+    };
+    put(0x0000, {0x02, 0x01, 0x00});             // LJMP main
+    put(0x000b, {0x02, 0x02, 0x00});             // timer0 vector: LJMP isr
+    put(0x0100, {0x75, 0x81, 0x30,               // MOV SP,#0x30
+                 0x75, 0x89, 0x01,               // MOV TMOD,#1
+                 0x75, 0x8c, 0xff,               // MOV TH0,#0xff
+                 0x75, 0x8a, 0x00,               // MOV TL0,#0
+                 0xd2, 0x8c, 0xd2, 0xa9, 0xd2, 0xaf, // SETB TR0, ET0, EA
+                 0x80, 0xfe});                   // SJMP $
+    put(0x0200, {0x75, 0x8c, 0xfe, 0x75, 0x8a, 0x10, // reload TH0:TL0
+                 0x05, 0x30,                     // INC 0x30
+                 0x85, 0x30, 0x99,               // MOV S0BUF,0x30
+                 0x32});                         // RETI
+    return image;
+}
+
+std::vector<std::uint8_t> uart1_stream_program() {
+    std::vector<std::uint8_t> image(0x200, 0xff);
+    auto put = [&](std::size_t at, std::initializer_list<std::uint8_t> bytes) {
+        std::copy(bytes.begin(), bytes.end(), image.begin() + at);
+    };
+    put(0x0000, {0x02, 0x01, 0x00});
+    put(0x0100, {0x75, 0x81, 0x30, 0x75, 0x9c, 0x00, 0x75, 0x9d, 0x03, // SP, reload
+                 0x05, 0x30,                     // loop: INC 0x30
+                 0x85, 0x30, 0x9b,               // MOV S1BUF,0x30
+                 0xe5, 0x9a, 0x54, 0x02, 0x60, 0xfa, // wait: poll TI1
+                 0x75, 0x9a, 0x02,               // clear TI1 (write one)
+                 0x85, 0x30, 0x99,               // MOV S0BUF,0x30
+                 0x80, 0xed});                   // SJMP loop
+    return image;
+}
+
+struct Snapshot {
+    std::uint64_t instructions{};
+    std::uint16_t pc{};
+    std::uint64_t cycles{};
+    std::string uart0, uart1;
+    std::vector<std::uint8_t> idata, sfr;
+};
+
+Snapshot run_program(const std::vector<std::uint8_t> &image, bool traced,
+                     std::uint64_t cycle_limit) {
+    const auto path = temp_file("mcs51-equivalence.bin");
+    write_binary(path, image.data(), image.size());
+    mcs51emu::Ca51F253L3 device;
+    device.load_firmware(path.string());
+    std::ostringstream trace; // makes the device use its per-instruction hook
+    if (traced)
+        device.set_trace(&trace);
+    const mcs51emu::RunResult run =
+        device.run(std::numeric_limits<std::size_t>::max(), cycle_limit);
+    CHECK(run.error.empty());
+    Snapshot snapshot{run.instructions, run.pc, run.cycles, device.uart0_output(),
+                      device.uart1_output(), {}, {}};
+    for (unsigned a = 0; a < 0x100; ++a)
+        snapshot.idata.push_back(device.read_idata(static_cast<std::uint8_t>(a)));
+    for (unsigned a = 0x80; a < 0x100; ++a)
+        snapshot.sfr.push_back(device.read_sfr(static_cast<std::uint8_t>(a)));
+    std::filesystem::remove(path);
+    return snapshot;
+}
+
+void check_fast_path_matches_hook_path(const std::vector<std::uint8_t> &image,
+                                       std::uint64_t cycles) {
+    const Snapshot fast = run_program(image, false, cycles);
+    const Snapshot hooked = run_program(image, true, cycles);
+    // The hooked run counts in chunks, so it may stop a few instructions past
+    // the limit; compare the state both reach by running the fast one to the
+    // same instruction count.
+    CHECK(fast.cycles >= cycles);
+    CHECK(hooked.cycles >= cycles);
+    const auto path = temp_file("mcs51-equivalence2.bin");
+    write_binary(path, image.data(), image.size());
+    mcs51emu::Ca51F253L3 again;
+    again.load_firmware(path.string());
+    const mcs51emu::RunResult same_length =
+        again.run(static_cast<std::size_t>(hooked.instructions));
+    CHECK(same_length.instructions == hooked.instructions);
+    CHECK(same_length.cycles == hooked.cycles);
+    CHECK(same_length.pc == hooked.pc);
+    CHECK(again.uart0_output() == hooked.uart0);
+    CHECK(again.uart1_output() == hooked.uart1);
+    for (unsigned a = 0; a < 0x100; ++a)
+        CHECK(again.read_idata(static_cast<std::uint8_t>(a)) ==
+              hooked.idata[a]);
+    for (unsigned a = 0x80; a < 0x100; ++a)
+        CHECK(again.read_sfr(static_cast<std::uint8_t>(a)) == hooked.sfr[a - 0x80]);
+    std::filesystem::remove(path);
+}
+
+void test_ca51_fast_run_matches_per_instruction_hook() {
+    check_fast_path_matches_hook_path(timer_isr_program(), 20000);
+    check_fast_path_matches_hook_path(uart1_stream_program(), 300000);
+}
+
+void test_ca51_uart1_stream_sends_a_frame_per_baud_period() {
+    // Reload 0x300: a frame is (0x400-0x300) * 32 * 10 = 81920 cycles.
+    const Snapshot snapshot = run_program(uart1_stream_program(), false, 81920ull * 10 + 1000);
+    CHECK(snapshot.uart1.size() == 10);
+    for (std::size_t i = 0; i < snapshot.uart1.size(); ++i)
+        CHECK(static_cast<std::uint8_t>(snapshot.uart1[i]) == i + 1);
+}
+
+void test_ca51_run_stops_at_the_cycle_limit() {
+    const auto path = temp_file("mcs51-cycle-limit.bin");
+    const std::array<std::uint8_t, 2> program{0x80, 0xfe}; // SJMP $: 2 cycles
+    write_binary(path, program.data(), program.size());
+    mcs51emu::Ca51F253L3 device;
+    device.load_firmware(path.string());
+    const mcs51emu::RunResult run =
+        device.run(std::numeric_limits<std::size_t>::max(), 101);
+    CHECK(run.error.empty());
+    CHECK(run.cycles == 102); // never more than one instruction past the limit
+    CHECK(run.instructions == 51);
+    const mcs51emu::RunResult limited = device.run(10, 1000000);
+    CHECK(limited.instructions == 10);
+    CHECK(limited.cycles == 122);
+    std::filesystem::remove(path);
+}
+
 } // namespace
 
 int main() {
@@ -533,6 +663,9 @@ int main() {
     test_ca51_timer0_can_be_enabled_during_fast_run();
     test_ca51_llvm_delay_loop_finishes();
     test_ca51_rejects_oversized_raw_image();
+    test_ca51_fast_run_matches_per_instruction_hook();
+    test_ca51_uart1_stream_sends_a_frame_per_baud_period();
+    test_ca51_run_stops_at_the_cycle_limit();
     if (failures != 0) {
         std::cerr << failures << " MCS-51 check(s) failed\n";
         return 1;

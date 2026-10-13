@@ -1,3 +1,4 @@
+#include <limits>
 #include <algorithm>
 #include "sim/ca51f253l3_mcu.hpp"
 
@@ -34,15 +35,14 @@ std::uint64_t Ca51F253L3Mcu::time_ns() const {
 
 McuState Ca51F253L3Mcu::run_until(std::uint64_t target_ns) {
     while (state_ == McuState::Running && time_ns() < target_ns) {
-        // An instruction takes at least one clock, so a quarter of the cycles
-        // left to the target never overshoots by more than one instruction
-        // once the remainder is small.
-        const std::uint64_t left_ns = target_ns - time_ns();
-        const std::size_t chunk = static_cast<std::size_t>(std::clamp<std::uint64_t>(
-            static_cast<std::uint64_t>(
-                static_cast<unsigned __int128>(left_ns) * clock_hz_ / 4000000000u),
-            1, 100000));
-        const mcs51emu::RunResult result = device_.run(chunk);
+        // time_ns() is the cycle count scaled by the clock, so the first cycle
+        // whose time is at or past the target is the engine's limit.
+        const unsigned __int128 scaled =
+            static_cast<unsigned __int128>(target_ns) * clock_hz_;
+        const std::uint64_t target_cycle =
+            static_cast<std::uint64_t>((scaled + 999999999u) / 1000000000u);
+        const mcs51emu::RunResult result =
+            device_.run(std::numeric_limits<std::size_t>::max(), target_cycle);
         cycles_ = result.cycles;
         if (!result.error.empty()) {
             state_ = McuState::Fault;
