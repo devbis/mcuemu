@@ -143,6 +143,42 @@ void Simulation::run(std::optional<std::uint64_t> target_ns) {
     system();
     target_ns_ = target_ns;
     running_ = !target_ns || *target_ns > time_ns();
+    anchor();
+}
+
+void Simulation::anchor() {
+    anchor_wall_ = std::chrono::steady_clock::now();
+    anchor_virtual_ = system_ ? system_->world().now() : 0;
+}
+
+namespace {
+// Paced runs execute in slices of at least this much virtual time.
+constexpr std::uint64_t MinPacedSliceNs = 20000;
+} // namespace
+
+std::uint64_t Simulation::allowed_ns() {
+    constexpr std::uint64_t MaxLagNs = 50000000; // 50 ms of virtual time
+    const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                             std::chrono::steady_clock::now() - anchor_wall_).count();
+    std::uint64_t allowed = anchor_virtual_ + static_cast<std::uint64_t>(elapsed * speed_);
+    const std::uint64_t now = system_->world().now();
+    if (allowed > now + MaxLagNs) { // fell behind: drop the backlog
+        anchor_virtual_ = now;
+        anchor_wall_ = std::chrono::steady_clock::now();
+        allowed = now;
+    }
+    return allowed;
+}
+
+void Simulation::set_speed(double speed) {
+    if (!(speed == 0 || (speed >= 0.001 && speed <= 1000)))
+        throw SimulationError("the speed must be 0 (maximum) or between 0.001 and 1000");
+    speed_ = speed;
+    anchor();
+}
+
+bool Simulation::throttled() {
+    return system_ && running_ && speed_ > 0 && allowed_ns() < system_->world().now() + MinPacedSliceNs;
 }
 
 void Simulation::pause() {
@@ -179,6 +215,12 @@ Simulation::PumpResult Simulation::pump(std::chrono::milliseconds wall_budget) {
     const auto deadline = std::chrono::steady_clock::now() + wall_budget;
     do {
         std::uint64_t next = world.now() + slice_ns_;
+        if (speed_ > 0) {
+            const std::uint64_t allowed = allowed_ns();
+            if (allowed < world.now() + MinPacedSliceNs)
+                break; // not worth a slice yet; wait for wall time to pass
+            next = std::min(next, allowed);
+        }
         if (target_ns_)
             next = std::min(next, *target_ns_);
         world.run_until(next);

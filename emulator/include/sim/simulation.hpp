@@ -61,6 +61,15 @@ public:
     // there, without one it runs until pause().
     void run(std::optional<std::uint64_t> target_ns);
     void pause();
+    // Realtime pacing: virtual time advances at `speed` times wall-clock time
+    // (1.0 = realtime). 0 means as fast as the host allows, the default.
+    // Inputs applied "now" land at the current virtual time, so a UI sees them
+    // take effect at the moment the user acted. A host too slow to keep up
+    // falls behind rather than bursting to catch up.
+    void set_speed(double speed);
+    double speed() const noexcept { return speed_; }
+    // True while a paced run has nothing to execute until wall time passes.
+    bool throttled();
     // Virtual nanoseconds executed per slice of pump(); defaults to 1 ms.
     void set_slice_ns(std::uint64_t slice_ns);
 
@@ -93,6 +102,9 @@ public:
     std::string confine_path(const std::string &path, const std::string &base = "") const;
 
 private:
+    void anchor();
+    // Virtual time the paced run may have reached by now.
+    std::uint64_t allowed_ns();
     void check_config(const SystemConfig &config) const;
     std::vector<McuStop> collect_stops();
 
@@ -101,6 +113,9 @@ private:
     bool running_{false};
     std::optional<std::uint64_t> target_ns_;
     std::uint64_t slice_ns_{1000000};
+    double speed_{0};
+    std::chrono::steady_clock::time_point anchor_wall_;
+    std::uint64_t anchor_virtual_{0};
     struct Subscription {
         Endpoint *endpoint;
         std::size_t endpoint_subscription;

@@ -42,8 +42,9 @@ bytes (UART/RTT data). Times are nanoseconds as integers or strings such as
 | `ping` | | `"pong"` |
 | `load` | `yaml`, `base_dir?` | `{mcus: [{name, model}], endpoints, warnings, duration_ns?}`; the system starts paused. A bad description fails with code -32000 and the YAML line; the previous system stays |
 | `unload` | | `true` |
-| `status` | | `{loaded, running, time_ns, mcus: [{name, model, state, time_ns, message?}]}` (`state`: running, sleeping, halted, fault) |
-| `run` | `for?` or `until?`, `wait?` | `{running, time_ns, target_ns?}`; without a target it runs until `pause`; with `wait: true` the response is sent when the run ends |
+| `status` | | `{loaded, running, speed, time_ns, mcus: [{name, model, state, time_ns, message?}]}` (`state`: running, sleeping, halted, fault) |
+| `run` | `for?` or `until?`, `wait?`, `speed?` | `{running, time_ns, target_ns?}`; without a target it runs until `pause`; with `wait: true` the response is sent when the run ends |
+| `set_speed` | `speed` (number, `0` or `"max"`) | `{speed}`; see Realtime pacing |
 | `pause` | | `{reason: "paused", time_ns}` |
 | `step` | `duration?` (default 1 ms, max 1 s) | `{reason: "step", time_ns}`; synchronous and leaves the simulation paused |
 | `list_endpoints` | | `[{name, kind}]` |
@@ -88,6 +89,22 @@ it never reads).
 -> {"jsonrpc":"2.0","id":4,"method":"set","params":{"endpoint":"node.temp1.temperature_c","value":31.5}}
 ```
 
-Virtual time runs as fast as the host allows; there is no real-time pacing yet.
+## Realtime pacing
+
+By default virtual time runs as fast as the host allows. `set_speed` (or the
+`speed` parameter of `run`) paces a run to the wall clock: `1` is realtime,
+`0.5` half speed, `10` ten times faster, `0`/`"max"` unpaced. The range is
+0.001 to 1000. Pacing is an upper bound: virtual time never runs ahead of
+`speed` times the wall clock, but a host that cannot keep up simply falls
+behind (the backlog is dropped after 50 ms of virtual time rather than
+replayed in a burst). The emulator executes a busy 48 MHz loop at roughly
+0.1x realtime, so `speed: 1` pays off for firmware that sleeps most of the
+time, which is the usual case for the devices modeled here.
+
+Inputs given without `at` (`set`, `drive`, UART writes) land at the current
+virtual time, i.e. when the user acted. The input is then part of the run;
+runs with live inputs are not reproducible unless the inputs are replayed with
+explicit `at` times. The server sleeps in `poll` while a paced run is ahead of
+the wall clock, so an idle realtime session does not use a CPU.
 Not modeled: authentication beyond the token, TLS (put a reverse proxy in
 front for `wss://`), and binary frames (text only).

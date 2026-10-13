@@ -311,6 +311,7 @@ void test_rpc_run_events_and_memory();
 void test_rpc_sandbox();
 void test_server_over_websocket();
 void test_server_security_options();
+void test_rpc_realtime();
 void test_ds18b20_search_two_devices();
 void test_ntc_divider();
 void test_i2c_register_device();
@@ -351,6 +352,7 @@ int main() {
     test_rpc_sandbox();
     test_server_over_websocket();
     test_server_security_options();
+    test_rpc_realtime();
     test_ds18b20_search_two_devices();
     test_ntc_divider();
     test_i2c_register_device();

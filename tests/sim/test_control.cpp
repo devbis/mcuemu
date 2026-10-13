@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 
 namespace tc32emu_tests {
 
@@ -568,6 +569,59 @@ void test_server_over_websocket() {
     last.request(server, "shutdown", Json::object(), 1);
     last.pump_until(server, [](const std::string &b) { return b.find("\x88") != std::string::npos; }, 40);
     server.run_once(5);
+}
+
+void test_rpc_realtime() {
+    sim::RpcSession rpc(root_dir().string());
+    call(rpc, "load", {{"yaml", yaml_text()}});
+    CHECK(result_of(call(rpc, "status"))["speed"] == 0);
+    CHECK(code_of(call(rpc, "set_speed", {{"speed", -1}})) == -32602);
+    CHECK(code_of(call(rpc, "set_speed", {{"speed", 5000}})) == -32602);
+    CHECK(code_of(call(rpc, "set_speed", {{"speed", "fast"}})) == -32602);
+    CHECK(code_of(call(rpc, "set_speed")) == -32602);
+
+    // Paced at 0.02x (the engine manages ~0.08x on a busy loop, so this is
+    // reachable): 150 ms of wall time allow ~3 ms of virtual time.
+    CHECK(result_of(call(rpc, "set_speed", {{"speed", 0.02}}))["speed"] == 0.02);
+    call(rpc, "run");
+    const auto start = std::chrono::steady_clock::now();
+    while (std::chrono::steady_clock::now() - start < std::chrono::milliseconds(150)) {
+        rpc.pump(std::chrono::milliseconds(5));
+        if (rpc.throttled())
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const std::uint64_t paced = result_of(call(rpc, "status"))["time_ns"].get<std::uint64_t>();
+    CHECK(paced > 1000000ull && paced <= 3600000ull);
+    bool was_throttled = false; // caught up: the server may sleep instead of spinning
+    for (int i = 0; i < 20 && !was_throttled; ++i) {
+        rpc.pump(std::chrono::milliseconds(5));
+        was_throttled = rpc.throttled();
+    }
+    CHECK(was_throttled);
+    call(rpc, "pause");
+
+    // 'max' removes the pacing: never throttled, and it advances.
+    call(rpc, "run", {{"speed", "max"}});
+    rpc.pump(std::chrono::milliseconds(20));
+    CHECK(!rpc.throttled());
+    CHECK(result_of(call(rpc, "status"))["time_ns"].get<std::uint64_t>() > paced);
+    call(rpc, "pause");
+
+    // A paced run with a target ends exactly at the target, and not early.
+    call(rpc, "set_speed", {{"speed", 0.05}});
+    const std::uint64_t now = result_of(call(rpc, "status"))["time_ns"].get<std::uint64_t>();
+    call(rpc, "run", {{"for", "2ms"}});
+    const auto target_start = std::chrono::steady_clock::now();
+    bool stopped = false;
+    for (int i = 0; i < 5000 && !stopped; ++i) {
+        for (const std::string &message : rpc.pump(std::chrono::milliseconds(5)))
+            stopped |= Json::parse(message).value("method", "") == "stopped";
+        if (!stopped)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(stopped);
+    CHECK(std::chrono::steady_clock::now() - target_start >= std::chrono::milliseconds(30));
+    CHECK(result_of(call(rpc, "status"))["time_ns"] == now + 2000000ull);
 }
 
 void test_server_security_options() {

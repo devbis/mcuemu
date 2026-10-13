@@ -104,6 +104,21 @@ std::uint64_t to_duration(const Json &value, const char *name) {
     throw RpcError{-32602, std::string("'") + name + "' must be nanoseconds or a string like \"10ms\""};
 }
 
+void apply_speed(Simulation &simulation, const Json &value) {
+    double speed;
+    if (value.is_number())
+        speed = value.get<double>();
+    else if (value.is_string() && value.get<std::string>() == "max")
+        speed = 0;
+    else
+        throw RpcError{-32602, "'speed' must be a number or \"max\""};
+    try {
+        simulation.set_speed(speed);
+    } catch (const SimulationError &error) {
+        throw RpcError{-32602, error.what()};
+    }
+}
+
 std::optional<std::uint64_t> optional_duration(const Json &params, const char *key) {
     if (!params.is_object() || !params.contains(key) || params[key].is_null())
         return std::nullopt;
@@ -157,7 +172,8 @@ void RpcSession::register_methods() {
     };
 
     methods_["status"] = [this](const Json &) {
-        Json status{{"loaded", simulation_.loaded()}, {"running", simulation_.running()}};
+        Json status{{"loaded", simulation_.loaded()}, {"running", simulation_.running()},
+                    {"speed", simulation_.speed()}};
         if (simulation_.loaded()) {
             status["time_ns"] = simulation_.time_ns();
             Json mcus = Json::array();
@@ -186,6 +202,8 @@ void RpcSession::register_methods() {
                 throw RpcError{-32602, "give 'for' or 'until', not both"};
             target = *until;
         }
+        if (params.is_object() && params.contains("speed"))
+            apply_speed(simulation_, params["speed"]);
         simulation_.run(target);
         const bool wait = params.is_object() && params.contains("wait") &&
                           params["wait"].is_boolean() && params["wait"].get<bool>();
@@ -195,6 +213,13 @@ void RpcSession::register_methods() {
         if (target)
             result["target_ns"] = *target;
         return result;
+    };
+    // set_speed: {speed: number} (1 = realtime, 0 or "max" = as fast as possible)
+    methods_["set_speed"] = [this](const Json &params) {
+        if (!params.is_object() || !params.contains("speed"))
+            throw RpcError{-32602, "missing 'speed'"};
+        apply_speed(simulation_, params["speed"]);
+        return Json{{"speed", simulation_.speed()}};
     };
     methods_["pause"] = [this](const Json &) {
         const bool was_running = simulation_.running();

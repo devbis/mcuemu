@@ -35,6 +35,8 @@ public:
     std::vector<std::string> drain();
 
     bool running() const noexcept { return simulation_.running(); }
+    // Running but waiting for wall-clock time (realtime pacing).
+    bool throttled() { return simulation_.throttled(); }
     bool close_requested() const noexcept { return close_requested_; }
     Simulation &simulation() noexcept { return simulation_; }
 

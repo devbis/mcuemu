@@ -255,14 +255,20 @@ void Server::run_once(int timeout_ms) {
     std::vector<pollfd> fds;
     fds.push_back({listener_, POLLIN, 0});
     bool busy = false;
+    int wait_ms = timeout_ms;
     for (const auto &client : clients_) {
         short events = POLLIN;
         if (!client->out.empty())
             events |= POLLOUT;
         fds.push_back({client->fd, events, 0});
-        busy |= client->upgraded && client->rpc->running() && client->out.size() < SoftOutputLimit;
+        if (client->upgraded && client->rpc->running() && client->out.size() < SoftOutputLimit) {
+            if (client->rpc->throttled())
+                wait_ms = std::min(wait_ms, 1); // paced: wake when wall time has passed
+            else
+                busy = true;
+        }
     }
-    ::poll(fds.data(), static_cast<nfds_t>(fds.size()), busy ? 0 : timeout_ms);
+    ::poll(fds.data(), static_cast<nfds_t>(fds.size()), busy ? 0 : wait_ms);
 
     if (fds[0].revents & POLLIN)
         accept_clients();
