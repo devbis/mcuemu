@@ -4,9 +4,11 @@ sampleGW coordinator: two chips with different cores on one radio medium.
 
 The sensor scans, finds the coordinator's beacon on channel 15, associates
 (which needs the coordinator's MAC ACKs to reach the nRF radio in time) and
-receives the NWK key in the Transport-Key. What it does after that depends on
-the coordinator (the sample gateway does not finish the trust-center link key
-exchange), so the check stops there.
+receives the NWK key in the Transport-Key, then completes the unique
+trust-center link key exchange (Request Key, Transport-Key, Verify Key,
+Confirm Key) with the Telink stack and commits the network. Needs a sensor image
+with the zigbee-rs fixes for the exchange (older builds panic on the first
+secured frame).
 """
 
 import os
@@ -32,7 +34,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as scratch:
         try:
             result = subprocess.run(
-                [sys.argv[1], "sim", sys.argv[2], "--for", "22s"],
+                [sys.argv[1], "sim", sys.argv[2], "--for", "24s"],
                 cwd=scratch, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, timeout=300, check=False)
         except subprocess.TimeoutExpired as error:
@@ -52,6 +54,9 @@ def main() -> int:
         ("the join request", r"Joining PAN 0xD138 ch 15"),
         ("association (the coordinator's ACK reached the radio)", r"Joined PAN 0xD138 ch 15 as 0x[0-9A-F]+"),
         ("the Transport-Key", r"NWK key received from TC"),
+        ("a unique TC link key request", r"Sending APSME-REQUEST-KEY to TC"),
+        ("the Confirm-Key", r"Confirm-Key SUCCESS from the Trust Center"),
+        ("the committed network", r"Commissioning security complete.{1,16}network committed"),
     ]:
         if not re.search(pattern, log):
             return fail(f"never saw {what}", result.stdout)
