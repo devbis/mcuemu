@@ -1,0 +1,215 @@
+name: Build mcuemu
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUILD_TYPE: Release
+  # The Unicorn fork (TC32 and MCS-51 backends) is a separate repository that
+  # the root project expects under engine/unicorn; its default branch is used.
+  UNICORN_REPOSITORY: devbis/unicorn
+
+jobs:
+  build:
+    name: ${{ matrix.host }}
+    runs-on: ${{ matrix.runs_on }}
+    # The system layer's TCP server and sinks use POSIX sockets (poll.h,
+    # sys/socket.h) and have not been ported yet, so the Windows build is
+    # expected to fail until they are; it must not hide the other platforms.
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - host: linux-amd64
+            runs_on: ubuntu-latest
+            archive_ext: tar.gz
+            is_windows: false
+            experimental: false
+          - host: macos-amd64
+            runs_on: macos-15-intel
+            archive_ext: tar.gz
+            is_windows: false
+            experimental: false
+          - host: macos-arm64
+            runs_on: macos-14
+            archive_ext: tar.gz
+            is_windows: false
+            experimental: false
+          - host: windows-amd64
+            runs_on: windows-latest
+            archive_ext: zip
+            is_windows: true
+            experimental: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Checkout Unicorn fork
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.UNICORN_REPOSITORY }}
+          path: engine/unicorn
+
+      - name: Enable MSVC environment
+        if: matrix.is_windows
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ninja-build cmake python3
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v ninja >/dev/null 2>&1; then
+            brew install ninja
+          fi
+
+      - name: Show tool versions
+        shell: bash
+        run: |
+          cmake --version
+          ninja --version
+
+      - name: Configure (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
+
+      - name: Configure (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G Ninja `
+            "-DCMAKE_BUILD_TYPE=$env:BUILD_TYPE" `
+            "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
+
+      - name: Build
+        shell: bash
+        run: cmake --build build --parallel
+
+      # The firmware tests are only registered when local firmware images are
+      # present, which they never are on a runner.
+      - name: Test
+        shell: bash
+        run: ctest --test-dir build --output-on-failure --parallel 2
+
+      - name: Stage release files (Unix)
+        if: ${{ !matrix.is_windows }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="$GITHUB_WORKSPACE/stage/mcuemu-${{ matrix.host }}"
+          mkdir -p "$STAGE/bin"
+          for exe in mcuemu mcs51-emu; do
+            install -m 755 "build/$exe" "$STAGE/bin/$exe"
+            strip "$STAGE/bin/$exe" || true
+          done
+          cp -R README.md docs examples "$STAGE/"
+          tar -C "$GITHUB_WORKSPACE/stage" -czf "mcuemu-${{ matrix.host }}.${{ matrix.archive_ext }}" "mcuemu-${{ matrix.host }}"
+
+      - name: Stage release files (Windows)
+        if: matrix.is_windows
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:GITHUB_WORKSPACE "stage/mcuemu-${{ matrix.host }}"
+          New-Item -ItemType Directory -Force -Path (Join-Path $stage "bin") | Out-Null
+          foreach ($exe in @("mcuemu.exe", "mcs51-emu.exe")) {
+            Copy-Item -Force (Join-Path "build" $exe) (Join-Path $stage "bin/$exe")
+          }
+          Copy-Item -Recurse -Force README.md, docs, examples $stage
+          $archive = Join-Path $env:GITHUB_WORKSPACE "mcuemu-${{ matrix.host }}.${{ matrix.archive_ext }}"
+          if (Test-Path $archive) { Remove-Item -Force $archive }
+          Compress-Archive -Path $stage -DestinationPath $archive
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: mcuemu-${{ matrix.host }}
+          path: mcuemu-${{ matrix.host }}.${{ matrix.archive_ext }}
+          if-no-files-found: error
+          compression-level: 0
+
+  # Disabled: remove `if: ${{ false }}` to publish a prerelease from every push
+  # to main. It needs `contents: write` and uploads the archives of all hosts.
+  publish-prerelease:
+    needs: build
+    if: ${{ false && github.event_name == 'push' }}
+    name: Publish prerelease
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Set release version and tag
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/^project(mcuemu VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+          test -n "$VERSION"
+          TAG="v${VERSION}-pre-$(date -u +%Y%m%d)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download archives
+        uses: actions/download-artifact@v8
+        with:
+          pattern: mcuemu-*
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Write release notes
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<EOF
+          mcuemu prerelease ${RELEASE_VERSION}.
+
+          Source commit: \`${{ github.sha }}\`
+          Workflow run: \`${{ github.run_id }}\`
+
+          Archives for Linux, macOS and Windows hold \`bin/mcuemu\`,
+          \`bin/mcs51-emu\`, the docs and the examples. Firmware images are not
+          included.
+
+          Tag: \`${RELEASE_TAG}\`
+          EOF
+
+      - name: Publish GitHub prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: mcuemu ${{ steps.release.outputs.version }} (${{ steps.release.outputs.tag }})
+          prerelease: true
+          generate_release_notes: false
+          overwrite_files: true
+          body_path: release-notes.md
+          files: release-artifacts/*
