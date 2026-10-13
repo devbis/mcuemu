@@ -1,15 +1,55 @@
-# TC32 / TLSR8258 and MCS-51 emulator
+# mcuemu
 
-This project layers a TLSR8258 board model over Unicorn. TC32 instruction
-execution and register state live in Unicorn's `UC_ARCH_TC32` backend; the
-wrapper maps the chip's flash, SRAM, MMIO, virtual time, and interrupts around
-that engine. The Unicorn checkout under `engine/unicorn/` remains its own Git
-repository. Board code and public headers live under `emulator/`.
+A microcontroller and device emulator built on a [Unicorn](https://www.unicorn-engine.org/)
+fork. It runs real firmware images for several MCU families and connects them
+into whole systems: you describe devices, wiring, peripherals, and a shared
+radio medium in YAML, and mcuemu runs them on one virtual timeline.
 
-## Build and run
+- **System layer (`sim`).** YAML-described systems of devices, nets, parts
+  (built-in and Lua), a shared radio medium (Zigbee-style frames), endpoints and
+  sinks (UART, VCD, pcap, files, TCP), and a scenario runner.
+- **Control API.** `mcuemu serve` exposes a JSON-RPC 2.0 API over WebSocket for
+  driving and inspecting a running system, with optional realtime pacing.
+- **Chip models.** Each MCU is a separate model on top of a Unicorn CPU backend
+  (TC32 and MCS-51 are provided by the fork). Models map flash, SRAM, MMIO,
+  virtual time, and interrupts around the engine; adding a chip means adding a
+  model, not changing the system layer.
 
-Requirements: CMake 3.20+ and a C++20 compiler. The TC32-enabled Unicorn source
-checkout must be present in `./engine/unicorn`.
+## Tested MCUs
+
+| MCU | Core | Status |
+| --- | --- | --- |
+| Telink TLSR8258 (`TLSR8258F512`, `TLSR8258F1K`) | TC32 | GPIO, timers, UART (incl. DMA), ADC, AES, sleep/wake, Zigbee RF; vendor Zigbee and Zephyr firmware tested |
+| Cmsemicron CA51F253L3 | MCS-51 | CPU, Timer0, UART1, PWM; no GPIO, ADC or radio |
+
+Support is partial and driven by the firmware tested so far. See
+[`docs/status.md`](docs/status.md) and the per-chip docs.
+
+## Documentation
+
+- [`docs/system-config.md`](docs/system-config.md) — YAML system format.
+- [`docs/control-api.md`](docs/control-api.md) — RPC methods and pacing.
+- [`docs/scripting.md`](docs/scripting.md) — Lua parts.
+- [`docs/architecture.md`](docs/architecture.md) — architecture notes.
+- [`docs/tlsr8258.md`](docs/tlsr8258.md) (usage, firmware tests, status),
+  [`docs/tlsr8258-register-model.md`](docs/tlsr8258-register-model.md),
+  [`docs/mcs51.md`](docs/mcs51.md) — chip models.
+- [`examples/`](examples/) — ready-made systems (`mcuemu sim examples/world.yaml`).
+
+## Running a system
+
+```sh
+./build/mcuemu sim examples/thermostat_only.yaml --for 10s
+./build/mcuemu serve --root . --port 8080
+```
+
+Sink outputs (`*.log`, `air.pcap`, `*.vcd`) are written to the current
+directory, so run experiments from a scratch directory.
+
+## Build and test
+
+Requirements: CMake 3.20+ and a C++20 compiler. The Unicorn fork checkout must
+be present in `./engine/unicorn` (see [Unicorn checkout](#unicorn-checkout)).
 
 ```sh
 cmake -S . -B build
@@ -17,206 +57,38 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-If `firmware/samplegw_tb03f.bin` and `firmware/samplelight_tb03f.bin` are
-present when CMake configures, CTest also registers firmware-level Zigbee
-scenarios. Run the join test directly with:
-
-```sh
-ctest --test-dir build -R firmware_zigbee_join --output-on-failure
-```
-
-It starts the light five seconds after the coordinator, then checks that the
-light's SDK joined flag is set and that both association MAC commands were
-successfully received by the other node. The images remain local and ignored by
-Git. Reconfigure with `cmake -S . -B build` after adding the images if CMake had
-previously skipped this test. Python 3 is needed for this optional test.
-
-`firmware_zigbee_button_light` extends the same boot and join sequence. It
-presses sampleGW SW1 (active-low PD6) after the light joins, checks that the
-light receives the resulting Zigbee traffic, and checks one complete
-sampleLight PWM transition from off (`0x00`) to on (`0x07`) and back to off.
-The test accounts for the SDK's startup configuration, which turns the light
-on: the coordinator's first On command leaves it on, then later Off/On/Off
-commands exercise the full output cycle. Run this scenario with:
-
-```sh
-ctest --test-dir build -R firmware_zigbee_button_light --output-on-failure
-```
-
-If `firmware/zephyr-pmtest.bin` is present when CMake configures, CTest also
-registers `firmware_zephyr_pm_wake`. It checks four repeated Zephyr deep-sleep
-entries and timer wakeups, using the local firmware image. Configure again
-after copying the image into `firmware/`, then run:
-
-```sh
-ctest --test-dir build -R firmware_zephyr_pm_wake --output-on-failure
-```
-
-If `firmware/vendor_sleep_1s.bin` is present when CMake configures, CTest also
-registers `firmware_vendor_sleep_1s`. It runs the local Telink firmware through
-repeated RC32k timer sleeps and checks that each observed sleep averages about
-one second of virtual time. Firmware stays local and is not committed. Run it
-with:
-
-```sh
-ctest --test-dir build -R firmware_vendor_sleep_1s --output-on-failure
-```
-
-Run a raw flash image from address zero:
-
-```sh
-./build/mcuemu run --model TLSR8258F512 --firmware firmware/sample.bin --steps 100000
-```
-
-The CLI can trace instructions, MMIO accesses, and stack or mode changes to
-stderr. Ranges are inclusive, and each trace stream is capped at 10,000 events
-by default. `--trace-after-step` delays traces until the selected instruction
-count; `--fault-trace` prints a ring buffer of recent instructions if the CPU
-faults. Network runs can restrict traces to one node with `--trace-node`:
-
-```sh
-./build/mcuemu run --firmware firmware/sample.bin --steps 100000 \
-  --trace-pc-range 0x0:0x200 --trace-mmio-range 0x8000b8:0x8000ba \
-  --trace-limit 1000
-```
-
-For example, to trace the IRQ vector on one node and retain recent instructions
-for a possible fault:
-
-```sh
-./build/mcuemu network \
-  --node coordinator=firmware/coordinator.bin \
-  --node light=firmware/sampleLight.bin --steps 30000000 \
-  --trace-node light --trace-pc-range 0x220:0x250 \
-  --trace-stack --trace-after-step 1000000 --fault-trace 64
-```
-
-Run multiple raw images against one virtual Zigbee medium with a shared model
-and channel. Each node advances in short instruction batches, and the command
-prints transmitted frames and successful packet receptions:
-
-```sh
-./build/mcuemu network \
-  --node coordinator=firmware/coordinator.bin \
-  --node light=firmware/sampleLight.bin \
-  --model TLSR8258F512 --channel 15 --steps 1000000
-```
-
-Add `--radio-payloads` to include raw frame bytes in the output when examining
-MAC discovery and commissioning traffic. `--dump-sram NAME=ADDRESS:LENGTH`
-prints a selected range from one node's SRAM after execution, which is useful
-for checking firmware state against local ELF symbols. `--dump-mmio` prints a
-range from the TLSR8258 register window after execution. `--trace-outputs`
-prints changes to GPIO output latches and the PWM enable-channel mask with
-virtual timestamps. It reports register-level output state; PWM pulse waveforms
-are not yet simulated.
-
-Use `--start-at NAME=TIME` to power on a node at an absolute virtual time while
-all nodes and the radio share one timeline. `--steps` sets the overall run
-horizon; a delayed node receives only the remaining time after it starts. For
-example, start the coordinator first and the light at 5 seconds:
-
-```sh
-./build/mcuemu network \
-  --node coordinator=firmware/samplegw_tb03f.bin \
-  --node light=firmware/samplelight_tb03f.bin \
-  --model TLSR8258F512 --channel 15 --steps 200000000 \
-  --start-at light=5s --radio-payloads \
-  --dump-sram coordinator=0x84801d:4 \
-  --dump-sram light=0x84783d:4
-```
-
-Use `--gpio-event NAME=PORT:VALUE@TIME` to drive an input port at a virtual
-time. Ports accept `A`..`E` (or `0`..`4`), byte values accept decimal or `0x`
-hex, and time accepts `ns`, `us`, `ms`, or `s`. On the sampleGW 8258 dongle,
-SW2 is active low on port D bit 5. The board model starts inputs high for the
-sample's pulled-up idle buttons; GPIO events take effect before the next
-execution quantum.
-
-`firmware/` is local-only. Images and build products are ignored by git.
+Firmware-level scenarios (Zigbee join, button/light, Zephyr PM, vendor sleep) are
+registered by CMake when the local images are present in `firmware/`; see
+[`docs/tlsr8258.md`](docs/tlsr8258.md). Run them after any change to CPU execution,
+timing or peripherals. `firmware/` is local-only and ignored by git;
 `mcuemu models` lists the supported flash capacities.
-
-## MCS-51 / CA51F253L3
-
-The separate `mcs51-emu` executable uses Unicorn's `UC_ARCH_MCS51` backend.
-The first device shell is CA51F253L3; it accepts raw binary and Intel HEX
-images, with raw firmware limited to the chip's 32 KiB code flash. Run it with:
-
-```sh
-./build/mcs51-emu run --model CA51F253L3 \
-  --firmware firmware/application.bin --steps 1000000
-```
-
-Add `--trace` to print executed instruction addresses and bytes to stderr. The
-current shell maps the 8051 CODE, IDATA, SFR, and XDATA spaces and initializes
-the classic 8051 stack pointer and port latches. CA51-specific SFR behavior,
-interrupts, timers, GPIO electrical behavior, and UART are not modeled yet.
-CC2530 support will need its banked code and SoC peripheral maps in a separate
-device model; the shared MCS-51 instruction backend is the starting point.
-See [MCS-51 implementation notes](docs/mcs51.md).
-
-## Current scope
-
-- Unicorn has a TC32 CPU backend and public C API identifiers for registers and
-  CPSR flags. Its unit tests cover arithmetic, flags, branches, stack/register
-  operations, PC-relative loads, and CPSR reads.
-- The wrapper uses `uc_open`, `uc_reg_*`, `uc_mem_*`, `uc_mmio_map`, and
-  `uc_emu_start`; it does not execute firmware in a second CPU interpreter.
-- TLSR8258 flash and SRAM are mapped into Unicorn, and the current wrapper
-  connects GPIO, timers, UART, analog registers, AES-128 ECB, the hardware
-  divider, MSPI flash identification, virtual time, and interrupt state to the
-  board model. CPU timing uses a coarse estimate of three cycles per
-  instruction.
-- The low-frequency tick counter follows the 32 kHz RC/crystal selector and
-  oscillator power-down bits. CPU suspend and deep sleep use the 32 kHz timer
-  compare and timer wake-source gate; suspend resumes at the next instruction,
-  while deep wake resets volatile state and restarts at the flash vector. If
-  the selected 32 kHz source is powered down, the node remains asleep and the
-  CLI reports that state. GPIO wake sources and selectable SRAM retention
-  modes are not modeled yet.
-- Zigbee RF TX/RX DMA is bridged to the packet-level virtual-air model, with
-  RF completion flags and IRQ state. Firmware channel writes to the RF
-  synthesizer registers select the Zigbee channel; the CLI channel remains the
-  initial setting until firmware programs the synthesizer. BLE packet
-  transport exists but is not wired to TLSR8258 RF.
-
-This is an early emulator, not yet a complete vendor-firmware environment. TC32
-instruction coverage and TLSR8258 peripheral behavior still need validation
-against hardware. A two-node run with local `sampleLight` and an SDK-built
-`sampleGW` coordinator executed without a CPU fault. With the light started at
-5 seconds, the medium recorded 70 Zigbee transmissions and 36 successful
-receptions. It delivered a coordinator Beacon Response, the light's association
-request, the coordinator's association response, and subsequent bidirectional
-traffic. At 11.25 seconds, the SDK `zb_isDeviceJoinedNwk()` flag was set for
-both nodes: the light's `g_zbNwkCtx + 0x2d` byte was `0x04` and the
-coordinator's was `0x96` (`permit_join` and `joinAccept` are also set there).
-The RX DMA model now includes the two FCS bytes counted by the vendor SDK's
-DMA length field; omitting them caused the firmware to reject its Beacon
-Response. This verifies joining for this firmware pair and channel, not every
-commissioning path or peripheral. BLE remains deferred.
 
 ## Project layout
 
-- `engine/unicorn/` — separate Unicorn Git checkout with the TC32 backend.
-- `emulator/include/mcuemu/` and `emulator/src/` — board model, CPU adapter,
-  radio, C API, and CLI.
-- `tests/tc32/`, `tests/machine/`, and `tests/radio/` — tests grouped by layer.
+- `engine/unicorn/` — separate Unicorn fork checkout (TC32 and MCS-51 backends).
+- `emulator/include/` and `emulator/src/` — chip models, CPU adapters, radio,
+  C API, and CLI; `mcs51/` holds the CA51F253L3 model and `sim/` the system layer.
+- `tests/` — tests grouped by layer (`tc32`, `machine`, `radio`, `mcs51`, `sim`,
+  `firmware`).
+- `examples/` — system YAML, device descriptions, and Lua parts.
+- `docs/` — reference documentation.
 - `firmware/` — local-only vendor firmware images.
 - `build/` and `tmp/` — local build output and temporary files.
 
 ## Unicorn checkout
 
-The source is cloned into `engine/unicorn/` and is built as a TC32-only dependency by
+The source is cloned into `engine/unicorn/` and is built as a dependency by
 the top-level CMake project. To bootstrap a new checkout:
 
 ```sh
 ./scripts/bootstrap-unicorn.sh
 ```
 
-Without `TC32_UNICORN_FORK_URL`, the script clones official Unicorn and records
-it as `upstream`, leaving `origin` unset. Set `TC32_UNICORN_FORK_URL` when a
-writable fork is available; the fork becomes `origin` and official Unicorn is
-kept as `upstream`. The engine checkout is ignored by the root project so its
+The script clones the fork `https://github.com/devbis/unicorn.git` over HTTPS and
+records it as `origin`; official Unicorn is kept as `upstream`. Maintainers can
+push over SSH with
+`git config --global url."git@github.com:".pushInsteadOf "https://github.com/"`.
+The engine checkout is ignored by the root project so its
 changes stay in the Unicorn repository.
 
 The implementation sequence and boundary between Unicorn and the board layer
