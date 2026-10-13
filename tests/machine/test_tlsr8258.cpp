@@ -451,19 +451,21 @@ void test_tlsr_uart_fifo_and_virtual_timing() {
     device.tick(10);
     CHECK((device.read8(mcuemu::Tlsr8258::UartStatus1) & 1u) == 0);
 
-    for (std::uint8_t value : {0x11u, 0x22u, 0x33u, 0x44u})
+    // The transmit FIFO holds 8 bytes: the SDK's uart_ndma_send_byte() waits
+    // while the TX count is above 7.
+    for (std::uint8_t value : {0x11u, 0x22u, 0x33u, 0x44u, 0x55u, 0x66u, 0x77u, 0x88u})
         device.write8(mcuemu::Tlsr8258::UartData, value);
-    CHECK(device.read8(mcuemu::Tlsr8258::UartBufferCount) == 0x40);
-    device.write8(mcuemu::Tlsr8258::UartData, 0x55); // FIFO is full.
+    CHECK(device.read8(mcuemu::Tlsr8258::UartBufferCount) == 0x80);
+    device.write8(mcuemu::Tlsr8258::UartData, 0x99); // FIFO is full.
     device.tick(159);
     CHECK(device.take_uart_transmitted().empty());
     CHECK((device.read8(mcuemu::Tlsr8258::UartStatus1) & 1u) == 0);
     device.tick(1);
     CHECK(device.take_uart_transmitted() == std::vector<std::uint8_t>{0x11});
-    CHECK(device.read8(mcuemu::Tlsr8258::UartBufferCount) == 0x30);
-    device.tick(480);
+    CHECK(device.read8(mcuemu::Tlsr8258::UartBufferCount) == 0x70);
+    device.tick(7 * 160);
     CHECK(device.take_uart_transmitted() ==
-          (std::vector<std::uint8_t>{0x22, 0x33, 0x44}));
+          (std::vector<std::uint8_t>{0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88}));
     CHECK(device.read8(mcuemu::Tlsr8258::UartBufferCount) == 0);
     CHECK((device.read8(mcuemu::Tlsr8258::UartStatus1) & 1u) != 0);
 

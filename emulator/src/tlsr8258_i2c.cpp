@@ -79,7 +79,11 @@ void Tlsr8258::i2c_apply(bool sda_low, bool scl_low) {
 void Tlsr8258::i2c_start_command(std::uint8_t command) {
     if ((registers_[RegMode] & ModeMasterEnable) == 0 || !i2c_steps_.empty())
         return;
-    i2c_nak_ = false;
+    // A lone STOP keeps the NAK of the previous byte: firmware (LYWSD03MMC's
+    // test_i2c_device) probes an address with START|ID, then STOP, and reads the
+    // NAK flag afterwards. Inferred from that firmware working on hardware.
+    if ((command & ~CmdStop) != 0)
+        i2c_nak_ = false;
     i2c_cmd_stop_ = (command & CmdStop) != 0;
     i2c_pads_ = i2c_select_pads();
 

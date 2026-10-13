@@ -258,6 +258,15 @@ void test_i2c_master_with_sensor() {
     reg_write(device, 0x07, 0x20);
     i2c.wait_idle();
     CHECK((reg_read(device, 0x02) & 2u) == 0);
+    // The NAK of the probe survives the STOP: address probing relies on it.
+    CHECK((reg_read(device, 0x02) & 4u) != 0);
+    // The next transfer clears it.
+    reg_write(device, 0x01, 0x44 << 1);
+    reg_write(device, 0x07, 0x01 | 0x10);
+    i2c.wait_idle();
+    CHECK((reg_read(device, 0x02) & 4u) == 0);
+    reg_write(device, 0x07, 0x20);
+    i2c.wait_idle();
 
     // The master is disabled without the enable bit.
     reg_write(device, 0x03, 0x00);

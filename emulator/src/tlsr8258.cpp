@@ -22,6 +22,9 @@ constexpr std::array<std::uint32_t, 5> gpio_port_offsets = {
 constexpr std::uint32_t uart_data_first = 0x90;
 constexpr std::uint32_t uart_data_last = 0x93;
 constexpr std::size_t uart_fifo_capacity = 4;
+// The SDK's uart_ndma_send_byte() waits while the TX count (0x9c[7:4]) is above
+// 7, so the transmit FIFO holds 8 bytes; the receive depth is kept at 4.
+constexpr std::size_t uart_tx_fifo_capacity = 8;
 constexpr std::uint8_t uart_tx_done_bit = 1u << 0;
 constexpr std::uint8_t uart_tx_buffer_irq_bit = 1u << 1;
 constexpr std::uint8_t uart_rx_buffer_irq_bit = 1u << 3;
@@ -900,7 +903,8 @@ void Tlsr8258::start_uart_dma_transmit() {
 }
 
 void Tlsr8258::refill_uart_tx_from_dma() {
-    while (!uart_dma_tx_queue_.empty() && uart_tx_fifo_.size() < uart_fifo_capacity) {
+    while (!uart_dma_tx_queue_.empty() &&
+           uart_tx_fifo_.size() < uart_tx_fifo_capacity) {
         uart_tx_fifo_.push_back(uart_dma_tx_queue_.front());
         uart_dma_tx_queue_.pop_front();
     }
@@ -1484,7 +1488,7 @@ void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
         return;
     }
     if (offset >= uart_data_first && offset <= uart_data_last) {
-        if (uart_tx_fifo_.size() < uart_fifo_capacity) {
+        if (uart_tx_fifo_.size() < uart_tx_fifo_capacity) {
             uart_tx_fifo_.push_back(value);
             uart_tx_done_ = false;
             start_uart_transmit();
