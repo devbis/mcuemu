@@ -27,10 +27,11 @@ Bootstrap it with:
 ./scripts/bootstrap-unicorn.sh
 ```
 
-The script keeps the checkout at `./engine/unicorn`. When
-`TC32_UNICORN_FORK_URL` is set, that URL is configured as `origin`; the
-official Unicorn repository is configured as `upstream`. Without a fork URL,
-the official repository is configured as `upstream` and no `origin` is added.
+The script keeps the checkout at `./engine/unicorn`. The fork
+`https://github.com/devbis/unicorn.git` is cloned over HTTPS and configured as
+`origin`; the official Unicorn repository is configured as `upstream`. An
+existing `origin` is left unchanged. Maintainers push over SSH by setting
+`git config --global url."git@github.com:".pushInsteadOf "https://github.com/"`.
 
 ## Current boundary
 
