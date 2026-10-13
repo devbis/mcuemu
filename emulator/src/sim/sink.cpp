@@ -276,7 +276,7 @@ void VcdWriter::write() {
     if (written_)
         return;
     written_ = true;
-    std::ofstream out(path_);
+    std::ofstream out(path_, std::ios::binary);
     if (!out)
         throw std::runtime_error("cannot write '" + path_ + "'");
     auto identifier = [](std::size_t index) {

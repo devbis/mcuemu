@@ -86,7 +86,8 @@ void test_config_parsing() {
         "version: 1\ndevices:\n  - id: d\n    mcus:\n"
         "      - {id: m, model: tlsr8258, firmware: fw/a.bin}\n",
         "/base/dir");
-    CHECK(relative.devices[0].mcus[0].firmware == "/base/dir/fw/a.bin");
+    CHECK(std::filesystem::path(relative.devices[0].mcus[0].firmware).generic_string() ==
+          "/base/dir/fw/a.bin");
 
     CHECK(sim::parse_duration_ns("2.5s") == 2500000000ull);
     CHECK(sim::parse_duration_ns("750ns") == 750u);

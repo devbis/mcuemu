@@ -95,8 +95,15 @@ inline void configure_client(socket_t s) {
 inline bool bind_listen(socket_t s, const sockaddr_in &address, int backlog,
                         std::string &reason) {
     const int yes = 1;
+#ifdef _WIN32
+    // SO_REUSEADDR on Windows lets a second socket bind a port that is in use;
+    // the exclusive flag gives the POSIX behaviour (bind fails if it is taken).
+    setsockopt(s, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char *>(&yes),
+               sizeof yes);
+#else
     setsockopt(s, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char *>(&yes),
                sizeof yes);
+#endif
     if (::bind(s, reinterpret_cast<const sockaddr *>(&address), sizeof address) == 0 &&
         ::listen(s, backlog) == 0)
         return true;
