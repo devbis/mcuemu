@@ -307,6 +307,14 @@ void Cpu::mmio_write(uc_struct *opaque, std::uint64_t offset, unsigned size,
             self->device_.write8(static_cast<std::uint32_t>(address),
                                  static_cast<std::uint8_t>(value >> (i * 8u)));
         }
+        std::uint32_t flash_begin = 0;
+        std::uint32_t flash_end = 0;
+        if (self->device_.take_flash_dirty(flash_begin, flash_end))
+            self->check_error(
+                uc_mem_write(reinterpret_cast<uc_engine *>(self->uc_),
+                             flash_begin, self->device_.flash().data() + flash_begin,
+                             flash_end - flash_begin),
+                "mirror flash write");
         const auto trace_address = static_cast<std::uint32_t>(binding->base + offset);
         if (self->mmio_trace_output_ &&
             self->executed_instructions_ >= self->trace_after_step_ &&

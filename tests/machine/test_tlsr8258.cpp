@@ -297,6 +297,85 @@ void test_tlsr_mspi_jedec_id() {
     CHECK(read_id(f1k) == (std::array<std::uint8_t, 3>{0xef, 0x40, 0x14}));
 }
 
+void test_tlsr_mspi_flash_read_program_erase() {
+    using mcuemu::Tlsr8258;
+    Tlsr8258 device;
+    auto cmd = [&](std::uint8_t command, std::uint32_t address, bool with_address,
+                   const std::vector<std::uint8_t> &data = {}) {
+        device.write8(Tlsr8258::MspiControl, 1);
+        device.write8(Tlsr8258::MspiControl, 0);
+        device.write8(Tlsr8258::MspiData, command);
+        if (with_address) {
+            device.write8(Tlsr8258::MspiData, static_cast<std::uint8_t>(address >> 16));
+            device.write8(Tlsr8258::MspiData, static_cast<std::uint8_t>(address >> 8));
+            device.write8(Tlsr8258::MspiData, static_cast<std::uint8_t>(address));
+        }
+        for (std::uint8_t byte : data)
+            device.write8(Tlsr8258::MspiData, byte);
+    };
+    auto read = [&](std::uint32_t address, unsigned count) {
+        cmd(0x03, address, true);
+        device.write8(Tlsr8258::MspiData, 0x00); // clock the first byte
+        device.write8(Tlsr8258::MspiControl, 0x0a);
+        std::vector<std::uint8_t> out;
+        for (unsigned i = 0; i < count; ++i)
+            out.push_back(device.read8(Tlsr8258::MspiData));
+        device.write8(Tlsr8258::MspiControl, 1);
+        return out;
+    };
+    auto status = [&] {
+        cmd(0x05, 0, false);
+        device.write8(Tlsr8258::MspiData, 0x00);
+        device.write8(Tlsr8258::MspiControl, 0x0a);
+        const std::uint8_t value = device.read8(Tlsr8258::MspiData);
+        device.write8(Tlsr8258::MspiControl, 1);
+        return value;
+    };
+
+    device.load_firmware({0x11, 0x22, 0x33, 0x44}, 0x1000);
+    CHECK((read(0x1000, 4) == std::vector<std::uint8_t>{0x11, 0x22, 0x33, 0x44}));
+
+    // Without write enable a program is ignored.
+    cmd(0x02, 0x1000, true, {0x00});
+    device.write8(Tlsr8258::MspiControl, 1);
+    CHECK(read(0x1000, 1)[0] == 0x11);
+
+    cmd(0x06, 0, false);
+    CHECK(status() == 0x02); // WEL set
+    cmd(0x02, 0x1000, true, {0x0f, 0xf0});
+    device.write8(Tlsr8258::MspiControl, 1);
+    CHECK(status() == 0x00); // WEL cleared at the end of the operation
+    CHECK((read(0x1000, 3) == std::vector<std::uint8_t>{0x01, 0x20, 0x33}));
+    std::uint32_t begin = 0, end = 0;
+    CHECK(device.take_flash_dirty(begin, end) && begin == 0x1000 && end == 0x1002);
+    CHECK(!device.take_flash_dirty(begin, end));
+
+    // A sector erase needs write enable and sets the whole 4 KiB to 0xff.
+    cmd(0x20, 0x1000, true);
+    device.write8(Tlsr8258::MspiControl, 1);
+    CHECK(read(0x1000, 1)[0] == 0x01);
+    cmd(0x06, 0, false);
+    cmd(0x20, 0x1234, true);
+    device.write8(Tlsr8258::MspiControl, 1);
+    CHECK((read(0x1000, 2) == std::vector<std::uint8_t>{0xff, 0xff}));
+    CHECK(device.take_flash_dirty(begin, end) && begin == 0x1000 && end == 0x2000);
+
+    // The unique id is stable and is neither blank nor all zero.
+    auto uid = [&] {
+        cmd(0x4b, 0, false, {0, 0, 0, 0, 0});
+        device.write8(Tlsr8258::MspiControl, 0x0a);
+        std::vector<std::uint8_t> out;
+        for (int i = 0; i < 16; ++i)
+            out.push_back(device.read8(Tlsr8258::MspiData));
+        device.write8(Tlsr8258::MspiControl, 1);
+        return out;
+    };
+    const auto first = uid();
+    CHECK(first == uid());
+    CHECK(first != std::vector<std::uint8_t>(16, 0xff));
+    CHECK(first != std::vector<std::uint8_t>(16, 0x00));
+}
+
 void test_tlsr_aes128_encrypt_decrypt() {
     mcuemu::Tlsr8258 device;
     const std::array<std::uint8_t, 16> key = {

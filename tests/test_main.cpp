@@ -19,6 +19,7 @@ void test_tlsr_rc32k_calibration_ready_after_virtual_time();
 void test_tlsr_deep_sleep_sram_retention();
 void test_tlsr_system_timer();
 void test_tlsr_mspi_jedec_id();
+void test_tlsr_mspi_flash_read_program_erase();
 void test_tlsr_aes128_encrypt_decrypt();
 void test_tlsr_divider_registers();
 void test_tlsr_uart_fifo_and_virtual_timing();
@@ -49,6 +50,7 @@ int main() {
     test_tlsr_deep_sleep_sram_retention();
     test_tlsr_system_timer();
     test_tlsr_mspi_jedec_id();
+    test_tlsr_mspi_flash_read_program_erase();
     test_tlsr_aes128_encrypt_decrypt();
     test_tlsr_divider_registers();
     test_tlsr_uart_fifo_and_virtual_timing();

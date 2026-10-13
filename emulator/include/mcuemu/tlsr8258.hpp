@@ -238,6 +238,9 @@ public:
     bool inject_uart_rx(std::uint8_t value);
     std::vector<std::uint8_t> take_uart_transmitted();
     const std::vector<std::uint8_t> &flash() const noexcept { return flash_; }
+    // Flash bytes changed through the MSPI program/erase commands since the
+    // last call; the CPU wrapper mirrors them into the engine's flash mapping.
+    bool take_flash_dirty(std::uint32_t &begin, std::uint32_t &end) noexcept;
 
 private:
     std::uint32_t clock_hz_;
@@ -263,6 +266,18 @@ private:
     std::uint8_t mspi_response_index_{0};
     bool mspi_active_{false};
     bool mspi_command_seen_{false};
+    unsigned mspi_write_count_{0};
+    std::uint32_t mspi_address_{0};
+    std::uint32_t mspi_read_pos_{0};
+    bool mspi_write_enable_{false};
+    std::uint32_t flash_dirty_begin_{0};
+    std::uint32_t flash_dirty_end_{0};
+    void mspi_command_byte(std::uint8_t value);
+    void mspi_data_byte(std::uint8_t value);
+    std::uint8_t mspi_read_byte();
+    void mspi_deselect();
+    void flash_program(std::uint32_t address, std::uint8_t value);
+    void flash_erase(std::uint32_t address, std::uint32_t size);
     std::array<std::uint8_t, 16> aes_key_{};
     std::array<std::uint8_t, 16> aes_input_{};
     std::array<std::uint8_t, 16> aes_output_{};

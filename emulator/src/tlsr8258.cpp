@@ -427,6 +427,7 @@ void Tlsr8258::reset_volatile_state_after_deep_sleep() {
     aes_output_word_index_ = 0;
     mspi_active_ = false;
     mspi_command_seen_ = false;
+    mspi_write_enable_ = false;
     radio_tx_busy_ = false;
     wake_timer_armed_ = false;
     sleep_entry_pending_ = false;
@@ -967,6 +968,151 @@ std::uint8_t Tlsr8258::analog_register_read(std::uint8_t address) noexcept {
     return analog_registers_[address];
 }
 
+bool Tlsr8258::take_flash_dirty(std::uint32_t &begin,
+                                std::uint32_t &end) noexcept {
+    if (flash_dirty_end_ <= flash_dirty_begin_)
+        return false;
+    begin = flash_dirty_begin_;
+    end = flash_dirty_end_;
+    flash_dirty_begin_ = flash_dirty_end_ = 0;
+    return true;
+}
+
+// Serial NOR flash behind the MSPI (data register 0x00c, control 0x00d), as
+// driven by the vendor SDK and zigbee-rs `tlsr8258-hal`: the command byte is
+// written first, then address bytes, then dummy bytes; the first byte written
+// after the address/dummy phase clocks the first data byte in, and every read
+// of 0x00c returns the next one. The command set is the common 25-series one
+// (0x03 read, 0x0b fast read, 0x4b unique id, 0x06/0x04 write enable/disable,
+// 0x02 page program, 0x20/0x52/0xd8 erase, 0xc7 chip erase, 0x05 status, 0x9f
+// id). This is inferred from the HAL's usage, not from the flash datasheet:
+// WIP is always clear (operations complete at once), status writes are ignored
+// and the erase/program effect is applied when the last address/data byte is
+// written, not on chip-select release. The unique id is a fixed made-up value.
+void Tlsr8258::mspi_command_byte(std::uint8_t value) {
+    mspi_command_ = value;
+    mspi_command_seen_ = true;
+    mspi_response_index_ = 0;
+    mspi_write_count_ = 0;
+    mspi_address_ = 0;
+    mspi_read_pos_ = 0;
+    if (value == 0x06)
+        mspi_write_enable_ = true;
+    else if (value == 0x04)
+        mspi_write_enable_ = false;
+    else if (value == 0xc7 && mspi_write_enable_)
+        flash_erase(0, static_cast<std::uint32_t>(flash_.size()));
+}
+
+void Tlsr8258::mspi_data_byte(std::uint8_t value) {
+    const unsigned n = ++mspi_write_count_;
+    switch (mspi_command_) {
+    case 0x03:
+    case 0x0b:
+    case 0x02:
+    case 0x20:
+    case 0x52:
+    case 0xd8:
+        if (n <= 3) {
+            mspi_address_ = (mspi_address_ << 8) | value;
+            if (n == 3) {
+                mspi_address_ &= 0xffffffu;
+                if (mspi_write_enable_) {
+                    if (mspi_command_ == 0x20)
+                        flash_erase(mspi_address_ & ~0xfffu, 0x1000);
+                    else if (mspi_command_ == 0x52)
+                        flash_erase(mspi_address_ & ~0x7fffu, 0x8000);
+                    else if (mspi_command_ == 0xd8)
+                        flash_erase(mspi_address_ & ~0xffffu, 0x10000);
+                }
+            }
+        } else if (mspi_command_ == 0x02) {
+            if (mspi_write_enable_) {
+                flash_program(mspi_address_, value);
+                // Programming wraps inside the 256-byte page.
+                mspi_address_ = (mspi_address_ & ~0xffu) |
+                                ((mspi_address_ + 1u) & 0xffu);
+            }
+        } else if ((mspi_command_ == 0x03 && n == 4) ||
+                   (mspi_command_ == 0x0b && n == 5)) {
+            mspi_read_pos_ = mspi_address_;
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+std::uint8_t Tlsr8258::mspi_read_byte() {
+    switch (mspi_command_) {
+    case 0x9f: {
+        const std::array<std::uint8_t, 3> jedec_id = {
+            0xef, 0x40,
+            static_cast<std::uint8_t>(flash_.size() == 512u * 1024u ? 0x13
+                                                                    : 0x14),
+        };
+        if (mspi_response_index_ < jedec_id.size())
+            return jedec_id[mspi_response_index_++];
+        return 0xff;
+    }
+    case 0x05:
+        return mspi_write_enable_ ? 0x02 : 0x00; // WEL, WIP always clear.
+    case 0x03:
+    case 0x0b: {
+        const std::uint32_t pos = mspi_read_pos_++;
+        return pos < flash_.size() ? flash_[pos] : 0xff;
+    }
+    case 0x4b:
+        return static_cast<std::uint8_t>(0x3c + 0x1d * (mspi_read_pos_++ & 15u));
+    default:
+        return registers_[0x00c];
+    }
+}
+
+void Tlsr8258::mspi_deselect() {
+    switch (mspi_command_) {
+    case 0x02:
+    case 0x20:
+    case 0x52:
+    case 0xd8:
+    case 0xc7:
+        if (mspi_command_seen_)
+            mspi_write_enable_ = false; // WEL clears when the operation ends.
+        break;
+    default:
+        break;
+    }
+    mspi_active_ = false;
+}
+
+void Tlsr8258::flash_program(std::uint32_t address, std::uint8_t value) {
+    if (address >= flash_.size())
+        return;
+    flash_[address] &= value; // Programming can only clear bits.
+    if (flash_dirty_end_ <= flash_dirty_begin_) {
+        flash_dirty_begin_ = address;
+        flash_dirty_end_ = address + 1;
+    } else {
+        flash_dirty_begin_ = std::min(flash_dirty_begin_, address);
+        flash_dirty_end_ = std::max(flash_dirty_end_, address + 1);
+    }
+}
+
+void Tlsr8258::flash_erase(std::uint32_t address, std::uint32_t size) {
+    if (address >= flash_.size())
+        return;
+    const std::uint32_t end = static_cast<std::uint32_t>(
+        std::min<std::size_t>(flash_.size(), std::size_t{address} + size));
+    std::fill(flash_.begin() + address, flash_.begin() + end, 0xff);
+    if (flash_dirty_end_ <= flash_dirty_begin_) {
+        flash_dirty_begin_ = address;
+        flash_dirty_end_ = end;
+    } else {
+        flash_dirty_begin_ = std::min(flash_dirty_begin_, address);
+        flash_dirty_end_ = std::max(flash_dirty_end_, end);
+    }
+}
+
 std::uint8_t Tlsr8258::read_register(std::uint32_t offset) {
     if (offset == 0x002)
         return i2c_status();
@@ -974,21 +1120,8 @@ std::uint8_t Tlsr8258::read_register(std::uint32_t offset) {
         return static_cast<std::uint8_t>(dfifo2_write_pointer_ & 0xffu);
     if (offset == 0xb1f)
         return static_cast<std::uint8_t>(dfifo2_write_pointer_ >> 8);
-    if (offset == 0x00c && mspi_active_ && mspi_command_seen_) {
-        if (mspi_command_ == 0x9f) {
-            const std::array<std::uint8_t, 3> jedec_id = {
-                0xef, 0x40,
-                static_cast<std::uint8_t>(flash_.size() == 512u * 1024u
-                                              ? 0x13
-                                              : 0x14),
-            };
-            if (mspi_response_index_ < jedec_id.size())
-                return jedec_id[mspi_response_index_++];
-            return 0xff;
-        }
-        if (mspi_command_ == 0x05)
-            return 0; // Flash is ready: WIP=0.
-    }
+    if (offset == 0x00c && mspi_active_ && mspi_command_seen_)
+        return mspi_read_byte();
     if (offset >= 0x740 && offset <= 0x743) {
         const std::uint32_t count = system_timer_count_ & ~std::uint32_t{7};
         return static_cast<std::uint8_t>(count >> ((offset - 0x740) * 8u));
@@ -1169,16 +1302,17 @@ void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
             mspi_command_seen_ = false;
             mspi_response_index_ = 0;
         } else if ((value & 1u) != 0) {
-            mspi_active_ = false;
+            mspi_deselect();
         }
         return;
     }
     if (offset == 0x00c) {
         registers_[offset] = value;
-        if (mspi_active_ && !mspi_command_seen_) {
-            mspi_command_ = value;
-            mspi_command_seen_ = true;
-            mspi_response_index_ = 0;
+        if (mspi_active_) {
+            if (!mspi_command_seen_)
+                mspi_command_byte(value);
+            else
+                mspi_data_byte(value);
         }
         return;
     }
