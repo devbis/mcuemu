@@ -127,10 +127,8 @@ jobs:
           set -euo pipefail
           STAGE="$GITHUB_WORKSPACE/stage/mcuemu-${{ matrix.host }}"
           mkdir -p "$STAGE/bin"
-          for exe in mcuemu mcs51-emu; do
-            install -m 755 "build/$exe" "$STAGE/bin/$exe"
-            strip "$STAGE/bin/$exe" || true
-          done
+          install -m 755 build/mcuemu "$STAGE/bin/mcuemu"
+          strip "$STAGE/bin/mcuemu" || true
           cp -R README.md docs examples "$STAGE/"
           tar -C "$GITHUB_WORKSPACE/stage" -czf "mcuemu-${{ matrix.host }}.${{ matrix.archive_ext }}" "mcuemu-${{ matrix.host }}"
 
@@ -140,9 +138,7 @@ jobs:
         run: |
           $stage = Join-Path $env:GITHUB_WORKSPACE "stage/mcuemu-${{ matrix.host }}"
           New-Item -ItemType Directory -Force -Path (Join-Path $stage "bin") | Out-Null
-          foreach ($exe in @("mcuemu.exe", "mcs51-emu.exe")) {
-            Copy-Item -Force (Join-Path "build" $exe) (Join-Path $stage "bin/$exe")
-          }
+          Copy-Item -Force (Join-Path "build" "mcuemu.exe") (Join-Path $stage "bin/mcuemu.exe")
           Copy-Item -Recurse -Force README.md, docs, examples $stage
           $archive = Join-Path $env:GITHUB_WORKSPACE "mcuemu-${{ matrix.host }}.${{ matrix.archive_ext }}"
           if (Test-Path $archive) { Remove-Item -Force $archive }
@@ -203,7 +199,7 @@ jobs:
           Workflow run: \`${{ github.run_id }}\`
 
           Archives for Linux, macOS and Windows hold \`bin/mcuemu\`,
-          \`bin/mcs51-emu\`, the docs and the examples. Firmware images are not
+          the docs and the examples. Firmware images are not
           included.
 
           Tag: \`${RELEASE_TAG}\`

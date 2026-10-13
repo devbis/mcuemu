@@ -4,8 +4,8 @@
 
 MCS-51 instruction execution and registers live in the separate
 `UC_ARCH_MCS51` backend in `engine/unicorn/`. The root project provides a
-CA51F253L3 device shell and the `mcs51-emu` runner. CODE, XDATA, IDATA, and SFR
-use distinct Unicorn address ranges so future device models can attach
+CA51F253L3 device shell and the `mcuemu run --model CA51F253L3`
+runner. CODE, XDATA, IDATA, and SFR use distinct Unicorn address ranges so future device models can attach
 register behavior without changing the CPU's 8051 address semantics.
 
 The current CA51 wrapper loads raw or Intel HEX firmware into a 32 KiB flash

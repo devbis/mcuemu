@@ -28,7 +28,7 @@ folder may still be called `tc32-emu`; never hard-code absolute paths.
 ```
 emulator/include/{mcuemu,mcs51emu,sim}/   public and internal headers
 emulator/src/                              TLSR8258 + CPU wrapper, CLI main, C API
-emulator/src/mcs51/                        CA51F253L3 model and its own CLI (mcs51-emu)
+emulator/src/mcs51/                        CA51F253L3 model and its `mcuemu run` runner
 emulator/src/sim/                          system layer (config, world, rpc, server, sinks, parts)
 engine/unicorn/                            Unicorn fork: SEPARATE git repo, git-ignored here
 tests/{tc32,machine,radio,mcs51,sim,firmware}/

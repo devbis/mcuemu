@@ -2,6 +2,7 @@
 #include "mcuemu/cpu.hpp"
 #include "mcuemu/radio.hpp"
 #include "mcuemu/tlsr8258.hpp"
+#include "mcs51emu/run_command.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -34,7 +35,7 @@ const char *power_state_name(mcuemu::Tlsr8258PowerState state) {
 }
 
 void usage(std::ostream &out) {
-    out << "Usage: mcuemu run --firmware IMAGE [--model MODEL] [--steps N]\n"
+    out << "Usage: mcuemu run --model MODEL --firmware IMAGE [--steps N]\n"
            "       [--rc32k-hz HZ] [--rc32k-calibration VALUE]\n"
            "       [--trace-pc | --trace-pc-range START:END]\n"
            "       [--trace-mmio | --trace-mmio-range START:END]\n"
@@ -42,7 +43,7 @@ void usage(std::ostream &out) {
            "       [--trace-stack] [--trace-after-step N]\n"
            "       [--trace-limit N] [--fault-trace N]\n"
            "       mcuemu network --node NAME=IMAGE --node NAME=IMAGE\n"
-           "       [--model MODEL] [--channel 11..26] [--steps N]\n"
+           "       --model MODEL [--channel 11..26] [--steps N]\n"
            "       [--rc32k-hz HZ] [--rc32k-calibration VALUE]\n"
            "       [--trace-pc-range START:END] [--trace-mmio-range START:END]\n"
            "       [--trace-analog]\n"
@@ -58,7 +59,7 @@ void usage(std::ostream &out) {
            "       [--trace-nets]\n"
            "       mcuemu serve --root DIR [--port N] [--bind ADDR] [--token T]\n"
            "       [--allow-origin ORIGIN]... [--max-sessions N] [--idle-timeout SEC]\n\n"
-           "Models: TLSR8258F512, TLSR8258F1K\n"
+           "Models: TLSR8258F512, TLSR8258F1K, CA51F253L3 (run only; MCS-51)\n"
            "Firmware is loaded as a raw image at flash address 0.\n"
            "Trace ranges are inclusive; addresses accept decimal or 0x hex.\n";
 }
@@ -276,9 +277,23 @@ GpioEvent parse_gpio_event(const std::string &text) {
             parse_duration_ns(text.substr(at + 1))};
 }
 
+// `run` dispatches on --model: the CA51 family has its own runner, everything
+// else is a TLSR8258 variant.
+void require_model(const std::string &model) {
+    if (model.empty())
+        throw std::invalid_argument(
+            "--model is required (TLSR8258F512, TLSR8258F1K, CA51F253L3; see `mcuemu models`)");
+}
+
+bool is_mcs51_model(const std::string &model) { return model.rfind("CA51", 0) == 0; }
+
 int run_command(int argc, char **argv) {
+    for (int i = 2; i + 1 < argc; ++i)
+        if (std::string(argv[i]) == "--model" && is_mcs51_model(argv[i + 1]))
+            return mcs51emu::run_command(argc, argv);
+
     std::string firmware;
-    std::string model = "TLSR8258F512";
+    std::string model;
     std::uint32_t rc32k_hz = mcuemu::Tlsr8258::DefaultRc32kFrequencyHz;
     std::uint16_t rc32k_calibration =
         mcuemu::Tlsr8258::DefaultRc32kCalibration;
@@ -334,6 +349,7 @@ int run_command(int argc, char **argv) {
     }
     if (firmware.empty())
         throw std::invalid_argument("--firmware is required");
+    require_model(model);
 
     mcuemu::Tlsr8258 device(mcuemu::parse_model(model));
     device.set_rc32k_characteristics(rc32k_hz, rc32k_calibration);
@@ -416,7 +432,7 @@ struct OutputEventLine {
 };
 
 int network_command(int argc, char **argv) {
-    std::string model = "TLSR8258F512";
+    std::string model;
     std::uint32_t rc32k_hz = mcuemu::Tlsr8258::DefaultRc32kFrequencyHz;
     std::uint16_t rc32k_calibration =
         mcuemu::Tlsr8258::DefaultRc32kCalibration;
@@ -556,6 +572,7 @@ int network_command(int argc, char **argv) {
     }
     if (node_specs.size() < 2)
         throw std::invalid_argument("network requires at least two --node entries");
+    require_model(model);
     const mcuemu::Tlsr8258Model selected_model = mcuemu::parse_model(model);
 
     mcuemu::VirtualAir air;
@@ -834,7 +851,8 @@ int main(int argc, char **argv) {
         }
         if (std::string(argv[1]) == "models") {
             std::cout << "TLSR8258F512 (512 KiB flash, 64 KiB SRAM)\n"
-                         "TLSR8258F1K (1 MiB flash, 64 KiB SRAM)\n";
+                         "TLSR8258F1K (1 MiB flash, 64 KiB SRAM)\n"
+                         "CA51F253L3 (32 KiB code flash, MCS-51; `run` and `sim`)\n";
             return 0;
         }
         if (std::string(argv[1]) == "network")

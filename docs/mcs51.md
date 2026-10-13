@@ -3,7 +3,7 @@
 ## Current model
 
 `engine/unicorn` contains a separate `UC_ARCH_MCS51` CPU backend. The root
-project wraps it with `mcs51emu::Ca51F253L3` and the `mcs51-emu` CLI.
+project wraps it with `mcs51emu::Ca51F253L3` and the `mcuemu run --model CA51F253L3` runner.
 
 The CA51F253L3 shell currently provides:
 
@@ -73,8 +73,8 @@ and it runs stretches of instructions inside one helper call:
 
 ```sh
 cmake -S . -B build
-cmake --build build --target mcs51-emu
-./build/mcs51-emu run --model CA51F253L3 \
+cmake --build build --target mcuemu
+./build/mcuemu run --model CA51F253L3 \
   --firmware firmware/application.hex --steps 1000000 --trace --state
 ```
 

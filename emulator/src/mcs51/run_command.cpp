@@ -1,3 +1,5 @@
+#include "mcs51emu/run_command.hpp"
+
 #include "mcs51emu/ca51f253l3.hpp"
 
 #include <charconv>
@@ -8,10 +10,12 @@
 #include <limits>
 #include <string>
 
+namespace mcs51emu {
+
 namespace {
 
 void usage(std::ostream &out) {
-    out << "Usage: mcs51-emu run --firmware IMAGE [--model CA51F253L3] "
+    out << "Usage: mcuemu run --model CA51F253L3 --firmware IMAGE "
            "[--steps N] [--trace] [--state]\n"
            "\n"
            "IMAGE may be a raw binary or Intel HEX file.\n"
@@ -29,7 +33,9 @@ std::size_t parse_count(const std::string &text) {
     return value;
 }
 
-int run(int argc, char **argv) {
+} // namespace
+
+int run_command(int argc, char **argv) {
     std::string firmware;
     std::string model = "CA51F253L3";
     std::size_t steps = 1'000'000;
@@ -132,22 +138,4 @@ int run(int argc, char **argv) {
     return 0;
 }
 
-} // namespace
-
-int main(int argc, char **argv) {
-    if (argc == 1 || std::string(argv[1]) == "--help" ||
-        std::string(argv[1]) == "-h") {
-        usage(std::cout);
-        return 0;
-    }
-    if (std::string(argv[1]) != "run") {
-        usage(std::cerr);
-        return 2;
-    }
-    try {
-        return run(argc, argv);
-    } catch (const std::exception &error) {
-        std::cerr << "mcs51-emu: " << error.what() << '\n';
-        return 2;
-    }
-}
+} // namespace mcs51emu

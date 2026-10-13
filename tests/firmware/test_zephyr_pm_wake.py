@@ -33,6 +33,8 @@ def main() -> int:
     command = [
         sys.argv[1],
         "run",
+        "--model",
+        "TLSR8258F512",
         "--firmware",
         sys.argv[2],
         "--steps",

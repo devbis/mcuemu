@@ -49,17 +49,15 @@ target_compile_options(mcuemu-core PRIVATE ${MCUEMU_WARNING_FLAGS})
 target_link_libraries(mcuemu-core PUBLIC unicorn)
 
 add_executable(mcuemu emulator/src/main.cpp)
-target_link_libraries(mcuemu PRIVATE mcuemu-core simcore)
+target_link_libraries(mcuemu PRIVATE mcuemu-core mcs51emu simcore)
 
 add_library(mcs51emu
     emulator/src/mcs51/ca51f253l3.cpp
+    emulator/src/mcs51/run_command.cpp
 )
 target_include_directories(mcs51emu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(mcs51emu PRIVATE ${MCUEMU_WARNING_FLAGS})
 target_link_libraries(mcs51emu PUBLIC unicorn)
-
-add_executable(mcs51-emu emulator/src/mcs51/main.cpp)
-target_link_libraries(mcs51-emu PRIVATE mcs51emu)
 
 find_package(yaml-cpp QUIET)
 if(NOT yaml-cpp_FOUND)
