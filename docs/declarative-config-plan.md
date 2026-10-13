@@ -1,4 +1,4 @@
-# План архитектуры: декларативное описание устройств/сетей (YAML) для tc32-emu
+# План архитектуры: декларативное описание устройств/сетей (YAML) для mcuemu
 
 ## Context
 
@@ -97,7 +97,7 @@ scenario:               # опционально: скриптовые собы�
 ### Вариант A — Ядро на C++, YAML в C++, скрипты через встроенный Lua (рекомендуется)
 - **Парсинг**: `yaml-cpp` (FetchContent, как и сейчас Unicorn; либо `ryml`). Загрузка → `SystemConfig` (plain structs) → `SystemBuilder` с реестрами `McuRegistry`/`PartRegistry`.
 - **Скрипты**: Lua 5.4 (+ `sol2` или чистый C API). Минимальная стоимость интеграции, легко встраивается, детерминирован, без внешних зависимостей рантайма, быстрый.
-- **Plus**: один бинарь `tc32-emu sim system.yaml`, высокая скорость, без Python-зависимости в CI.
+- **Plus**: один бинарь `mcuemu sim system.yaml`, высокая скорость, без Python-зависимости в CI.
 - **Minus**: Lua не знаком большинству; нужно написать/зафиксировать API.
 
 ### Вариант B — Ядро C++ + Python как хост (pybind11/nanobind), YAML — тонкая обёртка
@@ -107,7 +107,7 @@ scenario:               # опционально: скриптовые собы�
 - Подходит, если основной потребитель — разработчики тестов.
 
 ### Вариант C — Гибрид (A + Python-API поверх)
-- Ядро и `tc32-emu sim` как в A (Lua для part-скриптов — быстрый путь), плюс опциональный `nanobind`-модуль для оркестрации тестов (запустить world, дернуть `world.at(2s).set(...)`, прочитать лог). Part-скрипты на Python — только «медленные» (сенсоры, не бит-банг).
+- Ядро и `mcuemu sim` как в A (Lua для part-скриптов — быстрый путь), плюс опциональный `nanobind`-модуль для оркестрации тестов (запустить world, дернуть `world.at(2s).set(...)`, прочитать лог). Part-скрипты на Python — только «медленные» (сенсоры, не бит-банг).
 - **Plus**: лучшее из двух; **Minus**: два API для поддержки. Сделать после A, когда API стабилизируется.
 
 ### Варианты скриптинга parts (внутри A/C)
@@ -157,7 +157,7 @@ attach:
 ```
 
 ### Control API (клиентское API для веб-сервиса)
-Ядро получает библиотечный слой `Session`/`Simulation` (без CLI-зависимостей; CLI `sim` — лишь один из клиентов). Поверх него **сервер** `tc32-emu serve` (отдельный процесс/режим) с протоколом, не привязанным к языку:
+Ядро получает библиотечный слой `Session`/`Simulation` (без CLI-зависимостей; CLI `sim` — лишь один из клиентов). Поверх него **сервер** `mcuemu serve` (отдельный процесс/режим) с протоколом, не привязанным к языку:
 
 **Вариант 1 (рекомендуется): gRPC + WebSocket/SSE-шлюз или чистый JSON-RPC 2.0 поверх WebSocket.**
 - Команды (request/response): `load(yaml)`, `start/pause/step/run_for(dur)/set_speed(x)`, `list_endpoints()`, `get(endpoint)`, `set(endpoint, value)`, `attach(endpoint, sink)`, `detach(id)`, `uart.write(ep, bytes)`, `mem.read/write`, `snapshot/restore` (позже), `shutdown`.
@@ -197,7 +197,7 @@ attach:
 
 ## Этапы
 
-**Статус:** этап 1 выполнен (`docs/architecture.md`, раздел «Simulation core»); этап 3a выполнен (parts: ds18b20, ntc, i2c_regs, `I2cSlave`; события `endpoint`+`set`). этап 3b выполнен: ADC (misc-канал), аппаратный I2C-мастер и подтяжки GPIO в `Tlsr8258` (SPI не сделан); этап 4 выполнен (Lua-хост `LuaPart`, скриптовый DS18B20 проходит те же тесты, что и нативный; `docs/scripting.md`); этап 5 выполнен (`VirtualAir`: позиции, потери, RSSI, SINR-захват, общая частотная ось BLE/802.15.4, полудуплекс; YAML `world.radio` и `radio:` у mcu/part; Lua `radio.*`). Не сделано: BLE в регистрах TLSR8258 (значит coexistence-MCU с двумя протоколами пока невозможен, BLE-трафик идёт от Lua-устройств); этап 6 выполнен (`Session`/`Sink`: stdout, file, tcp, vcd, pcap; endpoints uart/rtt; `attach:` в YAML и `--attach`; parts led/button). Не сделано: `memory`/`reg`/`trace`/`time` endpoints (нужны для Control API); этап 7 выполнен (`tc32-emu serve`: JSON-RPC 2.0 поверх WebSocket, `docs/control-api.md`; песочница `--root`, токен, Origin, лимиты). этап 7+: realtime-пейсинг (`set_speed`/`run.speed`, верхняя граница скорости, без догоняющих всплесков). Не сделано: TLS, endpoints `memory`/`reg`/`trace` как потоки; этап 2 выполнен (формат: `docs/system-config.md`; в реализации сети задаются как `pull: up|down` вместо `pull_up: {ohm,to}`, который тоже принимается, сопротивление пока не моделируется).
+**Статус:** этап 1 выполнен (`docs/architecture.md`, раздел «Simulation core»); этап 3a выполнен (parts: ds18b20, ntc, i2c_regs, `I2cSlave`; события `endpoint`+`set`). этап 3b выполнен: ADC (misc-канал), аппаратный I2C-мастер и подтяжки GPIO в `Tlsr8258` (SPI не сделан); этап 4 выполнен (Lua-хост `LuaPart`, скриптовый DS18B20 проходит те же тесты, что и нативный; `docs/scripting.md`); этап 5 выполнен (`VirtualAir`: позиции, потери, RSSI, SINR-захват, общая частотная ось BLE/802.15.4, полудуплекс; YAML `world.radio` и `radio:` у mcu/part; Lua `radio.*`). Не сделано: BLE в регистрах TLSR8258 (значит coexistence-MCU с двумя протоколами пока невозможен, BLE-трафик идёт от Lua-устройств); этап 6 выполнен (`Session`/`Sink`: stdout, file, tcp, vcd, pcap; endpoints uart/rtt; `attach:` в YAML и `--attach`; parts led/button). Не сделано: `memory`/`reg`/`trace`/`time` endpoints (нужны для Control API); этап 7 выполнен (`mcuemu serve`: JSON-RPC 2.0 поверх WebSocket, `docs/control-api.md`; песочница `--root`, токен, Origin, лимиты). этап 7+: realtime-пейсинг (`set_speed`/`run.speed`, верхняя граница скорости, без догоняющих всплесков). Не сделано: TLS, endpoints `memory`/`reg`/`trace` как потоки; этап 2 выполнен (формат: `docs/system-config.md`; в реализации сети задаются как `pull: up|down` вместо `pull_up: {ohm,to}`, который тоже принимается, сопротивление пока не моделируется).
 
 1. **Ядро**: `Mcu` интерфейс, `Scheduler`, `Pin/Net`; GPIO TLSR8258 через Net; mcs51 через тот же интерфейс. Тесты: два MCU, кнопка → GPIO.
 2. **YAML + билдер + схема**: `sim system.yaml`; одно- и двухчиповые устройства; `link: uart` между MCU.
@@ -211,7 +211,7 @@ attach:
 Примечание: слой `Session`/Endpoint закладывать уже на этапе 1 (интерфейсы), даже если реализации появятся позже — иначе CLI-флаги придётся переписывать дважды.
 
 ## Критичные файлы
-- `emulator/include/tc32emu/{bus,cpu,tlsr8258,radio}.hpp`, `emulator/src/{cpu,tlsr8258,radio,main}.cpp`
+- `emulator/include/mcuemu/{bus,cpu,tlsr8258,radio}.hpp`, `emulator/src/{cpu,tlsr8258,radio,main}.cpp`
 - `emulator/include/mcs51emu/ca51f253l3.hpp`, `emulator/src/mcs51/*`
 - `CMakeLists.txt` (новые зависимости: yaml-cpp, Lua), новый каталог `emulator/src/sim/` (config, builder, scheduler, net, parts, script), `docs/architecture.md` (обновить)
 

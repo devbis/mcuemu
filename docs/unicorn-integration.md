@@ -4,7 +4,7 @@ Unicorn is the CPU engine for this project. TC32 is implemented in the separate
 Git checkout at `./engine/unicorn`, where its CPU state, translator, register API,
 architecture dispatch, bindings, and unit tests are maintained. The root
 project builds that checkout with `UNICORN_ARCH=tc32` and links its `unicorn`
-target into `tc32emu`.
+target into `mcuemu`.
 
 The TLSR8258 wrapper creates `UC_ARCH_TC32` with `uc_open`. Flash is mapped as
 read/execute memory, SRAM is backed by the board's aligned SRAM storage, and

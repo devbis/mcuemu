@@ -1,11 +1,11 @@
-#include "tc32emu/radio.hpp"
+#include "mcuemu/radio.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
 
-namespace tc32emu {
+namespace mcuemu {
 
 std::uint64_t VirtualAir::airtime_ns(RadioProtocol protocol,
                                      std::size_t payload_bytes,
@@ -228,4 +228,4 @@ const char *protocol_name(RadioProtocol protocol) noexcept {
     return protocol == RadioProtocol::Zigbee802154 ? "zigbee-802.15.4" : "ble";
 }
 
-} // namespace tc32emu
+} // namespace mcuemu

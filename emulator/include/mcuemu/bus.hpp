@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <stdexcept>
 
-namespace tc32emu {
+namespace mcuemu {
 
 class Bus {
 public:
@@ -28,4 +28,4 @@ private:
     std::uint32_t address_;
 };
 
-} // namespace tc32emu
+} // namespace mcuemu

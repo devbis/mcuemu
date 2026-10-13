@@ -17,7 +17,7 @@
 #include <string>
 #include <thread>
 
-namespace tc32emu_tests {
+namespace mcuemu_tests {
 
 namespace {
 
@@ -670,4 +670,4 @@ void test_server_security_options() {
     CHECK(threw);
 }
 
-} // namespace tc32emu_tests
+} // namespace mcuemu_tests

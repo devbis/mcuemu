@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-namespace tc32emu {
+namespace mcuemu {
 
 enum class RadioProtocol {
     Zigbee802154,
@@ -139,4 +139,4 @@ private:
 
 const char *protocol_name(RadioProtocol protocol) noexcept;
 
-} // namespace tc32emu
+} // namespace mcuemu

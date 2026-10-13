@@ -9,8 +9,8 @@
 | `parts/ds18b20.lua`, `parts/sht3x.lua` | Reference sensor scripts (see `docs/scripting.md`). |
 
 ```sh
-build/tc32-emu sim examples/world.yaml --list-endpoints --for 1ms
-build/tc32-emu sim examples/world.yaml --for 10s        # writes logs, a VCD and a pcap into the current directory
+build/mcuemu sim examples/world.yaml --list-endpoints --for 1ms
+build/mcuemu sim examples/world.yaml --for 10s        # writes logs, a VCD and a pcap into the current directory
 ```
 
 ## Inserting a device

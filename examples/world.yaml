@@ -4,8 +4,8 @@
 # with `include:`; `params:` override what the file leaves open (position,
 # firmware paths, pins, ...).
 #
-#   tc32-emu sim examples/world.yaml --for 10s
-#   tc32-emu sim examples/world.yaml --list-endpoints --for 1ms
+#   mcuemu sim examples/world.yaml --for 10s
+#   mcuemu sim examples/world.yaml --list-endpoints --for 1ms
 #
 # The firmware images are not part of the repository; see examples/README.md.
 version: 1

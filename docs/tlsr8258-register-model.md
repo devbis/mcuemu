@@ -40,7 +40,7 @@ labels `0x44` as the wake source; use the datasheet distinction above.
 The MCU accesses AREGs through digital registers `0x8000b8` (address),
 `0x8000b9` (data), and `0x8000ba` (control). The model stores the 256-byte
 analog map and gives special behavior to the clock, wake, tick, and calibration
-registers. `tc32-emu run` and `network` can decode each completed transfer with
+registers. `mcuemu run` and `network` can decode each completed transfer with
 `--trace-analog`; each event includes virtual time, direction, AREG address,
 and transferred value. The event buffer is bounded by `--trace-limit`, and in
 `network` it follows the `--trace-node` filter. AREG transfers still complete
@@ -110,5 +110,5 @@ slave mode and SPI master/slave are not modeled.
 - [Telink TLSR8258 datasheet](https://wiki.telink-semi.cn/doc/ds/DS_TLSR8258-E_Datasheet%20for%20Telink%20BLE%2BIEEE802.15.4%20Multi-Standard%20Wireless%20SoC%20TLSR8258.pdf), especially sections 2.6–2.7 and 5.3.
 - [Telink TLSR8258F512 SDK core features](https://wiki.telink-semi.cn/tools_and_sdk/Driver/doc/kite/html/md__project_1__table_of__content_03__t_s_i__core__features.html).
 - [Telink TLSR8258F512 SDK RF features](https://wiki.telink-semi.cn/tools_and_sdk/Driver/doc/kite/html/md__project_1__table_of__content_14__t_s_i__r_f__features.html).
-- Emulator implementation: [`tlsr8258.hpp`](../emulator/include/tc32emu/tlsr8258.hpp), [`tlsr8258.cpp`](../emulator/src/tlsr8258.cpp).
+- Emulator implementation: [`tlsr8258.hpp`](../emulator/include/mcuemu/tlsr8258.hpp), [`tlsr8258.cpp`](../emulator/src/tlsr8258.cpp).
 - Relevant tests: [`test_tlsr8258.cpp`](../tests/machine/test_tlsr8258.cpp), [`test_cpu.cpp`](../tests/tc32/test_cpu.cpp).

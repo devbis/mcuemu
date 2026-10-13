@@ -13,11 +13,11 @@
 // NAK reports a missing slave ACK on any written byte of the command; the
 // remaining phases still run after a NACK; clock stretching is not modeled.
 
-#include "tc32emu/tlsr8258.hpp"
+#include "mcuemu/tlsr8258.hpp"
 
 #include <algorithm>
 
-namespace tc32emu {
+namespace mcuemu {
 
 namespace {
 
@@ -191,4 +191,4 @@ void Tlsr8258::i2c_advance(std::uint32_t cycles) {
     }
 }
 
-} // namespace tc32emu
+} // namespace mcuemu

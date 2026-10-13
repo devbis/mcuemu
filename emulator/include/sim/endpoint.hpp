@@ -1,7 +1,7 @@
 #pragma once
 
 #include "sim/net.hpp"
-#include "tc32emu/radio.hpp"
+#include "mcuemu/radio.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -74,8 +74,8 @@ private:
 // ("zigbee ch15 d.a -> * 3B 010203") at the frame's start time.
 class RadioEndpoint final : public Endpoint {
 public:
-    RadioEndpoint(std::string name, tc32emu::VirtualAir &air);
-    tc32emu::VirtualAir &air() const noexcept { return air_; }
+    RadioEndpoint(std::string name, mcuemu::VirtualAir &air);
+    mcuemu::VirtualAir &air() const noexcept { return air_; }
     std::string kind() const override { return "radio"; }
     Value get() const override {
         return Value{static_cast<std::int64_t>(frame_count_)};
@@ -85,7 +85,7 @@ public:
 
 private:
     std::string name_;
-    tc32emu::VirtualAir &air_;
+    mcuemu::VirtualAir &air_;
     std::size_t frame_count_{0};
     std::map<std::size_t, EndpointSink> sinks_;
     std::size_t next_id_{1};

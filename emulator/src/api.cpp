@@ -1,7 +1,7 @@
-#include "tc32emu/api.h"
+#include "mcuemu/api.h"
 
-#include "tc32emu/cpu.hpp"
-#include "tc32emu/tlsr8258.hpp"
+#include "mcuemu/cpu.hpp"
+#include "mcuemu/tlsr8258.hpp"
 
 #include <fstream>
 #include <iterator>
@@ -9,29 +9,29 @@
 #include <string>
 #include <vector>
 
-struct tc32emu_engine {
-    explicit tc32emu_engine(tc32emu::Tlsr8258Model model)
+struct mcuemu_engine {
+    explicit mcuemu_engine(mcuemu::Tlsr8258Model model)
         : device(model), cpu(device) {}
 
-    tc32emu::Tlsr8258 device;
-    tc32emu::Cpu cpu;
+    mcuemu::Tlsr8258 device;
+    mcuemu::Cpu cpu;
     std::string error;
 };
 
 extern "C" {
 
-tc32emu_engine *tc32emu_open(const char *model) {
+mcuemu_engine *mcuemu_open(const char *model) {
     try {
-        const auto parsed = tc32emu::parse_model(model ? model : "TLSR8258F512");
-        return new tc32emu_engine(parsed);
+        const auto parsed = mcuemu::parse_model(model ? model : "TLSR8258F512");
+        return new mcuemu_engine(parsed);
     } catch (...) {
         return nullptr;
     }
 }
 
-void tc32emu_close(tc32emu_engine *engine) { delete engine; }
+void mcuemu_close(mcuemu_engine *engine) { delete engine; }
 
-int tc32emu_load_raw(tc32emu_engine *engine, const char *path,
+int mcuemu_load_raw(mcuemu_engine *engine, const char *path,
                      std::uint32_t flash_offset) {
     if (!engine || !path)
         return -1;
@@ -52,15 +52,15 @@ int tc32emu_load_raw(tc32emu_engine *engine, const char *path,
     }
 }
 
-int tc32emu_run(tc32emu_engine *engine, std::size_t instruction_limit,
-                tc32emu_run_result *result) {
+int mcuemu_run(mcuemu_engine *engine, std::size_t instruction_limit,
+                mcuemu_run_result *result) {
     if (!engine || !result)
         return -1;
-    const tc32emu::RunResult run = engine->cpu.run(instruction_limit);
-    result->reason = run.reason == tc32emu::StopReason::Halted
-                         ? TC32EMU_HALTED
-                         : run.reason == tc32emu::StopReason::Fault ? TC32EMU_FAULT
-                                                                    : TC32EMU_STEP_LIMIT;
+    const mcuemu::RunResult run = engine->cpu.run(instruction_limit);
+    result->reason = run.reason == mcuemu::StopReason::Halted
+                         ? MCUEMU_HALTED
+                         : run.reason == mcuemu::StopReason::Fault ? MCUEMU_FAULT
+                                                                    : MCUEMU_STEP_LIMIT;
     result->instructions = run.instructions;
     result->pc = run.pc;
     result->instruction = run.instruction;
@@ -68,7 +68,7 @@ int tc32emu_run(tc32emu_engine *engine, std::size_t instruction_limit,
     return 0;
 }
 
-int tc32emu_reg_read(tc32emu_engine *engine, unsigned register_index,
+int mcuemu_reg_read(mcuemu_engine *engine, unsigned register_index,
                      std::uint32_t *value) {
     if (!engine || !value || register_index > 15)
         return -1;
@@ -81,7 +81,7 @@ int tc32emu_reg_read(tc32emu_engine *engine, unsigned register_index,
     }
 }
 
-int tc32emu_reg_write(tc32emu_engine *engine, unsigned register_index,
+int mcuemu_reg_write(mcuemu_engine *engine, unsigned register_index,
                       std::uint32_t value) {
     if (!engine || register_index > 15)
         return -1;
@@ -94,7 +94,7 @@ int tc32emu_reg_write(tc32emu_engine *engine, unsigned register_index,
     }
 }
 
-const char *tc32emu_last_error(const tc32emu_engine *engine) {
+const char *mcuemu_last_error(const mcuemu_engine *engine) {
     return engine ? engine->error.c_str() : "invalid emulator handle";
 }
 

@@ -3,7 +3,7 @@
 #include "sim/endpoint.hpp"
 #include "sim/net.hpp"
 #include "sim/scheduler.hpp"
-#include "tc32emu/radio.hpp"
+#include "mcuemu/radio.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -64,12 +64,12 @@ public:
     const std::string &script() const noexcept { return script_; }
     // The radio medium this part is attached to (null when the configuration
     // has no `radio:`), its node name on it and the protocols it declared.
-    tc32emu::VirtualAir *air() const noexcept { return air_; }
+    mcuemu::VirtualAir *air() const noexcept { return air_; }
     const std::string &radio_node() const noexcept { return radio_node_; }
     const std::vector<std::string> &radio_protocols() const noexcept {
         return radio_protocols_;
     }
-    void set_radio(tc32emu::VirtualAir *air, std::string node,
+    void set_radio(mcuemu::VirtualAir *air, std::string node,
                    std::vector<std::string> protocols) {
         air_ = air;
         radio_node_ = std::move(node);
@@ -90,7 +90,7 @@ private:
     std::vector<std::string> terminals_;
     std::string script_;
     std::uint64_t seed_;
-    tc32emu::VirtualAir *air_{nullptr};
+    mcuemu::VirtualAir *air_{nullptr};
     std::string radio_node_;
     std::vector<std::string> radio_protocols_;
 };

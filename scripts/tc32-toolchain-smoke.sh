@@ -19,7 +19,7 @@ cmake --build "$build_dir"
 "$objcopy_path" -O binary --only-section=.text \
     "$build_dir/isa-smoke.o" "$build_dir/isa-smoke.bin"
 
-test_output="$("$build_dir/tc32-emu" run --model TLSR8258F512 \
+test_output="$("$build_dir/mcuemu" run --model TLSR8258F512 \
     --firmware "$build_dir/isa-smoke.bin" --steps 20)"
 printf '%s\n' "$test_output"
 

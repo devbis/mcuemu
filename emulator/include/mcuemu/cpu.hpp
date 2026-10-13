@@ -1,6 +1,6 @@
 #pragma once
 
-#include "tc32emu/bus.hpp"
+#include "mcuemu/bus.hpp"
 
 #include <array>
 #include <cstddef>
@@ -12,7 +12,7 @@
 
 struct uc_struct;
 
-namespace tc32emu {
+namespace mcuemu {
 
 class Tlsr8258;
 
@@ -161,4 +161,4 @@ private:
     std::uint32_t last_stack_cpsr_{0};
 };
 
-} // namespace tc32emu
+} // namespace mcuemu

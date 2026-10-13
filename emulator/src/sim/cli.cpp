@@ -12,7 +12,7 @@
 namespace sim {
 
 void print_sim_usage(std::ostream &out) {
-    out << "       tc32-emu sim SYSTEM.yaml [--for DURATION] [--quantum DURATION]\n"
+    out << "       mcuemu sim SYSTEM.yaml [--for DURATION] [--quantum DURATION]\n"
            "       [--trace-nets] [--attach ENDPOINT=SINK]... [--list-endpoints]\n"
            "       [--trace-uart PATTERN[=hex|text]]...\n"
            "       sinks: stdout, text, hex[:GAP], file:PATH, tcp:PORT, vcd:PATH, pcap:PATH[,ble]\n"
@@ -21,7 +21,7 @@ void print_sim_usage(std::ostream &out) {
 }
 
 void print_serve_usage(std::ostream &out) {
-    out << "       tc32-emu serve --root DIR [--port N] [--bind ADDR] [--token T]\n"
+    out << "       mcuemu serve --root DIR [--port N] [--bind ADDR] [--token T]\n"
            "       [--allow-origin ORIGIN]... [--max-sessions N] [--idle-timeout SEC]\n";
 }
 

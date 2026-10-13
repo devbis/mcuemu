@@ -51,18 +51,18 @@ Net &World::net(std::string_view name) const {
     throw std::out_of_range("unknown net: " + std::string(name));
 }
 
-tc32emu::VirtualAir &World::add_radio(std::string name) {
+mcuemu::VirtualAir &World::add_radio(std::string name) {
     for (const auto &entry : airs_)
         if (entry.first == name)
             throw std::invalid_argument("duplicate radio medium: " + name);
-    auto air = std::make_unique<tc32emu::VirtualAir>();
-    tc32emu::VirtualAir &ref = *air;
+    auto air = std::make_unique<mcuemu::VirtualAir>();
+    mcuemu::VirtualAir &ref = *air;
     endpoints_.add(name, std::make_unique<RadioEndpoint>(name, ref));
     airs_.emplace_back(std::move(name), std::move(air));
     return ref;
 }
 
-tc32emu::VirtualAir &World::radio(std::string_view name) const {
+mcuemu::VirtualAir &World::radio(std::string_view name) const {
     for (const auto &entry : airs_)
         if (entry.first == name)
             return *entry.second;

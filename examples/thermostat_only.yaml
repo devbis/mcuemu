@@ -1,5 +1,5 @@
 # The thermostat alone, with a coordinator to join. Run:
-#   tc32-emu sim examples/thermostat_only.yaml --for 5s
+#   mcuemu sim examples/thermostat_only.yaml --for 5s
 version: 1
 
 world:

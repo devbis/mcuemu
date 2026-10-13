@@ -1,7 +1,7 @@
 #pragma once
 
 #include "sim/net.hpp"
-#include "tc32emu/radio.hpp"
+#include "mcuemu/radio.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -73,7 +73,7 @@ public:
     // Connects the MCU's radio to a medium under the node name `node`.
     // `protocols` lists what the firmware will use ("zigbee", "ble"). Throws
     // std::invalid_argument when the model cannot do that.
-    virtual void attach_radio(tc32emu::VirtualAir &air, const std::string &node,
+    virtual void attach_radio(mcuemu::VirtualAir &air, const std::string &node,
                               const std::vector<std::string> &protocols) {
         (void)air;
         (void)node;

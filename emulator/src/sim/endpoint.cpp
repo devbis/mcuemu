@@ -49,12 +49,12 @@ std::size_t NetEndpoint::subscribe(EndpointSink sink) {
 
 void NetEndpoint::unsubscribe(std::size_t id) { sinks_.erase(id); }
 
-RadioEndpoint::RadioEndpoint(std::string name, tc32emu::VirtualAir &air)
+RadioEndpoint::RadioEndpoint(std::string name, mcuemu::VirtualAir &air)
     : name_(std::move(name)), air_(air) {
-    air.add_observer([this](const tc32emu::RadioFrame &frame) {
+    air.add_observer([this](const mcuemu::RadioFrame &frame) {
         ++frame_count_;
-        std::string text = tc32emu::protocol_name(frame.protocol);
-        text += frame.protocol == tc32emu::RadioProtocol::Zigbee802154 ? " ch" : " ble-ch";
+        std::string text = mcuemu::protocol_name(frame.protocol);
+        text += frame.protocol == mcuemu::RadioProtocol::Zigbee802154 ? " ch" : " ble-ch";
         text += std::to_string(frame.channel) + " " + frame.source + " -> " +
                 (frame.destination.empty() ? "*" : frame.destination) + " " +
                 std::to_string(frame.payload.size()) + "B ";

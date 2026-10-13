@@ -65,7 +65,7 @@ ctest --test-dir build -R firmware_vendor_sleep_1s --output-on-failure
 Run a raw flash image from address zero:
 
 ```sh
-./build/tc32-emu run --model TLSR8258F512 --firmware firmware/sample.bin --steps 100000
+./build/mcuemu run --model TLSR8258F512 --firmware firmware/sample.bin --steps 100000
 ```
 
 The CLI can trace instructions, MMIO accesses, and stack or mode changes to
@@ -75,7 +75,7 @@ count; `--fault-trace` prints a ring buffer of recent instructions if the CPU
 faults. Network runs can restrict traces to one node with `--trace-node`:
 
 ```sh
-./build/tc32-emu run --firmware firmware/sample.bin --steps 100000 \
+./build/mcuemu run --firmware firmware/sample.bin --steps 100000 \
   --trace-pc-range 0x0:0x200 --trace-mmio-range 0x8000b8:0x8000ba \
   --trace-limit 1000
 ```
@@ -84,7 +84,7 @@ For example, to trace the IRQ vector on one node and retain recent instructions
 for a possible fault:
 
 ```sh
-./build/tc32-emu network \
+./build/mcuemu network \
   --node coordinator=firmware/coordinator.bin \
   --node light=firmware/sampleLight.bin --steps 30000000 \
   --trace-node light --trace-pc-range 0x220:0x250 \
@@ -96,7 +96,7 @@ and channel. Each node advances in short instruction batches, and the command
 prints transmitted frames and successful packet receptions:
 
 ```sh
-./build/tc32-emu network \
+./build/mcuemu network \
   --node coordinator=firmware/coordinator.bin \
   --node light=firmware/sampleLight.bin \
   --model TLSR8258F512 --channel 15 --steps 1000000
@@ -117,7 +117,7 @@ horizon; a delayed node receives only the remaining time after it starts. For
 example, start the coordinator first and the light at 5 seconds:
 
 ```sh
-./build/tc32-emu network \
+./build/mcuemu network \
   --node coordinator=firmware/samplegw_tb03f.bin \
   --node light=firmware/samplelight_tb03f.bin \
   --model TLSR8258F512 --channel 15 --steps 200000000 \
@@ -134,7 +134,7 @@ sample's pulled-up idle buttons; GPIO events take effect before the next
 execution quantum.
 
 `firmware/` is local-only. Images and build products are ignored by git.
-`tc32-emu models` lists the supported flash capacities.
+`mcuemu models` lists the supported flash capacities.
 
 ## MCS-51 / CA51F253L3
 
@@ -198,7 +198,7 @@ commissioning path or peripheral. BLE remains deferred.
 ## Project layout
 
 - `engine/unicorn/` — separate Unicorn Git checkout with the TC32 backend.
-- `emulator/include/tc32emu/` and `emulator/src/` — board model, CPU adapter,
+- `emulator/include/mcuemu/` and `emulator/src/` — board model, CPU adapter,
   radio, C API, and CLI.
 - `tests/tc32/`, `tests/machine/`, and `tests/radio/` — tests grouped by layer.
 - `firmware/` — local-only vendor firmware images.

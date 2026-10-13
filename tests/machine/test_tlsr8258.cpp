@@ -2,113 +2,113 @@
 #include <array>
 #include <cstdint>
 #include <vector>
-#include "tc32emu/cpu.hpp"
-#include "tc32emu/tlsr8258.hpp"
+#include "mcuemu/cpu.hpp"
+#include "mcuemu/tlsr8258.hpp"
 
-namespace tc32emu_tests {
+namespace mcuemu_tests {
 
 void test_tlsr_memory_gpio_and_timer() {
-    tc32emu::Tlsr8258 device(tc32emu::Tlsr8258Model::F512);
+    mcuemu::Tlsr8258 device(mcuemu::Tlsr8258Model::F512);
     device.set_output_trace_enabled(true);
     CHECK(device.flash_size() == 512u * 1024u);
-    device.write8(tc32emu::Tlsr8258::RegisterBase + 0x10, 0x5a);
-    CHECK(device.read8(tc32emu::Tlsr8258::RegisterBase + 0x10) == 0x5a);
-    device.write8(tc32emu::Tlsr8258::VendorRegisterAliasBase + 0x12d2, 0x6b);
-    CHECK(device.read8(tc32emu::Tlsr8258::RegisterBase + 0x12d2) == 0x6b);
-    device.write32(tc32emu::Tlsr8258::RetainedSramBase + 0x24, 0xaabbccddu);
-    CHECK(device.read32(tc32emu::Tlsr8258::RetainedSramBase + 0x24) == 0xaabbccddu);
-    CHECK(device.read8(tc32emu::Tlsr8258::GpioBase) == 0xff);
+    device.write8(mcuemu::Tlsr8258::RegisterBase + 0x10, 0x5a);
+    CHECK(device.read8(mcuemu::Tlsr8258::RegisterBase + 0x10) == 0x5a);
+    device.write8(mcuemu::Tlsr8258::VendorRegisterAliasBase + 0x12d2, 0x6b);
+    CHECK(device.read8(mcuemu::Tlsr8258::RegisterBase + 0x12d2) == 0x6b);
+    device.write32(mcuemu::Tlsr8258::RetainedSramBase + 0x24, 0xaabbccddu);
+    CHECK(device.read32(mcuemu::Tlsr8258::RetainedSramBase + 0x24) == 0xaabbccddu);
+    CHECK(device.read8(mcuemu::Tlsr8258::GpioBase) == 0xff);
 
     device.set_gpio_input(0, 0x05);
-    CHECK(device.read8(tc32emu::Tlsr8258::GpioBase) == 0x05);
-    device.write8(tc32emu::Tlsr8258::GpioBase + 3, 0x81);
+    CHECK(device.read8(mcuemu::Tlsr8258::GpioBase) == 0x05);
+    device.write8(mcuemu::Tlsr8258::GpioBase + 3, 0x81);
     CHECK(device.gpio_output(0) == 0x81);
     CHECK(device.output_events().size() == 1);
     CHECK(device.output_events()[0].kind ==
-          tc32emu::OutputEvent::Kind::GpioPort);
+          mcuemu::OutputEvent::Kind::GpioPort);
     CHECK(device.output_events()[0].index == 0);
     CHECK(device.output_events()[0].value == 0x81);
 
-    device.write8(tc32emu::Tlsr8258::PwmEnable, 0x06);
-    device.write8(tc32emu::Tlsr8258::PwmEnable, 0x00);
+    device.write8(mcuemu::Tlsr8258::PwmEnable, 0x06);
+    device.write8(mcuemu::Tlsr8258::PwmEnable, 0x00);
     CHECK(device.output_events().size() == 3);
     CHECK(device.output_events()[1].kind ==
-          tc32emu::OutputEvent::Kind::PwmEnableMask);
+          mcuemu::OutputEvent::Kind::PwmEnableMask);
     CHECK(device.output_events()[1].value == 0x06);
     CHECK(device.output_events()[2].value == 0x00);
 
-    device.write32(tc32emu::Tlsr8258::TimerCapture0, 3);
-    device.write32(tc32emu::Tlsr8258::TimerControl, 1);
+    device.write32(mcuemu::Tlsr8258::TimerCapture0, 3);
+    device.write32(mcuemu::Tlsr8258::TimerControl, 1);
     device.tick(3);
-    CHECK(device.read32(tc32emu::Tlsr8258::TimerTick0) == 3);
-    CHECK((device.read8(tc32emu::Tlsr8258::TimerControl + 3) & 1u) != 0);
+    CHECK(device.read32(mcuemu::Tlsr8258::TimerTick0) == 3);
+    CHECK((device.read8(mcuemu::Tlsr8258::TimerControl + 3) & 1u) != 0);
     CHECK(device.time_ns() == 62);
-    device.write8(tc32emu::Tlsr8258::TimerControl + 3, 1);
-    CHECK((device.read8(tc32emu::Tlsr8258::TimerControl + 3) & 1u) == 0);
+    device.write8(mcuemu::Tlsr8258::TimerControl + 3, 1);
+    CHECK((device.read8(mcuemu::Tlsr8258::TimerControl + 3) & 1u) == 0);
 
     bool write_fault = false;
     try {
         device.write8(0, 0);
-    } catch (const tc32emu::BusFault &) {
+    } catch (const mcuemu::BusFault &) {
         write_fault = true;
     }
     CHECK(write_fault);
 
-    tc32emu::Tlsr8258 one_megabyte(tc32emu::Tlsr8258Model::F1K);
+    mcuemu::Tlsr8258 one_megabyte(mcuemu::Tlsr8258Model::F1K);
     CHECK(one_megabyte.flash_size() == 1024u * 1024u);
     one_megabyte.load_firmware({0x3c}, one_megabyte.flash_size() - 1u);
     CHECK(one_megabyte.read8(one_megabyte.flash_size() - 1u) == 0x3c);
 }
 
 void test_tlsr_analog_registers_and_32k_tick() {
-    tc32emu::Tlsr8258 device;
-    device.write8(tc32emu::Tlsr8258::AnalogAddress, 0x7f);
-    device.write8(tc32emu::Tlsr8258::AnalogControl, 0x40);
-    CHECK(device.read8(tc32emu::Tlsr8258::AnalogData) == 1);
-    device.write8(tc32emu::Tlsr8258::AnalogAddress,
-                  tc32emu::Tlsr8258::AnalogClockPower);
-    device.write8(tc32emu::Tlsr8258::AnalogControl, 0x40);
-    CHECK(device.read8(tc32emu::Tlsr8258::AnalogData) ==
-          tc32emu::Tlsr8258::AnalogClock32kXtalPowerDown);
+    mcuemu::Tlsr8258 device;
+    device.write8(mcuemu::Tlsr8258::AnalogAddress, 0x7f);
+    device.write8(mcuemu::Tlsr8258::AnalogControl, 0x40);
+    CHECK(device.read8(mcuemu::Tlsr8258::AnalogData) == 1);
+    device.write8(mcuemu::Tlsr8258::AnalogAddress,
+                  mcuemu::Tlsr8258::AnalogClockPower);
+    device.write8(mcuemu::Tlsr8258::AnalogControl, 0x40);
+    CHECK(device.read8(mcuemu::Tlsr8258::AnalogData) ==
+          mcuemu::Tlsr8258::AnalogClock32kXtalPowerDown);
 
-    device.write8(tc32emu::Tlsr8258::AnalogAddress, 0x22);
-    device.write8(tc32emu::Tlsr8258::AnalogData, 0xa5);
-    device.write8(tc32emu::Tlsr8258::AnalogControl, 0x60); // start AREG write
-    CHECK((device.read8(tc32emu::Tlsr8258::AnalogControl) & 1u) == 0);
+    device.write8(mcuemu::Tlsr8258::AnalogAddress, 0x22);
+    device.write8(mcuemu::Tlsr8258::AnalogData, 0xa5);
+    device.write8(mcuemu::Tlsr8258::AnalogControl, 0x60); // start AREG write
+    CHECK((device.read8(mcuemu::Tlsr8258::AnalogControl) & 1u) == 0);
 
-    device.write8(tc32emu::Tlsr8258::AnalogAddress, 0x22);
-    device.write8(tc32emu::Tlsr8258::AnalogControl, 0x40); // start AREG read
-    CHECK(device.read8(tc32emu::Tlsr8258::AnalogData) == 0xa5);
+    device.write8(mcuemu::Tlsr8258::AnalogAddress, 0x22);
+    device.write8(mcuemu::Tlsr8258::AnalogControl, 0x40); // start AREG read
+    CHECK(device.read8(mcuemu::Tlsr8258::AnalogData) == 0xa5);
 
-    device.write8(tc32emu::Tlsr8258::AnalogAddress, 0xc7);
-    device.write8(tc32emu::Tlsr8258::AnalogData, 0x0e);
-    device.write8(tc32emu::Tlsr8258::AnalogControl, 0x60);
-    device.write8(tc32emu::Tlsr8258::AnalogAddress, 0xcf);
-    device.write8(tc32emu::Tlsr8258::AnalogControl, 0x40);
-    CHECK((device.read8(tc32emu::Tlsr8258::AnalogData) & 0x80u) == 0);
-    device.write8(tc32emu::Tlsr8258::AnalogAddress, 0xc7);
-    device.write8(tc32emu::Tlsr8258::AnalogData, 0x0f);
-    device.write8(tc32emu::Tlsr8258::AnalogControl, 0x60);
-    device.write8(tc32emu::Tlsr8258::AnalogAddress, 0xcf);
-    device.write8(tc32emu::Tlsr8258::AnalogControl, 0x40);
-    CHECK((device.read8(tc32emu::Tlsr8258::AnalogData) & 0x80u) != 0);
+    device.write8(mcuemu::Tlsr8258::AnalogAddress, 0xc7);
+    device.write8(mcuemu::Tlsr8258::AnalogData, 0x0e);
+    device.write8(mcuemu::Tlsr8258::AnalogControl, 0x60);
+    device.write8(mcuemu::Tlsr8258::AnalogAddress, 0xcf);
+    device.write8(mcuemu::Tlsr8258::AnalogControl, 0x40);
+    CHECK((device.read8(mcuemu::Tlsr8258::AnalogData) & 0x80u) == 0);
+    device.write8(mcuemu::Tlsr8258::AnalogAddress, 0xc7);
+    device.write8(mcuemu::Tlsr8258::AnalogData, 0x0f);
+    device.write8(mcuemu::Tlsr8258::AnalogControl, 0x60);
+    device.write8(mcuemu::Tlsr8258::AnalogAddress, 0xcf);
+    device.write8(mcuemu::Tlsr8258::AnalogControl, 0x40);
+    CHECK((device.read8(mcuemu::Tlsr8258::AnalogData) & 0x80u) != 0);
 
     auto read_tick = [&device] {
         std::uint32_t tick = 0;
         for (unsigned byte = 0; byte != 4; ++byte) {
-            device.write8(tc32emu::Tlsr8258::AnalogAddress,
+            device.write8(mcuemu::Tlsr8258::AnalogAddress,
                           static_cast<std::uint8_t>(0x40 + byte));
-            device.write8(tc32emu::Tlsr8258::AnalogControl, 0x40);
+            device.write8(mcuemu::Tlsr8258::AnalogControl, 0x40);
             tick |= static_cast<std::uint32_t>(
-                        device.read8(tc32emu::Tlsr8258::AnalogData))
+                        device.read8(mcuemu::Tlsr8258::AnalogData))
                     << (byte * 8u);
         }
         return tick;
     };
     auto write_analog = [&device](std::uint8_t address, std::uint8_t value) {
-        device.write8(tc32emu::Tlsr8258::AnalogAddress, address);
-        device.write8(tc32emu::Tlsr8258::AnalogData, value);
-        device.write8(tc32emu::Tlsr8258::AnalogControl, 0x60);
+        device.write8(mcuemu::Tlsr8258::AnalogAddress, address);
+        device.write8(mcuemu::Tlsr8258::AnalogData, value);
+        device.write8(mcuemu::Tlsr8258::AnalogControl, 0x60);
     };
 
     device.tick(48000); // 1 ms at 48 MHz; 32 ticks from the RC source.
@@ -116,157 +116,157 @@ void test_tlsr_analog_registers_and_32k_tick() {
     device.tick(47952000);
     CHECK(read_tick() == 32000);
 
-    write_analog(tc32emu::Tlsr8258::AnalogClockPower,
-                 tc32emu::Tlsr8258::AnalogClock32kRcPowerDown |
-                     tc32emu::Tlsr8258::AnalogClock32kXtalPowerDown);
+    write_analog(mcuemu::Tlsr8258::AnalogClockPower,
+                 mcuemu::Tlsr8258::AnalogClock32kRcPowerDown |
+                     mcuemu::Tlsr8258::AnalogClock32kXtalPowerDown);
     device.tick(48000000);
     CHECK(read_tick() == 32000);
 
-    write_analog(tc32emu::Tlsr8258::AnalogClockPower,
-                 tc32emu::Tlsr8258::AnalogClock32kXtalPowerDown);
+    write_analog(mcuemu::Tlsr8258::AnalogClockPower,
+                 mcuemu::Tlsr8258::AnalogClock32kXtalPowerDown);
     device.tick(48000000);
     CHECK(read_tick() == 64000);
 
-    device.write8(tc32emu::Tlsr8258::Clock32kSelect,
-                  tc32emu::Tlsr8258::Clock32kSelectXtal);
+    device.write8(mcuemu::Tlsr8258::Clock32kSelect,
+                  mcuemu::Tlsr8258::Clock32kSelectXtal);
     device.tick(48000000);
     CHECK(read_tick() == 64000); // XTAL remains powered down.
 
-    write_analog(tc32emu::Tlsr8258::AnalogClockPower, 0);
+    write_analog(mcuemu::Tlsr8258::AnalogClockPower, 0);
     device.tick(48000000);
     CHECK(read_tick() == 96768);
 
-    write_analog(tc32emu::Tlsr8258::AnalogClockPower,
-                 tc32emu::Tlsr8258::AnalogClock32kXtalPowerDown);
+    write_analog(mcuemu::Tlsr8258::AnalogClockPower,
+                 mcuemu::Tlsr8258::AnalogClock32kXtalPowerDown);
     device.tick(48000000);
     CHECK(read_tick() == 96768);
 }
 
 void test_tlsr_rc32k_calibration_ready_after_virtual_time() {
-    tc32emu::Tlsr8258 device;
+    mcuemu::Tlsr8258 device;
     auto write_analog = [&device](std::uint8_t address, std::uint8_t value) {
-        device.write8(tc32emu::Tlsr8258::AnalogAddress, address);
-        device.write8(tc32emu::Tlsr8258::AnalogData, value);
-        device.write8(tc32emu::Tlsr8258::AnalogControl, 0x60);
+        device.write8(mcuemu::Tlsr8258::AnalogAddress, address);
+        device.write8(mcuemu::Tlsr8258::AnalogData, value);
+        device.write8(mcuemu::Tlsr8258::AnalogControl, 0x60);
     };
     auto read_analog = [&device](std::uint8_t address) {
-        device.write8(tc32emu::Tlsr8258::AnalogAddress, address);
-        device.write8(tc32emu::Tlsr8258::AnalogControl, 0x40);
-        return device.read8(tc32emu::Tlsr8258::AnalogData);
+        device.write8(mcuemu::Tlsr8258::AnalogAddress, address);
+        device.write8(mcuemu::Tlsr8258::AnalogControl, 0x40);
+        return device.read8(mcuemu::Tlsr8258::AnalogData);
     };
 
-    write_analog(tc32emu::Tlsr8258::AnalogRc32kCalibrationControl, 0xf6);
-    write_analog(tc32emu::Tlsr8258::AnalogRc32kCalibrationControl, 0xf7);
-    CHECK((read_analog(tc32emu::Tlsr8258::AnalogRcCalibrationStatus) &
-           tc32emu::Tlsr8258::AnalogRc32kCalibrationReady) == 0);
+    write_analog(mcuemu::Tlsr8258::AnalogRc32kCalibrationControl, 0xf6);
+    write_analog(mcuemu::Tlsr8258::AnalogRc32kCalibrationControl, 0xf7);
+    CHECK((read_analog(mcuemu::Tlsr8258::AnalogRcCalibrationStatus) &
+           mcuemu::Tlsr8258::AnalogRc32kCalibrationReady) == 0);
 
-    device.tick(tc32emu::Tlsr8258::Rc32kCalibrationTimeNs * 48 / 1000 - 1);
-    CHECK((read_analog(tc32emu::Tlsr8258::AnalogRcCalibrationStatus) &
-           tc32emu::Tlsr8258::AnalogRc32kCalibrationReady) == 0);
+    device.tick(mcuemu::Tlsr8258::Rc32kCalibrationTimeNs * 48 / 1000 - 1);
+    CHECK((read_analog(mcuemu::Tlsr8258::AnalogRcCalibrationStatus) &
+           mcuemu::Tlsr8258::AnalogRc32kCalibrationReady) == 0);
     device.tick(1);
-    CHECK((read_analog(tc32emu::Tlsr8258::AnalogRcCalibrationStatus) &
-           tc32emu::Tlsr8258::AnalogRc32kCalibrationReady) != 0);
-    CHECK(device.time_ns() == tc32emu::Tlsr8258::Rc32kCalibrationTimeNs);
+    CHECK((read_analog(mcuemu::Tlsr8258::AnalogRcCalibrationStatus) &
+           mcuemu::Tlsr8258::AnalogRc32kCalibrationReady) != 0);
+    CHECK(device.time_ns() == mcuemu::Tlsr8258::Rc32kCalibrationTimeNs);
 
-    write_analog(tc32emu::Tlsr8258::AnalogRc32kCalibrationControl, 0xf6);
-    CHECK((read_analog(tc32emu::Tlsr8258::AnalogRcCalibrationStatus) &
-           tc32emu::Tlsr8258::AnalogRc32kCalibrationReady) == 0);
+    write_analog(mcuemu::Tlsr8258::AnalogRc32kCalibrationControl, 0xf6);
+    CHECK((read_analog(mcuemu::Tlsr8258::AnalogRcCalibrationStatus) &
+           mcuemu::Tlsr8258::AnalogRc32kCalibrationReady) == 0);
 }
 
 void test_tlsr_deep_sleep_sram_retention() {
-    tc32emu::Tlsr8258 device;
-    device.write32(tc32emu::Tlsr8258::RetainedSramBase + 0x100,
+    mcuemu::Tlsr8258 device;
+    device.write32(mcuemu::Tlsr8258::RetainedSramBase + 0x100,
                    0x12345678);
-    device.write32(tc32emu::Tlsr8258::NonRetainedSramBase, 0x9abcdef0);
+    device.write32(mcuemu::Tlsr8258::NonRetainedSramBase, 0x9abcdef0);
 
     auto write_analog = [&device](std::uint8_t address, std::uint8_t value) {
-        device.write8(tc32emu::Tlsr8258::AnalogAddress, address);
-        device.write8(tc32emu::Tlsr8258::AnalogData, value);
-        device.write8(tc32emu::Tlsr8258::AnalogControl, 0x60);
+        device.write8(mcuemu::Tlsr8258::AnalogAddress, address);
+        device.write8(mcuemu::Tlsr8258::AnalogData, value);
+        device.write8(mcuemu::Tlsr8258::AnalogControl, 0x60);
     };
-    write_analog(tc32emu::Tlsr8258::AnalogWakeSource,
-                 tc32emu::Tlsr8258::AnalogWakeTimerEnable);
+    write_analog(mcuemu::Tlsr8258::AnalogWakeSource,
+                 mcuemu::Tlsr8258::AnalogWakeTimerEnable);
     write_analog(0x7e, 0x80); // Deep-sleep mode.
-    device.write32(tc32emu::Tlsr8258::System32kTickCompare, 1);
-    device.write8(tc32emu::Tlsr8258::SystemTimerControl, 0x08);
-    device.write8(tc32emu::Tlsr8258::PowerDownControl,
-                  tc32emu::Tlsr8258::PowerDownSleepEnable |
-                      tc32emu::Tlsr8258::PowerDownSleepTrigger);
-    CHECK(device.power_state() == tc32emu::Tlsr8258PowerState::Awake);
-    device.tick(tc32emu::Tlsr8258::SleepEntryDelayCycles - 1);
-    CHECK(device.power_state() == tc32emu::Tlsr8258PowerState::Awake);
+    device.write32(mcuemu::Tlsr8258::System32kTickCompare, 1);
+    device.write8(mcuemu::Tlsr8258::SystemTimerControl, 0x08);
+    device.write8(mcuemu::Tlsr8258::PowerDownControl,
+                  mcuemu::Tlsr8258::PowerDownSleepEnable |
+                      mcuemu::Tlsr8258::PowerDownSleepTrigger);
+    CHECK(device.power_state() == mcuemu::Tlsr8258PowerState::Awake);
+    device.tick(mcuemu::Tlsr8258::SleepEntryDelayCycles - 1);
+    CHECK(device.power_state() == mcuemu::Tlsr8258PowerState::Awake);
     device.tick(1);
 
-    CHECK(device.power_state() == tc32emu::Tlsr8258PowerState::DeepSleep);
+    CHECK(device.power_state() == mcuemu::Tlsr8258PowerState::DeepSleep);
     CHECK(device.advance_sleep_to_wakeup());
     CHECK(device.consume_deep_sleep_wakeup());
-    CHECK(device.read32(tc32emu::Tlsr8258::RetainedSramBase + 0x100) ==
+    CHECK(device.read32(mcuemu::Tlsr8258::RetainedSramBase + 0x100) ==
           0x12345678);
-    CHECK(device.read32(tc32emu::Tlsr8258::NonRetainedSramBase) == 0);
+    CHECK(device.read32(mcuemu::Tlsr8258::NonRetainedSramBase) == 0);
 }
 
 void test_tlsr_system_timer() {
-    tc32emu::Tlsr8258 device;
-    CHECK(device.read32(tc32emu::Tlsr8258::SystemTimer) == 0);
+    mcuemu::Tlsr8258 device;
+    CHECK(device.read32(mcuemu::Tlsr8258::SystemTimer) == 0);
 
     device.tick(48); // 1 us at 48 MHz; 16 MHz timer, 3 low bits read as zero.
-    CHECK(device.read32(tc32emu::Tlsr8258::SystemTimer) == 16);
+    CHECK(device.read32(mcuemu::Tlsr8258::SystemTimer) == 16);
     device.tick(48);
-    CHECK(device.read32(tc32emu::Tlsr8258::SystemTimer) == 32);
+    CHECK(device.read32(mcuemu::Tlsr8258::SystemTimer) == 32);
 
-    device.write32(tc32emu::Tlsr8258::SystemTimer, 0x123);
-    CHECK(device.read32(tc32emu::Tlsr8258::SystemTimer) == 0x120);
+    device.write32(mcuemu::Tlsr8258::SystemTimer, 0x123);
+    CHECK(device.read32(mcuemu::Tlsr8258::SystemTimer) == 0x120);
     device.tick(48);
-    CHECK(device.read32(tc32emu::Tlsr8258::SystemTimer) == 0x130);
+    CHECK(device.read32(mcuemu::Tlsr8258::SystemTimer) == 0x130);
 
-    device.write8(tc32emu::Tlsr8258::SystemTimerMode, 0x92);
-    device.write8(tc32emu::Tlsr8258::SystemTimerControl, 0x01);
+    device.write8(mcuemu::Tlsr8258::SystemTimerMode, 0x92);
+    device.write8(mcuemu::Tlsr8258::SystemTimerControl, 0x01);
     CHECK(device.read16(0x800750) == 0);
-    device.write8(tc32emu::Tlsr8258::SystemTimerControl, 0x02);
-    CHECK(device.read8(tc32emu::Tlsr8258::SystemTimerControl) == 0);
+    device.write8(mcuemu::Tlsr8258::SystemTimerControl, 0x02);
+    CHECK(device.read8(mcuemu::Tlsr8258::SystemTimerControl) == 0);
 
-    device.write32(tc32emu::Tlsr8258::SystemTimerCompare, 0x150);
-    device.write8(tc32emu::Tlsr8258::SystemTimerMode,
-                  tc32emu::Tlsr8258::SystemTimerIrqEnable);
-    device.write8(tc32emu::Tlsr8258::IrqMask + 2, 1u << 4); // IRQ 20.
-    device.write8(tc32emu::Tlsr8258::IrqGlobalEnable, 1);
+    device.write32(mcuemu::Tlsr8258::SystemTimerCompare, 0x150);
+    device.write8(mcuemu::Tlsr8258::SystemTimerMode,
+                  mcuemu::Tlsr8258::SystemTimerIrqEnable);
+    device.write8(mcuemu::Tlsr8258::IrqMask + 2, 1u << 4); // IRQ 20.
+    device.write8(mcuemu::Tlsr8258::IrqGlobalEnable, 1);
     device.tick(48); // 0x140; compare has not fired yet.
     CHECK(!device.interrupt_pending());
     device.tick(48); // 0x150; IRQ 20 becomes pending.
     CHECK(device.interrupt_pending());
-    CHECK((device.read8(tc32emu::Tlsr8258::IrqSource + 2) & (1u << 4)) != 0);
-    device.write32(tc32emu::Tlsr8258::IrqSource, 1u << 20);
+    CHECK((device.read8(mcuemu::Tlsr8258::IrqSource + 2) & (1u << 4)) != 0);
+    device.write32(mcuemu::Tlsr8258::IrqSource, 1u << 20);
     CHECK(!device.interrupt_pending());
     device.tick(48); // A one-shot compare does not reassert after its target.
     CHECK(!device.interrupt_pending());
 
-    tc32emu::Tlsr8258 calibration_device;
-    CHECK(calibration_device.read8(tc32emu::Tlsr8258::SystemTimerMode) == 0x90);
-    calibration_device.write8(tc32emu::Tlsr8258::SystemTimerControl, 0x01);
+    mcuemu::Tlsr8258 calibration_device;
+    CHECK(calibration_device.read8(mcuemu::Tlsr8258::SystemTimerMode) == 0x90);
+    calibration_device.write8(mcuemu::Tlsr8258::SystemTimerControl, 0x01);
     CHECK(calibration_device.read16(0x800750) == 0);
     calibration_device.tick(23999); // Just short of 16 RC 32 kHz ticks.
     CHECK(calibration_device.read16(0x800750) == 0);
     calibration_device.tick(1);
     CHECK(calibration_device.read16(0x800750) == 8000);
 
-    tc32emu::Tlsr8258 measured_rc_device;
+    mcuemu::Tlsr8258 measured_rc_device;
     measured_rc_device.set_rc32k_characteristics(29182, 8778);
     auto read_measured_rc_tick = [&measured_rc_device] {
         std::uint32_t tick = 0;
         for (unsigned byte = 0; byte != 4; ++byte) {
             measured_rc_device.write8(
-                tc32emu::Tlsr8258::AnalogAddress,
+                mcuemu::Tlsr8258::AnalogAddress,
                 static_cast<std::uint8_t>(0x40 + byte));
-            measured_rc_device.write8(tc32emu::Tlsr8258::AnalogControl, 0x40);
+            measured_rc_device.write8(mcuemu::Tlsr8258::AnalogControl, 0x40);
             tick |= static_cast<std::uint32_t>(measured_rc_device.read8(
-                        tc32emu::Tlsr8258::AnalogData))
+                        mcuemu::Tlsr8258::AnalogData))
                     << (byte * 8u);
         }
         return tick;
     };
     measured_rc_device.tick(48000000);
     CHECK(read_measured_rc_tick() == 29182);
-    measured_rc_device.write8(tc32emu::Tlsr8258::SystemTimerControl, 0x01);
+    measured_rc_device.write8(mcuemu::Tlsr8258::SystemTimerControl, 0x01);
     const std::uint64_t cycles_for_16_rc_ticks =
         (static_cast<std::uint64_t>(measured_rc_device.clock_hz()) * 16u +
          29182u - 1u) /
@@ -276,29 +276,29 @@ void test_tlsr_system_timer() {
 }
 
 void test_tlsr_mspi_jedec_id() {
-    auto read_id = [](tc32emu::Tlsr8258 &device) {
-        device.write8(tc32emu::Tlsr8258::MspiControl, 1); // deselect
-        device.write8(tc32emu::Tlsr8258::MspiControl, 0); // select
-        device.write8(tc32emu::Tlsr8258::MspiData, 0x9f);
-        device.write8(tc32emu::Tlsr8258::MspiData, 0x00); // issue clocks
-        device.write8(tc32emu::Tlsr8258::MspiControl, 0x0a); // auto read
+    auto read_id = [](mcuemu::Tlsr8258 &device) {
+        device.write8(mcuemu::Tlsr8258::MspiControl, 1); // deselect
+        device.write8(mcuemu::Tlsr8258::MspiControl, 0); // select
+        device.write8(mcuemu::Tlsr8258::MspiData, 0x9f);
+        device.write8(mcuemu::Tlsr8258::MspiData, 0x00); // issue clocks
+        device.write8(mcuemu::Tlsr8258::MspiControl, 0x0a); // auto read
         const std::array<std::uint8_t, 3> id = {
-            device.read8(tc32emu::Tlsr8258::MspiData),
-            device.read8(tc32emu::Tlsr8258::MspiData),
-            device.read8(tc32emu::Tlsr8258::MspiData),
+            device.read8(mcuemu::Tlsr8258::MspiData),
+            device.read8(mcuemu::Tlsr8258::MspiData),
+            device.read8(mcuemu::Tlsr8258::MspiData),
         };
-        device.write8(tc32emu::Tlsr8258::MspiControl, 1); // deselect
+        device.write8(mcuemu::Tlsr8258::MspiControl, 1); // deselect
         return id;
     };
 
-    tc32emu::Tlsr8258 f512;
+    mcuemu::Tlsr8258 f512;
     CHECK(read_id(f512) == (std::array<std::uint8_t, 3>{0xef, 0x40, 0x13}));
-    tc32emu::Tlsr8258 f1k(tc32emu::Tlsr8258Model::F1K);
+    mcuemu::Tlsr8258 f1k(mcuemu::Tlsr8258Model::F1K);
     CHECK(read_id(f1k) == (std::array<std::uint8_t, 3>{0xef, 0x40, 0x14}));
 }
 
 void test_tlsr_aes128_encrypt_decrypt() {
-    tc32emu::Tlsr8258 device;
+    mcuemu::Tlsr8258 device;
     const std::array<std::uint8_t, 16> key = {
         0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
         0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
@@ -314,26 +314,26 @@ void test_tlsr_aes128_encrypt_decrypt() {
     auto run_block = [&device, &key](
                          std::uint8_t mode,
                          const std::array<std::uint8_t, 16> &input) {
-        device.write8(tc32emu::Tlsr8258::AesControl, mode);
+        device.write8(mcuemu::Tlsr8258::AesControl, mode);
         for (unsigned i = 0; i != key.size(); ++i)
-            device.write8(tc32emu::Tlsr8258::AesKey + i, key[i]);
+            device.write8(mcuemu::Tlsr8258::AesKey + i, key[i]);
         for (unsigned word = 0; word != 4; ++word) {
             std::uint32_t value = 0;
             for (unsigned byte = 0; byte != 4; ++byte)
                 value |= static_cast<std::uint32_t>(input[word * 4u + byte])
                          << (byte * 8u);
-            device.write32(tc32emu::Tlsr8258::AesData, value);
+            device.write32(mcuemu::Tlsr8258::AesData, value);
         }
-        CHECK((device.read8(tc32emu::Tlsr8258::AesControl) & 0x02u) == 0);
-        CHECK((device.read8(tc32emu::Tlsr8258::AesControl) & 0x04u) == 0);
+        CHECK((device.read8(mcuemu::Tlsr8258::AesControl) & 0x02u) == 0);
+        CHECK((device.read8(mcuemu::Tlsr8258::AesControl) & 0x04u) == 0);
         device.tick(999);
-        CHECK((device.read8(tc32emu::Tlsr8258::AesControl) & 0x04u) == 0);
+        CHECK((device.read8(mcuemu::Tlsr8258::AesControl) & 0x04u) == 0);
         device.tick(1);
-        CHECK((device.read8(tc32emu::Tlsr8258::AesControl) & 0x04u) != 0);
+        CHECK((device.read8(mcuemu::Tlsr8258::AesControl) & 0x04u) != 0);
         std::array<std::uint8_t, 16> output{};
         for (unsigned word = 0; word != 4; ++word) {
             const std::uint32_t value =
-                device.read32(tc32emu::Tlsr8258::AesData);
+                device.read32(mcuemu::Tlsr8258::AesData);
             for (unsigned byte = 0; byte != 4; ++byte)
                 output[word * 4u + byte] =
                     static_cast<std::uint8_t>(value >> (byte * 8u));
@@ -345,72 +345,72 @@ void test_tlsr_aes128_encrypt_decrypt() {
 }
 
 void test_tlsr_divider_registers() {
-    tc32emu::Tlsr8258 device;
-    device.write32(tc32emu::Tlsr8258::DividerDividend, 100);
-    device.write32(tc32emu::Tlsr8258::DividerDivisor, 7);
-    device.write8(tc32emu::Tlsr8258::DividerControl, 0); // unsigned divide
-    CHECK(device.read8(tc32emu::Tlsr8258::DividerControl) == 0);
-    CHECK(device.read32(tc32emu::Tlsr8258::DividerDividend) == 14);
-    CHECK(device.read32(tc32emu::Tlsr8258::DividerDivisor) == 2);
+    mcuemu::Tlsr8258 device;
+    device.write32(mcuemu::Tlsr8258::DividerDividend, 100);
+    device.write32(mcuemu::Tlsr8258::DividerDivisor, 7);
+    device.write8(mcuemu::Tlsr8258::DividerControl, 0); // unsigned divide
+    CHECK(device.read8(mcuemu::Tlsr8258::DividerControl) == 0);
+    CHECK(device.read32(mcuemu::Tlsr8258::DividerDividend) == 14);
+    CHECK(device.read32(mcuemu::Tlsr8258::DividerDivisor) == 2);
 
-    device.write32(tc32emu::Tlsr8258::DividerDividend,
+    device.write32(mcuemu::Tlsr8258::DividerDividend,
                    static_cast<std::uint32_t>(-100));
-    device.write32(tc32emu::Tlsr8258::DividerDivisor, 7);
-    device.write8(tc32emu::Tlsr8258::DividerControl, 1); // signed divide
-    CHECK(device.read32(tc32emu::Tlsr8258::DividerDividend) ==
+    device.write32(mcuemu::Tlsr8258::DividerDivisor, 7);
+    device.write8(mcuemu::Tlsr8258::DividerControl, 1); // signed divide
+    CHECK(device.read32(mcuemu::Tlsr8258::DividerDividend) ==
           static_cast<std::uint32_t>(-14));
-    CHECK(device.read32(tc32emu::Tlsr8258::DividerDivisor) ==
+    CHECK(device.read32(mcuemu::Tlsr8258::DividerDivisor) ==
           static_cast<std::uint32_t>(-2));
 }
 
 void test_tlsr_uart_fifo_and_virtual_timing() {
-    tc32emu::Tlsr8258 device;
-    device.write8(tc32emu::Tlsr8258::UartControl1, 0); // 8N1 framing.
-    CHECK(device.read8(tc32emu::Tlsr8258::UartBufferCount) == 0);
-    CHECK((device.read8(tc32emu::Tlsr8258::UartStatus1) & 1u) != 0);
-    device.write8(tc32emu::Tlsr8258::UartState, 0x80); // clear TX done.
+    mcuemu::Tlsr8258 device;
+    device.write8(mcuemu::Tlsr8258::UartControl1, 0); // 8N1 framing.
+    CHECK(device.read8(mcuemu::Tlsr8258::UartBufferCount) == 0);
+    CHECK((device.read8(mcuemu::Tlsr8258::UartStatus1) & 1u) != 0);
+    device.write8(mcuemu::Tlsr8258::UartState, 0x80); // clear TX done.
     device.tick(10);
-    CHECK((device.read8(tc32emu::Tlsr8258::UartStatus1) & 1u) == 0);
+    CHECK((device.read8(mcuemu::Tlsr8258::UartStatus1) & 1u) == 0);
 
     for (std::uint8_t value : {0x11u, 0x22u, 0x33u, 0x44u})
-        device.write8(tc32emu::Tlsr8258::UartData, value);
-    CHECK(device.read8(tc32emu::Tlsr8258::UartBufferCount) == 0x40);
-    device.write8(tc32emu::Tlsr8258::UartData, 0x55); // FIFO is full.
+        device.write8(mcuemu::Tlsr8258::UartData, value);
+    CHECK(device.read8(mcuemu::Tlsr8258::UartBufferCount) == 0x40);
+    device.write8(mcuemu::Tlsr8258::UartData, 0x55); // FIFO is full.
     device.tick(159);
     CHECK(device.take_uart_transmitted().empty());
-    CHECK((device.read8(tc32emu::Tlsr8258::UartStatus1) & 1u) == 0);
+    CHECK((device.read8(mcuemu::Tlsr8258::UartStatus1) & 1u) == 0);
     device.tick(1);
     CHECK(device.take_uart_transmitted() == std::vector<std::uint8_t>{0x11});
-    CHECK(device.read8(tc32emu::Tlsr8258::UartBufferCount) == 0x30);
+    CHECK(device.read8(mcuemu::Tlsr8258::UartBufferCount) == 0x30);
     device.tick(480);
     CHECK(device.take_uart_transmitted() ==
           (std::vector<std::uint8_t>{0x22, 0x33, 0x44}));
-    CHECK(device.read8(tc32emu::Tlsr8258::UartBufferCount) == 0);
-    CHECK((device.read8(tc32emu::Tlsr8258::UartStatus1) & 1u) != 0);
+    CHECK(device.read8(mcuemu::Tlsr8258::UartBufferCount) == 0);
+    CHECK((device.read8(mcuemu::Tlsr8258::UartStatus1) & 1u) != 0);
 
-    device.write8(tc32emu::Tlsr8258::UartControl0, 0x4f); // RX interrupt enable.
-    device.write8(tc32emu::Tlsr8258::UartControl3, 0x01); // RX threshold = 1.
+    device.write8(mcuemu::Tlsr8258::UartControl0, 0x4f); // RX interrupt enable.
+    device.write8(mcuemu::Tlsr8258::UartControl3, 0x01); // RX threshold = 1.
     CHECK(device.inject_uart_rx(0xa5));
-    CHECK(device.read8(tc32emu::Tlsr8258::UartBufferCount) == 1);
-    CHECK((device.read8(tc32emu::Tlsr8258::UartStatus1) & 0x08u) != 0);
-    CHECK((device.read8(tc32emu::Tlsr8258::UartStatus0) & 0x08u) != 0);
-    CHECK((device.read8(tc32emu::Tlsr8258::IrqSource) & 0x40u) != 0);
-    CHECK(device.read8(tc32emu::Tlsr8258::UartData + 3) == 0xa5);
-    CHECK(device.read8(tc32emu::Tlsr8258::UartBufferCount) == 0);
-    CHECK((device.read8(tc32emu::Tlsr8258::UartStatus0) & 0x08u) == 0);
-    CHECK((device.read8(tc32emu::Tlsr8258::IrqSource) & 0x40u) == 0);
+    CHECK(device.read8(mcuemu::Tlsr8258::UartBufferCount) == 1);
+    CHECK((device.read8(mcuemu::Tlsr8258::UartStatus1) & 0x08u) != 0);
+    CHECK((device.read8(mcuemu::Tlsr8258::UartStatus0) & 0x08u) != 0);
+    CHECK((device.read8(mcuemu::Tlsr8258::IrqSource) & 0x40u) != 0);
+    CHECK(device.read8(mcuemu::Tlsr8258::UartData + 3) == 0xa5);
+    CHECK(device.read8(mcuemu::Tlsr8258::UartBufferCount) == 0);
+    CHECK((device.read8(mcuemu::Tlsr8258::UartStatus0) & 0x08u) == 0);
+    CHECK((device.read8(mcuemu::Tlsr8258::IrqSource) & 0x40u) == 0);
 
-    device.write8(tc32emu::Tlsr8258::UartControl1, 0x80); // internal loopback.
-    device.write8(tc32emu::Tlsr8258::UartData + 2, 0x7e);
+    device.write8(mcuemu::Tlsr8258::UartControl1, 0x80); // internal loopback.
+    device.write8(mcuemu::Tlsr8258::UartData + 2, 0x7e);
     device.tick(160);
-    CHECK(device.read8(tc32emu::Tlsr8258::UartData) == 0x7e);
+    CHECK(device.read8(mcuemu::Tlsr8258::UartData) == 0x7e);
     CHECK(device.take_uart_transmitted() == std::vector<std::uint8_t>{0x7e});
 
-    tc32emu::Tlsr8258 divided_clock;
-    divided_clock.write16(tc32emu::Tlsr8258::UartClockDivider, 0x8003);
-    divided_clock.write8(tc32emu::Tlsr8258::UartControl0, 0);
-    divided_clock.write8(tc32emu::Tlsr8258::UartControl1, 0);
-    divided_clock.write8(tc32emu::Tlsr8258::UartData, 0x5a);
+    mcuemu::Tlsr8258 divided_clock;
+    divided_clock.write16(mcuemu::Tlsr8258::UartClockDivider, 0x8003);
+    divided_clock.write8(mcuemu::Tlsr8258::UartControl0, 0);
+    divided_clock.write8(mcuemu::Tlsr8258::UartControl1, 0);
+    divided_clock.write8(mcuemu::Tlsr8258::UartData, 0x5a);
     divided_clock.tick(39);
     CHECK(divided_clock.take_uart_transmitted().empty());
     divided_clock.tick(1);
@@ -418,7 +418,7 @@ void test_tlsr_uart_fifo_and_virtual_timing() {
 }
 
 void test_tlsr_uart_irq_enters_and_returns_from_irq_mode() {
-    tc32emu::Tlsr8258 device;
+    mcuemu::Tlsr8258 device;
     device.load_firmware(words({
         0xcf00, // thread entry: stop after the pending interrupt returns
         0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
@@ -428,26 +428,26 @@ void test_tlsr_uart_irq_enters_and_returns_from_irq_mode() {
         0x1c08, // ldrb r0, [r1, r0] to drain the RX FIFO and ack its level IRQ
         0x6900, // treti {pc}
     }));
-    device.write8(tc32emu::Tlsr8258::UartControl0, 0x4f);
-    device.write8(tc32emu::Tlsr8258::UartControl3, 0x01);
-    device.write8(tc32emu::Tlsr8258::IrqMask, 0x40);
-    device.write8(tc32emu::Tlsr8258::IrqGlobalEnable, 1);
+    device.write8(mcuemu::Tlsr8258::UartControl0, 0x4f);
+    device.write8(mcuemu::Tlsr8258::UartControl3, 0x01);
+    device.write8(mcuemu::Tlsr8258::IrqMask, 0x40);
+    device.write8(mcuemu::Tlsr8258::IrqGlobalEnable, 1);
     CHECK(device.inject_uart_rx(0xa6));
     CHECK(device.interrupt_pending());
 
-    tc32emu::Cpu cpu(device);
-    cpu.set_reg(1, tc32emu::Tlsr8258::UartData);
-    cpu.set_reg(13, tc32emu::Tlsr8258::RetainedSramBase + 0x100);
+    mcuemu::Cpu cpu(device);
+    cpu.set_reg(1, mcuemu::Tlsr8258::UartData);
+    cpu.set_reg(13, mcuemu::Tlsr8258::RetainedSramBase + 0x100);
     cpu.set_reg(14, 0x1234);
     cpu.set_cpsr(0x12);
-    cpu.set_reg(13, tc32emu::Tlsr8258::RetainedSramBase + 0x200);
+    cpu.set_reg(13, mcuemu::Tlsr8258::RetainedSramBase + 0x200);
     cpu.set_cpsr(0x13);
 
     const auto result = cpu.run(16);
-    CHECK(result.reason == tc32emu::StopReason::Halted);
+    CHECK(result.reason == mcuemu::StopReason::Halted);
     CHECK(cpu.reg(0) == 0xa6);
     CHECK((cpu.cpsr() & 0x1fu) == 0x13u);
-    CHECK(cpu.reg(13) == tc32emu::Tlsr8258::RetainedSramBase + 0x100);
+    CHECK(cpu.reg(13) == mcuemu::Tlsr8258::RetainedSramBase + 0x100);
     CHECK(cpu.reg(14) == 0x1234);
     CHECK(!device.interrupt_pending());
 }
@@ -455,7 +455,7 @@ void test_tlsr_uart_irq_enters_and_returns_from_irq_mode() {
 void test_tlsr_batched_run_matches_single_steps() {
     std::vector<std::uint16_t> program(300, 0x0000);
     program.push_back(0xcf00); // stop marker
-    auto make = [&](tc32emu::Tlsr8258 &device) {
+    auto make = [&](mcuemu::Tlsr8258 &device) {
         std::vector<std::uint8_t> bytes;
         for (std::uint16_t value : program) {
             bytes.push_back(static_cast<std::uint8_t>(value));
@@ -464,47 +464,47 @@ void test_tlsr_batched_run_matches_single_steps() {
         device.load_firmware(bytes);
     };
 
-    tc32emu::Tlsr8258 stepped_device, batched_device, bounded_device;
+    mcuemu::Tlsr8258 stepped_device, batched_device, bounded_device;
     make(stepped_device);
     make(batched_device);
     make(bounded_device);
-    tc32emu::Cpu stepped(stepped_device), batched(batched_device),
+    mcuemu::Cpu stepped(stepped_device), batched(batched_device),
         bounded(bounded_device);
 
     std::size_t stepped_count = 0;
-    tc32emu::RunResult result;
+    mcuemu::RunResult result;
     do {
         result = stepped.run(1);
         stepped_count += result.instructions;
-    } while (result.reason == tc32emu::StopReason::StepLimit);
+    } while (result.reason == mcuemu::StopReason::StepLimit);
     const auto batch = batched.run(100000);
 
-    CHECK(result.reason == tc32emu::StopReason::Halted);
-    CHECK(batch.reason == tc32emu::StopReason::Halted);
+    CHECK(result.reason == mcuemu::StopReason::Halted);
+    CHECK(batch.reason == mcuemu::StopReason::Halted);
     CHECK(batch.instructions == stepped_count);
     CHECK(batched.pc() == stepped.pc());
     CHECK(batched_device.time_ns() == stepped_device.time_ns());
 
     // A batch also stops at its instruction limit and resumes where it left off.
     const auto first = bounded.run(100);
-    CHECK(first.reason == tc32emu::StopReason::StepLimit);
+    CHECK(first.reason == mcuemu::StopReason::StepLimit);
     CHECK(first.instructions == 100);
     const auto rest = bounded.run(100000);
-    CHECK(rest.reason == tc32emu::StopReason::Halted);
+    CHECK(rest.reason == mcuemu::StopReason::Halted);
     CHECK(first.instructions + rest.instructions == stepped_count);
     CHECK(bounded_device.time_ns() == stepped_device.time_ns());
 
     // A time deadline ends the run once the device clock reaches it, at most
     // one instruction late.
-    tc32emu::Tlsr8258 timed_device;
+    mcuemu::Tlsr8258 timed_device;
     make(timed_device);
-    tc32emu::Cpu timed(timed_device);
+    mcuemu::Cpu timed(timed_device);
     const std::uint64_t deadline = 2000;
     const auto timed_result = timed.run(100000, deadline);
-    CHECK(timed_result.reason == tc32emu::StopReason::StepLimit);
+    CHECK(timed_result.reason == mcuemu::StopReason::StepLimit);
     CHECK(timed_device.network_time_ns() >= deadline);
     CHECK(timed_device.network_time_ns() < deadline + 200);
     CHECK(timed_result.instructions < stepped_count);
 }
 
-} // namespace tc32emu_tests
+} // namespace mcuemu_tests

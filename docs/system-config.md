@@ -1,6 +1,6 @@
 # System configuration (YAML)
 
-`tc32-emu sim SYSTEM.yaml [--for DURATION] [--quantum DURATION] [--trace-nets]
+`mcuemu sim SYSTEM.yaml [--for DURATION] [--quantum DURATION] [--trace-nets]
 [--attach ENDPOINT=SINK]... [--list-endpoints]`
 builds a system of devices from a declarative description and runs it on one
 virtual timeline. `--for` overrides `world.duration`; `--quantum` overrides
@@ -149,7 +149,7 @@ or I2C model.
 
 Scripted parts are described in [scripting.md](scripting.md).
 
-`tc32-emu serve` runs the same systems under remote control; see
+`mcuemu serve` runs the same systems under remote control; see
 [control-api.md](control-api.md).
 
 ## Endpoints and sinks
@@ -160,12 +160,12 @@ from a spec; the same specs work in `attach:` (device scope may use names
 relative to the device, e.g. `m.uart0`) and in `--attach ENDPOINT=SINK`
 (repeatable). Relative output paths are relative to the working directory.
 
-To watch UART traffic without touching the YAML, `tc32-emu sim` has
+To watch UART traffic without touching the YAML, `mcuemu sim` has
 `--trace-uart PATTERN[=hex|text]` (repeatable): it attaches a `hex` (default) or
 `text` sink to every UART endpoint whose name contains PATTERN (`'*'` is all
 of them). Use `text` for a debug UART that prints messages:
 
-    tc32-emu sim examples/thermostat_only.yaml --for 3s \
+    mcuemu sim examples/thermostat_only.yaml --for 3s \
         --trace-uart thermostat.main.uart1 --trace-uart thermostat.zb.uart0 \
         --trace-uart thermostat.main.uart0=text
 

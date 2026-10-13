@@ -24,7 +24,7 @@ constexpr std::size_t MemoryLimitBytes = 64u << 20;
 constexpr int HookInterval = 10000;
 constexpr int HookLimit = 1000; // 10M VM instructions per callback
 constexpr std::size_t EdgeHistory = 64;
-constexpr const char *PinMeta = "tc32emu.pin";
+constexpr const char *PinMeta = "mcuemu.pin";
 
 struct Allocator {
     std::size_t used{0};
@@ -105,8 +105,8 @@ private:
     static int radio_listen(lua_State *L);
     static int radio_set_power(lua_State *L);
     static int radio_airtime(lua_State *L);
-    void on_air_frame(const tc32emu::RadioFrame &frame);
-    void deliver_frame(tc32emu::RadioProtocol protocol, std::uint8_t channel,
+    void on_air_frame(const mcuemu::RadioFrame &frame);
+    void deliver_frame(mcuemu::RadioProtocol protocol, std::uint8_t channel,
                        std::uint64_t end_ns);
 
     static PinSlot &slot_of(lua_State *L, int index);
@@ -137,11 +137,11 @@ private:
     bool in_own_drive_{false};
     bool failed_{false};
     // Radio (only when the part has a `radio:` section).
-    tc32emu::VirtualAir *air_{nullptr};
+    mcuemu::VirtualAir *air_{nullptr};
     std::string radio_node_;
     std::vector<std::string> radio_protocols_;
     bool listening_{false};
-    tc32emu::RadioProtocol listen_protocol_{tc32emu::RadioProtocol::Zigbee802154};
+    mcuemu::RadioProtocol listen_protocol_{mcuemu::RadioProtocol::Zigbee802154};
     std::uint8_t listen_channel_{0};
 };
 
@@ -434,13 +434,13 @@ int LuaPart::pin_name(lua_State *L) {
 
 namespace {
 
-bool parse_protocol(const std::string &name, tc32emu::RadioProtocol &out) {
+bool parse_protocol(const std::string &name, mcuemu::RadioProtocol &out) {
     if (name == "zigbee") {
-        out = tc32emu::RadioProtocol::Zigbee802154;
+        out = mcuemu::RadioProtocol::Zigbee802154;
         return true;
     }
     if (name == "ble") {
-        out = tc32emu::RadioProtocol::Ble;
+        out = mcuemu::RadioProtocol::Ble;
         return true;
     }
     return false;
@@ -454,7 +454,7 @@ int LuaPart::radio_transmit(lua_State *L) {
     lua_getfield(L, 1, "protocol");
     const std::string protocol_name = luaL_checkstring(L, -1);
     lua_pop(L, 1);
-    tc32emu::RadioProtocol protocol;
+    mcuemu::RadioProtocol protocol;
     if (!parse_protocol(protocol_name, protocol))
         return luaL_error(L, "radio.transmit(): protocol must be \"zigbee\" or \"ble\"");
     bool declared = false;
@@ -516,7 +516,7 @@ int LuaPart::radio_listen(lua_State *L) {
         return 0;
     }
     const std::string name = luaL_checkstring(L, 1);
-    tc32emu::RadioProtocol protocol;
+    mcuemu::RadioProtocol protocol;
     if (!parse_protocol(name, protocol))
         return luaL_error(L, "radio.listen(): protocol must be \"zigbee\" or \"ble\"");
     bool declared = false;
@@ -536,27 +536,27 @@ int LuaPart::radio_listen(lua_State *L) {
 
 int LuaPart::radio_set_power(lua_State *L) {
     LuaPart *part = self(L);
-    tc32emu::RadioNodeConfig node =
+    mcuemu::RadioNodeConfig node =
         part->air_->node(part->radio_node_) ? *part->air_->node(part->radio_node_)
-                                            : tc32emu::RadioNodeConfig{};
+                                            : mcuemu::RadioNodeConfig{};
     node.tx_power_dbm = luaL_checknumber(L, 1);
     part->air_->set_node(part->radio_node_, node);
     return 0;
 }
 
 int LuaPart::radio_airtime(lua_State *L) {
-    tc32emu::RadioProtocol protocol;
+    mcuemu::RadioProtocol protocol;
     if (!parse_protocol(luaL_checkstring(L, 1), protocol))
         return luaL_error(L, "radio.airtime(): protocol must be \"zigbee\" or \"ble\"");
     const lua_Integer bytes = luaL_checkinteger(L, 2);
     if (bytes < 0)
         return luaL_error(L, "radio.airtime(): length must not be negative");
-    lua_pushinteger(L, static_cast<lua_Integer>(tc32emu::VirtualAir::airtime_ns(
+    lua_pushinteger(L, static_cast<lua_Integer>(mcuemu::VirtualAir::airtime_ns(
                            protocol, static_cast<std::size_t>(bytes))));
     return 1;
 }
 
-void LuaPart::on_air_frame(const tc32emu::RadioFrame &frame) {
+void LuaPart::on_air_frame(const mcuemu::RadioFrame &frame) {
     if (!listening_ || failed_ || frame.source == radio_node_ ||
         frame.protocol != listen_protocol_ || frame.channel != listen_channel_)
         return;
@@ -570,11 +570,11 @@ void LuaPart::on_air_frame(const tc32emu::RadioFrame &frame) {
     });
 }
 
-void LuaPart::deliver_frame(tc32emu::RadioProtocol protocol, std::uint8_t channel,
+void LuaPart::deliver_frame(mcuemu::RadioProtocol protocol, std::uint8_t channel,
                             std::uint64_t end_ns) {
     if (!listening_ || listen_protocol_ != protocol || listen_channel_ != channel)
         return;
-    for (const tc32emu::RadioFrame &frame :
+    for (const mcuemu::RadioFrame &frame :
          air_->receive(radio_node_, protocol, channel, end_ns, end_ns - 1)) {
         lua_getglobal(L_, "on_frame");
         if (!lua_isfunction(L_, -1)) {
@@ -585,7 +585,7 @@ void LuaPart::deliver_frame(tc32emu::RadioProtocol protocol, std::uint8_t channe
         lua_newtable(L_);
         lua_pushinteger(L_, static_cast<lua_Integer>(frame.id));
         lua_setfield(L_, -2, "id");
-        lua_pushstring(L_, protocol == tc32emu::RadioProtocol::Zigbee802154 ? "zigbee" : "ble");
+        lua_pushstring(L_, protocol == mcuemu::RadioProtocol::Zigbee802154 ? "zigbee" : "ble");
         lua_setfield(L_, -2, "protocol");
         lua_pushinteger(L_, frame.channel);
         lua_setfield(L_, -2, "channel");
@@ -819,7 +819,7 @@ LuaPart::LuaPart(PartContext &ctx)
         luaL_setfuncs(L_, radio_functions, 0);
         lua_setglobal(L_, "radio");
         air_->add_observer(
-            [this](const tc32emu::RadioFrame &frame) { on_air_frame(frame); });
+            [this](const mcuemu::RadioFrame &frame) { on_air_frame(frame); });
     }
 
     lua_sethook(L_, hook, LUA_MASKCOUNT, HookInterval);

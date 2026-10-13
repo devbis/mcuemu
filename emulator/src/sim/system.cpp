@@ -31,10 +31,10 @@ const McuRegistry &McuRegistry::builtin() {
     static const McuRegistry registry = [] {
         McuRegistry r;
         r.add("tlsr8258", [](const McuConfig &config, const std::string &name) {
-            tc32emu::Tlsr8258Model model = tc32emu::Tlsr8258Model::F512;
+            mcuemu::Tlsr8258Model model = mcuemu::Tlsr8258Model::F512;
             if (config.variant) {
                 try {
-                    model = tc32emu::parse_model(*config.variant);
+                    model = mcuemu::parse_model(*config.variant);
                 } catch (const std::invalid_argument &) {
                     throw std::invalid_argument(
                         "unknown tlsr8258 variant '" + *config.variant +
@@ -150,8 +150,8 @@ unsigned parse_uart_index(const std::string &name, int line,
 
 namespace {
 
-tc32emu::RadioNodeConfig node_config(const RadioAttachConfig &radio) {
-    tc32emu::RadioNodeConfig node;
+mcuemu::RadioNodeConfig node_config(const RadioAttachConfig &radio) {
+    mcuemu::RadioNodeConfig node;
     node.x = radio.position[0];
     node.y = radio.position[1];
     node.z = radio.position[2];
@@ -225,7 +225,7 @@ void build_part(World &world, std::vector<std::unique_ptr<Part>> &parts,
     PartContext context(name, world.scheduler(), config.params, pin_provider,
                         terminals, config.script, seed);
     if (config.radio) {
-        tc32emu::VirtualAir *air = nullptr;
+        mcuemu::VirtualAir *air = nullptr;
         try {
             air = &world.radio(config.radio->air);
         } catch (const std::out_of_range &) {
@@ -264,16 +264,16 @@ std::unique_ptr<System> build_system(const SystemConfig &config,
         world.set_quantum_ns(*config.quantum_ns);
 
     for (const RadioMediumConfig &medium : config.radios) {
-        tc32emu::VirtualAir *air = nullptr;
+        mcuemu::VirtualAir *air = nullptr;
         try {
             air = &world.add_radio(medium.id);
         } catch (const std::invalid_argument &error) {
             fail_at(medium.line, error.what());
         }
-        tc32emu::Propagation propagation;
+        mcuemu::Propagation propagation;
         propagation.model = medium.model == "ideal"
-                                ? tc32emu::Propagation::Model::Ideal
-                                : tc32emu::Propagation::Model::LogDistance;
+                                ? mcuemu::Propagation::Model::Ideal
+                                : mcuemu::Propagation::Model::LogDistance;
         propagation.reference_loss_db = medium.reference_loss_db;
         propagation.exponent = medium.exponent;
         propagation.shadowing_sigma_db = medium.shadowing_sigma_db;
@@ -304,7 +304,7 @@ std::unique_ptr<System> build_system(const SystemConfig &config,
                 fail_at(mcu_config.line, "mcu '" + name + "': " + error.what());
             }
             if (mcu_config.radio) {
-                tc32emu::VirtualAir *air = nullptr;
+                mcuemu::VirtualAir *air = nullptr;
                 try {
                     air = &world.radio(mcu_config.radio->air);
                 } catch (const std::out_of_range &) {

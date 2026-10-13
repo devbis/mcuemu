@@ -160,7 +160,7 @@ into systems (see the declarative-configuration plan for the full roadmap):
 
 A system is described in YAML and built by `build_system` (`System`,
 `McuRegistry`; format in [system-config.md](system-config.md)). UART links are
-polled by `World` after every slice. `tc32-emu sim SYSTEM.yaml` runs one.
+polled by `World` after every slice. `mcuemu sim SYSTEM.yaml` runs one.
 
 Pad timing: an MCU is executed one instruction at a time inside `run_until`,
 so pad changes are timestamped to the executing instruction. Different MCUs

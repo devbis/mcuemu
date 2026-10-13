@@ -4,7 +4,7 @@
 #include "sim/mcu.hpp"
 #include "sim/net.hpp"
 #include "sim/scheduler.hpp"
-#include "tc32emu/radio.hpp"
+#include "mcuemu/radio.hpp"
 
 #include <cstdint>
 #include <functional>
@@ -45,8 +45,8 @@ public:
     // Creates a radio medium and registers an endpoint of kind "radio" with
     // the same name: get() is the number of frames sent so far, subscribers get
     // one event per frame (a text summary) at its start time.
-    tc32emu::VirtualAir &add_radio(std::string name);
-    tc32emu::VirtualAir &radio(std::string_view name) const;
+    mcuemu::VirtualAir &add_radio(std::string name);
+    mcuemu::VirtualAir &radio(std::string_view name) const;
 
     void run_until(std::uint64_t time_ns);
     void run_for(std::uint64_t duration_ns) { run_until(now() + duration_ns); }
@@ -58,7 +58,7 @@ private:
     std::vector<std::unique_ptr<Mcu>> mcus_;
     std::vector<std::unique_ptr<Net>> nets_;
     std::vector<Poller> pollers_;
-    std::vector<std::pair<std::string, std::unique_ptr<tc32emu::VirtualAir>>> airs_;
+    std::vector<std::pair<std::string, std::unique_ptr<mcuemu::VirtualAir>>> airs_;
 };
 
 } // namespace sim

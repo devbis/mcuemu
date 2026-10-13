@@ -8,11 +8,11 @@
 #include <fstream>
 #include <string>
 
-namespace tc32emu_tests {
+namespace mcuemu_tests {
 
 namespace {
 
-using tc32emu::Tlsr8258;
+using mcuemu::Tlsr8258;
 
 std::string idle_image_path() {
     static const std::string path = [] {
@@ -72,7 +72,7 @@ void test_pad_pulls_and_functions() {
     // Internal 10K pull-up on PA2 (analog register 0x0e, bits 5:4).
     analog_write(device, 0x0e, 3u << 4);
     CHECK(net.level() == sim::Level::High);
-    CHECK(device.gpio_pull(0, 2) == tc32emu::GpioPull::Up);
+    CHECK(device.gpio_pull(0, 2) == mcuemu::GpioPull::Up);
     // Pull-down instead.
     analog_write(device, 0x0e, 2u << 4);
     CHECK(net.level() == sim::Level::Low);
@@ -267,4 +267,4 @@ void test_i2c_master_with_sensor() {
     CHECK(sda.level() == sim::Level::High);
 }
 
-} // namespace tc32emu_tests
+} // namespace mcuemu_tests

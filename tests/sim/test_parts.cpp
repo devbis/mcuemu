@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace tc32emu_tests {
+namespace mcuemu_tests {
 
 namespace {
 
@@ -101,7 +101,7 @@ std::string ds_part(const std::string &id, bool lua, const std::string &params) 
     std::string yaml = "      - id: " + id + "\n";
     if (lua)
         yaml += std::string("        type: script\n        script: ") +
-                TC32EMU_SOURCE_DIR "/examples/parts/ds18b20.lua\n";
+                MCUEMU_SOURCE_DIR "/examples/parts/ds18b20.lua\n";
     else
         yaml += "        type: ds18b20\n";
     return yaml + "        pins: { dq: ow }\n        params: { " + params + " }\n";
@@ -399,7 +399,7 @@ void test_lua_sht3x_over_i2c() {
     parts:
       - id: sht
         type: script
-        script: )") + TC32EMU_SOURCE_DIR + R"(/examples/parts/sht3x.lua
+        script: )") + MCUEMU_SOURCE_DIR + R"(/examples/parts/sht3x.lua
         pins: { sda: sda, scl: scl }
         params: { address: 0x44, temperature_c: 25, humidity: 50 }
 )");
@@ -507,4 +507,4 @@ void test_part_errors_and_events() {
     CHECK(seen.size() == 1 && seen[0] == 31.5);
 }
 
-} // namespace tc32emu_tests
+} // namespace mcuemu_tests

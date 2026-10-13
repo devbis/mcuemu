@@ -1,7 +1,7 @@
 #include "sim/cli.hpp"
-#include "tc32emu/cpu.hpp"
-#include "tc32emu/radio.hpp"
-#include "tc32emu/tlsr8258.hpp"
+#include "mcuemu/cpu.hpp"
+#include "mcuemu/radio.hpp"
+#include "mcuemu/tlsr8258.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -21,27 +21,27 @@
 
 namespace {
 
-const char *power_state_name(tc32emu::Tlsr8258PowerState state) {
+const char *power_state_name(mcuemu::Tlsr8258PowerState state) {
     switch (state) {
-    case tc32emu::Tlsr8258PowerState::Awake:
+    case mcuemu::Tlsr8258PowerState::Awake:
         return "awake";
-    case tc32emu::Tlsr8258PowerState::Suspend:
+    case mcuemu::Tlsr8258PowerState::Suspend:
         return "suspend";
-    case tc32emu::Tlsr8258PowerState::DeepSleep:
+    case mcuemu::Tlsr8258PowerState::DeepSleep:
         return "deep-sleep";
     }
     return "unknown";
 }
 
 void usage(std::ostream &out) {
-    out << "Usage: tc32-emu run --firmware IMAGE [--model MODEL] [--steps N]\n"
+    out << "Usage: mcuemu run --firmware IMAGE [--model MODEL] [--steps N]\n"
            "       [--rc32k-hz HZ] [--rc32k-calibration VALUE]\n"
            "       [--trace-pc | --trace-pc-range START:END]\n"
            "       [--trace-mmio | --trace-mmio-range START:END]\n"
            "       [--trace-analog]\n"
            "       [--trace-stack] [--trace-after-step N]\n"
            "       [--trace-limit N] [--fault-trace N]\n"
-           "       tc32-emu network --node NAME=IMAGE --node NAME=IMAGE\n"
+           "       mcuemu network --node NAME=IMAGE --node NAME=IMAGE\n"
            "       [--model MODEL] [--channel 11..26] [--steps N]\n"
            "       [--rc32k-hz HZ] [--rc32k-calibration VALUE]\n"
            "       [--trace-pc-range START:END] [--trace-mmio-range START:END]\n"
@@ -53,25 +53,25 @@ void usage(std::ostream &out) {
            "       [--start-at NAME=TIME]\n"
            "       [--dump-mmio NAME=ADDRESS:LENGTH]\n"
            "       [--dump-sram NAME=ADDRESS:LENGTH]\n"
-           "       tc32-emu models\n"
-           "       tc32-emu sim SYSTEM.yaml [--for DURATION] [--quantum DURATION]\n"
+           "       mcuemu models\n"
+           "       mcuemu sim SYSTEM.yaml [--for DURATION] [--quantum DURATION]\n"
            "       [--trace-nets]\n"
-           "       tc32-emu serve --root DIR [--port N] [--bind ADDR] [--token T]\n"
+           "       mcuemu serve --root DIR [--port N] [--bind ADDR] [--token T]\n"
            "       [--allow-origin ORIGIN]... [--max-sessions N] [--idle-timeout SEC]\n\n"
            "Models: TLSR8258F512, TLSR8258F1K\n"
            "Firmware is loaded as a raw image at flash address 0.\n"
            "Trace ranges are inclusive; addresses accept decimal or 0x hex.\n";
 }
 
-void print_analog_trace(std::ostream &out, const tc32emu::Tlsr8258 &device,
+void print_analog_trace(std::ostream &out, const mcuemu::Tlsr8258 &device,
                         const std::string *node_name = nullptr) {
     const auto &events = device.analog_register_events();
-    for (const tc32emu::AnalogRegisterEvent &event : events) {
+    for (const mcuemu::AnalogRegisterEvent &event : events) {
         if (node_name)
             out << '[' << *node_name << "] ";
         out << "areg t=" << event.time_ns << " ns op="
             << (event.direction ==
-                        tc32emu::AnalogRegisterEvent::Direction::Read
+                        mcuemu::AnalogRegisterEvent::Direction::Read
                     ? 'R'
                     : 'W')
             << " addr=0x" << std::hex << std::setw(2) << std::setfill('0')
@@ -130,12 +130,12 @@ std::uint32_t parse_address(const std::string &text) {
     return value;
 }
 
-tc32emu::AddressRange parse_range(const std::string &text) {
+mcuemu::AddressRange parse_range(const std::string &text) {
     const std::size_t separator = text.find(':');
     if (separator == std::string::npos ||
         text.find(':', separator + 1) != std::string::npos)
         throw std::invalid_argument("address range must be START:END: " + text);
-    tc32emu::AddressRange range{parse_address(text.substr(0, separator)),
+    mcuemu::AddressRange range{parse_address(text.substr(0, separator)),
                                 parse_address(text.substr(separator + 1))};
     if (range.first > range.last)
         throw std::invalid_argument("address range start exceeds end: " + text);
@@ -279,9 +279,9 @@ GpioEvent parse_gpio_event(const std::string &text) {
 int run_command(int argc, char **argv) {
     std::string firmware;
     std::string model = "TLSR8258F512";
-    std::uint32_t rc32k_hz = tc32emu::Tlsr8258::DefaultRc32kFrequencyHz;
+    std::uint32_t rc32k_hz = mcuemu::Tlsr8258::DefaultRc32kFrequencyHz;
     std::uint16_t rc32k_calibration =
-        tc32emu::Tlsr8258::DefaultRc32kCalibration;
+        mcuemu::Tlsr8258::DefaultRc32kCalibration;
     std::size_t steps = 100000;
     std::size_t trace_limit = 10000;
     std::size_t trace_after_step = 0;
@@ -290,8 +290,8 @@ int run_command(int argc, char **argv) {
     bool trace_mmio = false;
     bool trace_stack = false;
     bool trace_analog = false;
-    std::optional<tc32emu::AddressRange> pc_range;
-    std::optional<tc32emu::AddressRange> mmio_range;
+    std::optional<mcuemu::AddressRange> pc_range;
+    std::optional<mcuemu::AddressRange> mmio_range;
     for (int i = 2; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--firmware" && i + 1 < argc)
@@ -335,7 +335,7 @@ int run_command(int argc, char **argv) {
     if (firmware.empty())
         throw std::invalid_argument("--firmware is required");
 
-    tc32emu::Tlsr8258 device(tc32emu::parse_model(model));
+    mcuemu::Tlsr8258 device(mcuemu::parse_model(model));
     device.set_rc32k_characteristics(rc32k_hz, rc32k_calibration);
     device.set_analog_trace_enabled(trace_analog, trace_limit);
     std::ifstream input(firmware, std::ios::binary);
@@ -345,7 +345,7 @@ int run_command(int argc, char **argv) {
         (std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
     device.load_firmware(image);
 
-    tc32emu::Cpu cpu(device);
+    mcuemu::Cpu cpu(device);
     cpu.set_trace_limit(trace_limit);
     cpu.set_trace_after_step(trace_after_step);
     cpu.set_recent_trace_capacity(fault_trace);
@@ -355,10 +355,10 @@ int run_command(int argc, char **argv) {
         cpu.set_mmio_trace(&std::cerr, mmio_range);
     if (trace_stack)
         cpu.set_stack_trace(&std::cerr);
-    const tc32emu::RunResult result = cpu.run(steps);
+    const mcuemu::RunResult result = cpu.run(steps);
     if (trace_analog)
         print_analog_trace(std::cerr, device);
-    std::cout << "model: " << tc32emu::model_name(tc32emu::parse_model(model)) << '\n'
+    std::cout << "model: " << mcuemu::model_name(mcuemu::parse_model(model)) << '\n'
               << "flash image: " << image.size() << " bytes\n"
               << "RC 32 kHz: " << rc32k_hz << " Hz, calibration "
               << rc32k_calibration << '\n'
@@ -369,14 +369,14 @@ int run_command(int argc, char **argv) {
         std::cout << "r" << reg << "=0x" << std::hex << cpu.reg(reg)
                   << ((reg & 3u) == 3u ? '\n' : ' ');
     }
-    if (result.reason == tc32emu::StopReason::Fault) {
+    if (result.reason == mcuemu::StopReason::Fault) {
         std::cerr << "CPU fault: " << result.message << '\n';
         cpu.dump_recent_trace(std::cerr);
         return 1;
     }
-    if (result.reason == tc32emu::StopReason::Halted)
+    if (result.reason == mcuemu::StopReason::Halted)
         std::cout << "stopped on tserv software-service trap\n";
-    else if (result.reason == tc32emu::StopReason::Sleeping)
+    else if (result.reason == mcuemu::StopReason::Sleeping)
         std::cout << "CPU remains in "
                   << power_state_name(device.power_state()) << ": "
                   << result.message << '\n';
@@ -388,8 +388,8 @@ int run_command(int argc, char **argv) {
 struct NetworkNode {
     std::string name;
     std::string firmware;
-    std::unique_ptr<tc32emu::Tlsr8258> device;
-    std::unique_ptr<tc32emu::Cpu> cpu;
+    std::unique_ptr<mcuemu::Tlsr8258> device;
+    std::unique_ptr<mcuemu::Cpu> cpu;
     std::size_t instructions{0};
     bool stopped{false};
     std::uint64_t start_at_ns{0};
@@ -412,22 +412,22 @@ struct MmioDump {
 
 struct OutputEventLine {
     std::string node_name;
-    tc32emu::OutputEvent event;
+    mcuemu::OutputEvent event;
 };
 
 int network_command(int argc, char **argv) {
     std::string model = "TLSR8258F512";
-    std::uint32_t rc32k_hz = tc32emu::Tlsr8258::DefaultRc32kFrequencyHz;
+    std::uint32_t rc32k_hz = mcuemu::Tlsr8258::DefaultRc32kFrequencyHz;
     std::uint16_t rc32k_calibration =
-        tc32emu::Tlsr8258::DefaultRc32kCalibration;
+        mcuemu::Tlsr8258::DefaultRc32kCalibration;
     std::uint8_t channel = 11;
     std::size_t steps = 1000000;
     std::size_t trace_limit = 10000;
     std::size_t trace_after_step = 0;
     std::size_t fault_trace = 0;
     std::optional<std::string> trace_node;
-    std::optional<tc32emu::AddressRange> pc_range;
-    std::optional<tc32emu::AddressRange> mmio_range;
+    std::optional<mcuemu::AddressRange> pc_range;
+    std::optional<mcuemu::AddressRange> mmio_range;
     bool trace_stack = false;
     bool trace_analog = false;
     bool radio_payloads = false;
@@ -499,11 +499,11 @@ int network_command(int argc, char **argv) {
             const std::uint32_t address =
                 parse_address(spec.substr(equals + 1, colon - equals - 1));
             const std::size_t length = parse_count(spec.substr(colon + 1));
-            if (length == 0 || address < tc32emu::Tlsr8258::RetainedSramBase ||
-                address >= tc32emu::Tlsr8258::RetainedSramBase +
-                               tc32emu::Tlsr8258::SramSize ||
-                length > tc32emu::Tlsr8258::RetainedSramBase +
-                             tc32emu::Tlsr8258::SramSize - address)
+            if (length == 0 || address < mcuemu::Tlsr8258::RetainedSramBase ||
+                address >= mcuemu::Tlsr8258::RetainedSramBase +
+                               mcuemu::Tlsr8258::SramSize ||
+                length > mcuemu::Tlsr8258::RetainedSramBase +
+                             mcuemu::Tlsr8258::SramSize - address)
                 throw std::invalid_argument(
                     "SRAM dump range must fit mapped TLSR8258 SRAM: " + spec);
             sram_dumps.push_back({name, address, length});
@@ -523,17 +523,17 @@ int network_command(int argc, char **argv) {
                 parse_address(spec.substr(equals + 1, colon - equals - 1));
             const std::size_t length = parse_count(spec.substr(colon + 1));
             const bool documented_range =
-                address >= tc32emu::Tlsr8258::RegisterBase &&
-                address < tc32emu::Tlsr8258::RegisterBase +
-                              tc32emu::Tlsr8258::RegisterSize &&
-                length <= tc32emu::Tlsr8258::RegisterBase +
-                              tc32emu::Tlsr8258::RegisterSize - address;
+                address >= mcuemu::Tlsr8258::RegisterBase &&
+                address < mcuemu::Tlsr8258::RegisterBase +
+                              mcuemu::Tlsr8258::RegisterSize &&
+                length <= mcuemu::Tlsr8258::RegisterBase +
+                              mcuemu::Tlsr8258::RegisterSize - address;
             const bool vendor_alias_range =
-                address >= tc32emu::Tlsr8258::VendorRegisterAliasBase &&
-                address < tc32emu::Tlsr8258::VendorRegisterAliasBase +
-                              tc32emu::Tlsr8258::RegisterSize &&
-                length <= tc32emu::Tlsr8258::VendorRegisterAliasBase +
-                              tc32emu::Tlsr8258::RegisterSize - address;
+                address >= mcuemu::Tlsr8258::VendorRegisterAliasBase &&
+                address < mcuemu::Tlsr8258::VendorRegisterAliasBase +
+                              mcuemu::Tlsr8258::RegisterSize &&
+                length <= mcuemu::Tlsr8258::VendorRegisterAliasBase +
+                              mcuemu::Tlsr8258::RegisterSize - address;
             if (length == 0 || (!documented_range && !vendor_alias_range))
                 throw std::invalid_argument(
                     "MMIO dump range must fit the TLSR8258 register window: " +
@@ -556,9 +556,9 @@ int network_command(int argc, char **argv) {
     }
     if (node_specs.size() < 2)
         throw std::invalid_argument("network requires at least two --node entries");
-    const tc32emu::Tlsr8258Model selected_model = tc32emu::parse_model(model);
+    const mcuemu::Tlsr8258Model selected_model = mcuemu::parse_model(model);
 
-    tc32emu::VirtualAir air;
+    mcuemu::VirtualAir air;
     std::vector<NetworkNode> nodes;
     nodes.reserve(node_specs.size());
     for (auto &[name, firmware] : node_specs) {
@@ -571,7 +571,7 @@ int network_command(int argc, char **argv) {
         node.name = std::move(name);
         node.firmware = std::move(firmware);
         node.instruction_limit = steps;
-        node.device = std::make_unique<tc32emu::Tlsr8258>(selected_model);
+        node.device = std::make_unique<mcuemu::Tlsr8258>(selected_model);
         node.device->set_rc32k_characteristics(rc32k_hz, rc32k_calibration);
         node.device->set_analog_trace_enabled(
             trace_analog && (!trace_node || *trace_node == node.name),
@@ -585,7 +585,7 @@ int network_command(int argc, char **argv) {
         node.device->load_firmware(image);
         node.device->connect_radio(air, node.name);
         node.device->set_radio_channel(channel);
-        node.cpu = std::make_unique<tc32emu::Cpu>(*node.device);
+        node.cpu = std::make_unique<mcuemu::Cpu>(*node.device);
         if (!trace_node || *trace_node == node.name) {
             node.cpu->set_trace_prefix("[" + node.name + "] ");
             node.cpu->set_trace_limit(trace_limit);
@@ -650,7 +650,7 @@ int network_command(int argc, char **argv) {
     constexpr std::size_t quantum = 256;
     bool fault = false;
     std::uint64_t global_time_ns = 0;
-    std::cout << "network: model=" << tc32emu::model_name(selected_model)
+    std::cout << "network: model=" << mcuemu::model_name(selected_model)
               << " zigbee-channel=" << static_cast<unsigned>(channel)
               << " RC32k=" << rc32k_hz << "Hz"
               << " calibration=" << rc32k_calibration << '\n';
@@ -687,18 +687,18 @@ int network_command(int argc, char **argv) {
             const std::size_t count =
                 std::min(quantum,
                          node.instruction_limit - node.instructions);
-            const tc32emu::RunResult result = node.cpu->run(count);
+            const mcuemu::RunResult result = node.cpu->run(count);
             node.instructions += result.instructions;
             global_time_ns = std::max(global_time_ns,
                                       node.device->network_time_ns());
-            if (result.reason == tc32emu::StopReason::Halted) {
+            if (result.reason == mcuemu::StopReason::Halted) {
                 node.stopped = true;
-            } else if (result.reason == tc32emu::StopReason::Sleeping) {
+            } else if (result.reason == mcuemu::StopReason::Sleeping) {
                 std::cout << "node " << node.name << " remains in "
                           << power_state_name(node.device->power_state())
                           << ": " << result.message << '\n';
                 node.stopped = true;
-            } else if (result.reason == tc32emu::StopReason::Fault) {
+            } else if (result.reason == mcuemu::StopReason::Fault) {
                 std::cerr << "node " << node.name << " CPU fault at 0x"
                           << std::hex << result.pc << std::dec << ": "
                           << result.message << '\n';
@@ -773,7 +773,7 @@ int network_command(int argc, char **argv) {
     if (trace_outputs) {
         std::vector<OutputEventLine> output_events;
         for (const NetworkNode &node : nodes) {
-            for (const tc32emu::OutputEvent &event :
+            for (const mcuemu::OutputEvent &event :
                  node.device->output_events())
                 output_events.push_back({node.name, event});
         }
@@ -788,7 +788,7 @@ int network_command(int argc, char **argv) {
                   });
         for (const OutputEventLine &line : output_events) {
             std::cout << "output: node " << line.node_name << ' ';
-            if (line.event.kind == tc32emu::OutputEvent::Kind::GpioPort) {
+            if (line.event.kind == mcuemu::OutputEvent::Kind::GpioPort) {
                 std::cout << "GPIO port "
                           << static_cast<char>('A' + line.event.index)
                           << " latch=0x";
@@ -800,10 +800,10 @@ int network_command(int argc, char **argv) {
         }
     }
     std::cout << "radio frames: " << air.frames().size() << '\n';
-    for (const tc32emu::RadioFrame &frame : air.frames()) {
+    for (const mcuemu::RadioFrame &frame : air.frames()) {
         std::cout << "  " << frame.id << ' ' << frame.source << " -> "
                   << (frame.destination.empty() ? "*" : frame.destination)
-                  << ' ' << tc32emu::protocol_name(frame.protocol) << " ch="
+                  << ' ' << mcuemu::protocol_name(frame.protocol) << " ch="
                   << static_cast<unsigned>(frame.channel) << " bytes="
                   << frame.payload.size() << " t=" << frame.start_ns << ".."
                   << frame.end_ns << " ns\n";
@@ -816,7 +816,7 @@ int network_command(int argc, char **argv) {
         }
     }
     std::cout << "radio receptions: " << air.receptions().size() << '\n';
-    for (const tc32emu::RadioReception &reception : air.receptions()) {
+    for (const mcuemu::RadioReception &reception : air.receptions()) {
         std::cout << "  frame " << reception.frame_id << " -> "
                   << reception.receiver << '\n';
     }

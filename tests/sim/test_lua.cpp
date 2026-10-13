@@ -8,7 +8,7 @@
 #include <fstream>
 #include <string>
 
-namespace tc32emu_tests {
+namespace mcuemu_tests {
 
 namespace {
 
@@ -197,14 +197,14 @@ at(1 * US, function() local t = {} for i = 1, 1e9 do t[i] = ("x"):rep(1000) .. i
     CHECK(hogging->world().now() == 1000000);
 }
 
-} // namespace tc32emu_tests
+} // namespace mcuemu_tests
 
-namespace tc32emu_tests {
+namespace mcuemu_tests {
 
 // Counts falling edges of a net over a window, from the net's change log.
 void test_bl0937_example_part() {
     const std::string script =
-        std::string(TC32EMU_SOURCE_DIR) + "/examples/parts/bl0937.lua";
+        std::string(MCUEMU_SOURCE_DIR) + "/examples/parts/bl0937.lua";
     auto system = sim::build_system(sim::parse_system_config(
         "version: 1\ndevices:\n  - id: d\n    mcus:\n"
         "      - {id: m, model: tlsr8258, firmware: " + (scratch_dir() / "idle.bin").string() + "}\n"
@@ -253,4 +253,4 @@ void test_bl0937_example_part() {
     CHECK(cf.level() == sim::Level::High);
 }
 
-} // namespace tc32emu_tests
+} // namespace mcuemu_tests

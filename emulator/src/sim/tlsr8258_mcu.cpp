@@ -21,12 +21,12 @@ bool parse_pad(std::string_view pad, unsigned &port, unsigned &bit) {
 
 } // namespace
 
-Tlsr8258Mcu::Tlsr8258Mcu(std::string name, tc32emu::Tlsr8258Model model,
+Tlsr8258Mcu::Tlsr8258Mcu(std::string name, mcuemu::Tlsr8258Model model,
                          std::uint32_t clock_hz)
     : Mcu(std::move(name)), device_(model, clock_hz), cpu_(device_) {
     device_.set_gpio_pad_observer([this](unsigned port) { drive_port(port); });
     device_.set_i2c_pad_observer(
-        [this](const tc32emu::I2cPads &pads, bool sda_low, bool scl_low) {
+        [this](const mcuemu::I2cPads &pads, bool sda_low, bool scl_low) {
             on_i2c_pads(pads, sda_low, scl_low);
         });
     // The ADC reads the voltage of whatever net is wired to the pad. A pad the
@@ -82,19 +82,19 @@ McuState Tlsr8258Mcu::run_until(std::uint64_t target_ns) {
     // are stamped with the device clock when the write happens, so batching
     // does not blur them; the target can be overshot by one instruction.
     while (state_ == McuState::Running && device_.network_time_ns() < target_ns) {
-        const tc32emu::RunResult result =
+        const mcuemu::RunResult result =
             cpu_.run(std::numeric_limits<std::size_t>::max(), target_ns);
         switch (result.reason) {
-        case tc32emu::StopReason::StepLimit:
+        case mcuemu::StopReason::StepLimit:
             break;
-        case tc32emu::StopReason::Halted:
+        case mcuemu::StopReason::Halted:
             state_ = McuState::Halted;
             break;
-        case tc32emu::StopReason::Sleeping:
+        case mcuemu::StopReason::Sleeping:
             state_ = McuState::Sleeping;
             fault_ = result.message;
             break;
-        case tc32emu::StopReason::Fault:
+        case mcuemu::StopReason::Fault:
             state_ = McuState::Fault;
             fault_ = result.message;
             break;
@@ -132,7 +132,7 @@ void Tlsr8258Mcu::connect_pin(std::string_view pad, Pin &pin) {
 }
 
 void Tlsr8258Mcu::sample_pin(unsigned port, unsigned bit, Level level) {
-    std::uint8_t value = device_.read8(tc32emu::Tlsr8258::GpioBase + port * 8u);
+    std::uint8_t value = device_.read8(mcuemu::Tlsr8258::GpioBase + port * 8u);
     const std::uint8_t mask = static_cast<std::uint8_t>(1u << bit);
     if (level == Level::Low)
         value = static_cast<std::uint8_t>(value & ~mask);
@@ -161,15 +161,15 @@ void Tlsr8258Mcu::drive_pad(unsigned port, unsigned bit) {
         // Input, or a pad owned by another function: only the internal pull
         // resistor acts on the line.
         switch (device_.gpio_pull(port, bit)) {
-        case tc32emu::GpioPull::Up: drive = Drive::PullUp; break;
-        case tc32emu::GpioPull::Down: drive = Drive::PullDown; break;
+        case mcuemu::GpioPull::Up: drive = Drive::PullUp; break;
+        case mcuemu::GpioPull::Down: drive = Drive::PullDown; break;
         default: drive = Drive::HiZ; break;
         }
     }
     pin->set_drive(drive, device_.network_time_ns());
 }
 
-void Tlsr8258Mcu::on_i2c_pads(const tc32emu::I2cPads &pads, bool sda_low,
+void Tlsr8258Mcu::on_i2c_pads(const mcuemu::I2cPads &pads, bool sda_low,
                               bool scl_low) {
     if (!pads.valid())
         return;
@@ -189,7 +189,7 @@ void Tlsr8258Mcu::on_i2c_pads(const tc32emu::I2cPads &pads, bool sda_low,
     }
 }
 
-void Tlsr8258Mcu::attach_radio(tc32emu::VirtualAir &air, const std::string &node,
+void Tlsr8258Mcu::attach_radio(mcuemu::VirtualAir &air, const std::string &node,
                                const std::vector<std::string> &protocols) {
     for (const std::string &protocol : protocols)
         if (protocol != "zigbee")

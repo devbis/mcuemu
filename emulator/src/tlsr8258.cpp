@@ -1,12 +1,12 @@
-#include "tc32emu/tlsr8258.hpp"
-#include "tc32emu/radio.hpp"
+#include "mcuemu/tlsr8258.hpp"
+#include "mcuemu/radio.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <limits>
 #include <sstream>
 
-namespace tc32emu {
+namespace mcuemu {
 namespace {
 
 std::string address_error(std::uint32_t address, const char *operation) {
@@ -1492,4 +1492,4 @@ const char *model_name(Tlsr8258Model model) noexcept {
     return model == Tlsr8258Model::F512 ? "TLSR8258F512" : "TLSR8258F1K";
 }
 
-} // namespace tc32emu
+} // namespace mcuemu

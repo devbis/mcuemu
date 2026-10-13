@@ -1,7 +1,7 @@
 # Control API (JSON-RPC 2.0 over WebSocket)
 
 ```
-tc32-emu serve --root DIR [--port N] [--bind ADDR] [--token T]
+mcuemu serve --root DIR [--port N] [--bind ADDR] [--token T]
                [--allow-origin ORIGIN]... [--max-sessions N] [--idle-timeout SEC]
 ```
 

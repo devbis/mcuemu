@@ -25,7 +25,7 @@ def fail(message: str, output: str) -> int:
 def main() -> int:
     if len(sys.argv) != 3:
         print(
-            "usage: test_vendor_sleep_1s.py TC32_EMU FIRMWARE",
+            "usage: test_vendor_sleep_1s.py MCUEMU FIRMWARE",
             file=sys.stderr,
         )
         return 2

@@ -3,22 +3,22 @@
 #include "sim/config.hpp"
 #include "sim/system.hpp"
 #include "sim/tlsr8258_mcu.hpp"
-#include "tc32emu/radio.hpp"
+#include "mcuemu/radio.hpp"
 
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <string>
 
-namespace tc32emu_tests {
+namespace mcuemu_tests {
 
 namespace {
 
-using tc32emu::Propagation;
-using tc32emu::RadioNodeConfig;
-using tc32emu::RadioProtocol;
-using tc32emu::Tlsr8258;
-using tc32emu::VirtualAir;
+using mcuemu::Propagation;
+using mcuemu::RadioNodeConfig;
+using mcuemu::RadioProtocol;
+using mcuemu::Tlsr8258;
+using mcuemu::VirtualAir;
 
 Propagation log_distance(double sigma = 0.0, std::uint64_t seed = 1) {
     Propagation p;
@@ -384,4 +384,4 @@ expose("payload", function() return bytes end)
     CHECK(zigbee_frames("14", "0") == 1);
 }
 
-} // namespace tc32emu_tests
+} // namespace mcuemu_tests

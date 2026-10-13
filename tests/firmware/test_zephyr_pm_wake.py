@@ -25,7 +25,7 @@ def fail(message: str, output: str) -> int:
 def main() -> int:
     if len(sys.argv) != 3:
         print(
-            "usage: test_zephyr_pm_wake.py TC32_EMU FIRMWARE",
+            "usage: test_zephyr_pm_wake.py MCUEMU FIRMWARE",
             file=sys.stderr,
         )
         return 2

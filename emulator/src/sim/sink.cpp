@@ -215,8 +215,8 @@ private:
 // sink is guarded by a flag that outlives it.
 class PcapSink final : public Sink {
 public:
-    PcapSink(const std::string &path, tc32emu::VirtualAir &air,
-             tc32emu::RadioProtocol protocol)
+    PcapSink(const std::string &path, mcuemu::VirtualAir &air,
+             mcuemu::RadioProtocol protocol)
         : out_(path, std::ios::binary), protocol_(protocol),
           alive_(std::make_shared<bool>(true)) {
         if (!out_)
@@ -228,10 +228,10 @@ public:
         put32(0);
         put32(0);
         put32(65535);
-        put32(protocol == tc32emu::RadioProtocol::Zigbee802154 ? 230u : 251u);
+        put32(protocol == mcuemu::RadioProtocol::Zigbee802154 ? 230u : 251u);
         out_.flush();
         auto alive = alive_;
-        air.add_observer([this, alive](const tc32emu::RadioFrame &frame) {
+        air.add_observer([this, alive](const mcuemu::RadioFrame &frame) {
             if (*alive)
                 write_frame(frame);
         });
@@ -244,11 +244,11 @@ public:
 private:
     void put16(std::uint16_t v) { out_.write(reinterpret_cast<const char *>(&v), 2); }
     void put32(std::uint32_t v) { out_.write(reinterpret_cast<const char *>(&v), 4); }
-    void write_frame(const tc32emu::RadioFrame &frame) {
+    void write_frame(const mcuemu::RadioFrame &frame) {
         if (frame.protocol != protocol_)
             return;
         std::vector<std::uint8_t> data;
-        if (protocol_ == tc32emu::RadioProtocol::Ble)
+        if (protocol_ == mcuemu::RadioProtocol::Ble)
             data = {0xd6, 0xbe, 0x89, 0x8e}; // advertising access address, LE
         data.insert(data.end(), frame.payload.begin(), frame.payload.end());
         put32(static_cast<std::uint32_t>(frame.start_ns / 1000000000ull));
@@ -260,7 +260,7 @@ private:
         out_.flush();
     }
     std::ofstream out_;
-    tc32emu::RadioProtocol protocol_;
+    mcuemu::RadioProtocol protocol_;
     std::shared_ptr<bool> alive_;
 };
 
@@ -499,12 +499,12 @@ std::size_t Session::attach(const std::string &endpoint_name, const std::string 
             throw std::invalid_argument("pcap needs a radio endpoint; '" + endpoint_name +
                                         "' is a " + endpoint.kind());
         std::string path = arg;
-        tc32emu::RadioProtocol protocol = tc32emu::RadioProtocol::Zigbee802154;
+        mcuemu::RadioProtocol protocol = mcuemu::RadioProtocol::Zigbee802154;
         if (const std::size_t comma = arg.rfind(','); comma != std::string::npos) {
             path = arg.substr(0, comma);
             const std::string option = arg.substr(comma + 1);
             if (option == "ble")
-                protocol = tc32emu::RadioProtocol::Ble;
+                protocol = mcuemu::RadioProtocol::Ble;
             else if (option != "zigbee")
                 throw std::invalid_argument("pcap option must be zigbee or ble, got '" +
                                             option + "'");

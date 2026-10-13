@@ -5,7 +5,7 @@
 #include <iostream>
 #include <vector>
 
-namespace tc32emu_tests {
+namespace mcuemu_tests {
 
 inline int failures = 0;
 
@@ -19,13 +19,13 @@ inline std::vector<std::uint8_t> words(
     return bytes;
 }
 
-} // namespace tc32emu_tests
+} // namespace mcuemu_tests
 
 #define CHECK(expr)                                                              \
     do {                                                                         \
         if (!(expr)) {                                                           \
             std::cerr << __FILE__ << ':' << __LINE__ << ": check failed: "      \
                       << #expr << '\n';                                         \
-            ++tc32emu_tests::failures;                                           \
+            ++mcuemu_tests::failures;                                           \
         }                                                                        \
     } while (false)

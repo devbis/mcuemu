@@ -1,6 +1,6 @@
 #include "test_support.hpp"
 
-namespace tc32emu_tests {
+namespace mcuemu_tests {
 void test_cpu_arithmetic_and_branch();
 void test_cpu_load_store();
 void test_cpu_load_multiple_preserves_loaded_base_register();
@@ -30,7 +30,7 @@ void test_c_api_register_access();
 }
 
 int main() {
-    using namespace tc32emu_tests;
+    using namespace mcuemu_tests;
     test_cpu_arithmetic_and_branch();
     test_cpu_load_store();
     test_cpu_load_multiple_preserves_loaded_base_register();
@@ -57,10 +57,10 @@ int main() {
     test_virtual_air();
     test_tlsr_radio_dma_packet_exchange();
     test_c_api_register_access();
-    if (tc32emu_tests::failures) {
-        std::cerr << tc32emu_tests::failures << " test check(s) failed\n";
+    if (mcuemu_tests::failures) {
+        std::cerr << mcuemu_tests::failures << " test check(s) failed\n";
         return 1;
     }
-    std::cout << "all tc32-emu checks passed\n";
+    std::cout << "all mcuemu checks passed\n";
     return 0;
 }

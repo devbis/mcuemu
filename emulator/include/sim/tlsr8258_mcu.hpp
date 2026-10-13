@@ -1,8 +1,8 @@
 #pragma once
 
 #include "sim/mcu.hpp"
-#include "tc32emu/cpu.hpp"
-#include "tc32emu/tlsr8258.hpp"
+#include "mcuemu/cpu.hpp"
+#include "mcuemu/tlsr8258.hpp"
 
 #include <array>
 #include <cstdint>
@@ -17,7 +17,7 @@ public:
     static constexpr unsigned PortCount = 5;
 
     Tlsr8258Mcu(std::string name,
-                tc32emu::Tlsr8258Model model = tc32emu::Tlsr8258Model::F512,
+                mcuemu::Tlsr8258Model model = mcuemu::Tlsr8258Model::F512,
                 std::uint32_t clock_hz = 48000000);
 
     std::string_view model() const override { return "tlsr8258"; }
@@ -33,7 +33,7 @@ public:
     std::vector<std::string> pin_names() const override;
     void connect_pin(std::string_view pad, Pin &pin) override;
     // Only the Zigbee RF path is connected to the chip's RF registers.
-    void attach_radio(tc32emu::VirtualAir &air, const std::string &node,
+    void attach_radio(mcuemu::VirtualAir &air, const std::string &node,
                       const std::vector<std::string> &protocols) override;
     void read_memory(std::uint32_t address, std::uint8_t *out,
                      std::size_t length) override;
@@ -45,17 +45,17 @@ public:
     std::vector<std::uint8_t> uart_take_tx(unsigned index) override;
 
     // Escape hatch for chip-specific tests and tooling.
-    tc32emu::Tlsr8258 &device() noexcept { return device_; }
-    tc32emu::Cpu &cpu() noexcept { return cpu_; }
+    mcuemu::Tlsr8258 &device() noexcept { return device_; }
+    mcuemu::Cpu &cpu() noexcept { return cpu_; }
 
 private:
     void drive_port(unsigned port);
     void drive_pad(unsigned port, unsigned bit);
     void sample_pin(unsigned port, unsigned bit, Level level);
-    void on_i2c_pads(const tc32emu::I2cPads &pads, bool sda_low, bool scl_low);
+    void on_i2c_pads(const mcuemu::I2cPads &pads, bool sda_low, bool scl_low);
 
-    tc32emu::Tlsr8258 device_;
-    tc32emu::Cpu cpu_;
+    mcuemu::Tlsr8258 device_;
+    mcuemu::Cpu cpu_;
     McuState state_{McuState::Running};
     std::string fault_;
     std::array<std::array<Pin *, 8>, PortCount> pins_{};

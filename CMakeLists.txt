@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
-project(tc32_emu VERSION 0.1.0 LANGUAGES C CXX)
+project(mcuemu VERSION 0.1.0 LANGUAGES C CXX)
 
-option(TC32EMU_BUILD_TESTS "Build the emulator self-tests" ON)
+option(MCUEMU_BUILD_TESTS "Build the emulator self-tests" ON)
 
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/engine/unicorn/CMakeLists.txt")
     message(FATAL_ERROR
@@ -19,7 +19,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-add_library(tc32emu
+add_library(mcuemu-core
     emulator/src/cpu.cpp
     emulator/src/tlsr8258.cpp
     emulator/src/tlsr8258_i2c.cpp
@@ -27,12 +27,12 @@ add_library(tc32emu
     emulator/src/radio.cpp
     emulator/src/api.cpp
 )
-target_include_directories(tc32emu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
-target_compile_options(tc32emu PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(tc32emu PUBLIC unicorn)
+target_include_directories(mcuemu-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
+target_compile_options(mcuemu-core PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(mcuemu-core PUBLIC unicorn)
 
-add_executable(tc32-emu emulator/src/main.cpp)
-target_link_libraries(tc32-emu PRIVATE tc32emu simcore)
+add_executable(mcuemu emulator/src/main.cpp)
+target_link_libraries(mcuemu PRIVATE mcuemu-core simcore)
 
 add_library(mcs51emu
     emulator/src/mcs51/ca51f253l3.cpp
@@ -57,9 +57,9 @@ if(NOT yaml-cpp_FOUND)
     FetchContent_MakeAvailable(yaml-cpp)
 endif()
 if(TARGET yaml-cpp::yaml-cpp)
-    set(TC32EMU_YAML_TARGET yaml-cpp::yaml-cpp)
+    set(MCUEMU_YAML_TARGET yaml-cpp::yaml-cpp)
 else()
-    set(TC32EMU_YAML_TARGET yaml-cpp)
+    set(MCUEMU_YAML_TARGET yaml-cpp)
 endif()
 
 # Lua 5.4 for scripted parts, built from source so behavior does not depend on
@@ -69,9 +69,9 @@ FetchContent_Declare(lua
     GIT_REPOSITORY https://github.com/lua/lua.git
     GIT_TAG v5.4.8)
 FetchContent_MakeAvailable(lua)
-file(GLOB TC32EMU_LUA_SOURCES "${lua_SOURCE_DIR}/*.c")
-list(FILTER TC32EMU_LUA_SOURCES EXCLUDE REGEX "/(lua|luac|onelua|ltests)\\.c$")
-add_library(lua54 STATIC ${TC32EMU_LUA_SOURCES})
+file(GLOB MCUEMU_LUA_SOURCES "${lua_SOURCE_DIR}/*.c")
+list(FILTER MCUEMU_LUA_SOURCES EXCLUDE REGEX "/(lua|luac|onelua|ltests)\\.c$")
+add_library(lua54 STATIC ${MCUEMU_LUA_SOURCES})
 target_include_directories(lua54 PUBLIC "${lua_SOURCE_DIR}")
 set_target_properties(lua54 PROPERTIES C_STANDARD 99)
 if(UNIX)
@@ -111,20 +111,20 @@ add_library(simcore
 )
 target_include_directories(simcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(simcore PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(simcore PUBLIC tc32emu mcs51emu ${TC32EMU_YAML_TARGET} lua54
+target_link_libraries(simcore PUBLIC mcuemu-core mcs51emu ${MCUEMU_YAML_TARGET} lua54
     nlohmann_json::nlohmann_json)
 
-if(TC32EMU_BUILD_TESTS)
+if(MCUEMU_BUILD_TESTS)
     enable_testing()
-    add_executable(tc32emu-tests
+    add_executable(mcuemu-tests
         tests/test_main.cpp
         tests/tc32/test_cpu.cpp
         tests/machine/test_tlsr8258.cpp
         tests/machine/test_api.cpp
         tests/radio/test_radio.cpp
     )
-    target_link_libraries(tc32emu-tests PRIVATE tc32emu)
-    add_test(NAME tc32emu-tests COMMAND tc32emu-tests)
+    target_link_libraries(mcuemu-tests PRIVATE mcuemu-core)
+    add_test(NAME mcuemu-tests COMMAND mcuemu-tests)
 
     add_executable(mcs51emu-tests
         tests/mcs51/test_ca51f253l3.cpp
@@ -144,32 +144,32 @@ if(TC32EMU_BUILD_TESTS)
     )
     target_link_libraries(simcore-tests PRIVATE simcore)
     target_compile_definitions(simcore-tests PRIVATE
-        TC32EMU_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+        MCUEMU_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME simcore-tests COMMAND simcore-tests)
 
-    set(TC32EMU_SAMPLE_GW_FIRMWARE
+    set(MCUEMU_SAMPLE_GW_FIRMWARE
         "${CMAKE_CURRENT_SOURCE_DIR}/firmware/samplegw_tb03f.bin")
-    set(TC32EMU_SAMPLE_LIGHT_FIRMWARE
+    set(MCUEMU_SAMPLE_LIGHT_FIRMWARE
         "${CMAKE_CURRENT_SOURCE_DIR}/firmware/samplelight_tb03f.bin")
-    if(EXISTS "${TC32EMU_SAMPLE_GW_FIRMWARE}" AND
-       EXISTS "${TC32EMU_SAMPLE_LIGHT_FIRMWARE}")
+    if(EXISTS "${MCUEMU_SAMPLE_GW_FIRMWARE}" AND
+       EXISTS "${MCUEMU_SAMPLE_LIGHT_FIRMWARE}")
         find_package(Python3 COMPONENTS Interpreter QUIET)
         if(Python3_Interpreter_FOUND)
             add_test(
                 NAME firmware_zigbee_join
                 COMMAND "${Python3_EXECUTABLE}"
                         "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_zigbee_join.py"
-                        "$<TARGET_FILE:tc32-emu>"
-                        "${TC32EMU_SAMPLE_GW_FIRMWARE}"
-                        "${TC32EMU_SAMPLE_LIGHT_FIRMWARE}"
+                        "$<TARGET_FILE:mcuemu>"
+                        "${MCUEMU_SAMPLE_GW_FIRMWARE}"
+                        "${MCUEMU_SAMPLE_LIGHT_FIRMWARE}"
                         join)
             add_test(
                 NAME firmware_zigbee_button_light
                 COMMAND "${Python3_EXECUTABLE}"
                         "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_zigbee_join.py"
-                        "$<TARGET_FILE:tc32-emu>"
-                        "${TC32EMU_SAMPLE_GW_FIRMWARE}"
-                        "${TC32EMU_SAMPLE_LIGHT_FIRMWARE}"
+                        "$<TARGET_FILE:mcuemu>"
+                        "${MCUEMU_SAMPLE_GW_FIRMWARE}"
+                        "${MCUEMU_SAMPLE_LIGHT_FIRMWARE}"
                         button)
             set_tests_properties(firmware_zigbee_join firmware_zigbee_button_light
                 PROPERTIES
@@ -185,17 +185,17 @@ if(TC32EMU_BUILD_TESTS)
             "Skipping firmware_zigbee_join: local sampleGW/sampleLight images not found in firmware/")
     endif()
 
-    set(TC32EMU_ZEPHYR_PM_FIRMWARE
+    set(MCUEMU_ZEPHYR_PM_FIRMWARE
         "${CMAKE_CURRENT_SOURCE_DIR}/firmware/zephyr-pmtest.bin")
-    if(EXISTS "${TC32EMU_ZEPHYR_PM_FIRMWARE}")
+    if(EXISTS "${MCUEMU_ZEPHYR_PM_FIRMWARE}")
         find_package(Python3 COMPONENTS Interpreter QUIET)
         if(Python3_Interpreter_FOUND)
             add_test(
                 NAME firmware_zephyr_pm_wake
                 COMMAND "${Python3_EXECUTABLE}"
                         "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_zephyr_pm_wake.py"
-                        "$<TARGET_FILE:tc32-emu>"
-                        "${TC32EMU_ZEPHYR_PM_FIRMWARE}")
+                        "$<TARGET_FILE:mcuemu>"
+                        "${MCUEMU_ZEPHYR_PM_FIRMWARE}")
             set_tests_properties(firmware_zephyr_pm_wake PROPERTIES
                 TIMEOUT 180
                 LABELS "firmware;power"
@@ -206,17 +206,17 @@ if(TC32EMU_BUILD_TESTS)
         endif()
     endif()
 
-    set(TC32EMU_VENDOR_SLEEP_1S_FIRMWARE
+    set(MCUEMU_VENDOR_SLEEP_1S_FIRMWARE
         "${CMAKE_CURRENT_SOURCE_DIR}/firmware/vendor_sleep_1s.bin")
-    if(EXISTS "${TC32EMU_VENDOR_SLEEP_1S_FIRMWARE}")
+    if(EXISTS "${MCUEMU_VENDOR_SLEEP_1S_FIRMWARE}")
         find_package(Python3 COMPONENTS Interpreter QUIET)
         if(Python3_Interpreter_FOUND)
             add_test(
                 NAME firmware_vendor_sleep_1s
                 COMMAND "${Python3_EXECUTABLE}"
                         "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_vendor_sleep_1s.py"
-                        "$<TARGET_FILE:tc32-emu>"
-                        "${TC32EMU_VENDOR_SLEEP_1S_FIRMWARE}")
+                        "$<TARGET_FILE:mcuemu>"
+                        "${MCUEMU_VENDOR_SLEEP_1S_FIRMWARE}")
             set_tests_properties(firmware_vendor_sleep_1s PROPERTIES
                 TIMEOUT 60
                 LABELS "firmware;power"

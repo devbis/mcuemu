@@ -25,7 +25,7 @@ unsigned failures = 0;
 
 std::filesystem::path temp_file(const char *name) {
     return std::filesystem::temp_directory_path() /
-           (std::string("tc32-emu-") + name);
+           (std::string("mcuemu-") + name);
 }
 
 void write_binary(const std::filesystem::path &path,

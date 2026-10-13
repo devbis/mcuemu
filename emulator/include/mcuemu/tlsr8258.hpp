@@ -1,6 +1,6 @@
 #pragma once
 
-#include "tc32emu/bus.hpp"
+#include "mcuemu/bus.hpp"
 
 #include <array>
 #include <cstddef>
@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace tc32emu {
+namespace mcuemu {
 
 class VirtualAir;
 
@@ -388,4 +388,4 @@ private:
 Tlsr8258Model parse_model(const std::string &name);
 const char *model_name(Tlsr8258Model model) noexcept;
 
-} // namespace tc32emu
+} // namespace mcuemu

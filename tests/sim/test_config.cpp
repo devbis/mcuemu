@@ -9,7 +9,7 @@
 #include <fstream>
 #include <string>
 
-namespace tc32emu_tests {
+namespace mcuemu_tests {
 
 namespace {
 
@@ -150,8 +150,8 @@ void test_system_build_and_run() {
     world.run_until(*system->duration_ns());
     // The scenario pulled the line low at 200 us and never released it.
     CHECK(line.level() == sim::Level::Low);
-    CHECK((main_mcu.device().read8(tc32emu::Tlsr8258::GpioBase) & 1u) == 0u);
-    CHECK((aux.device().read8(tc32emu::Tlsr8258::GpioBase + 8) & 2u) == 0u);
+    CHECK((main_mcu.device().read8(mcuemu::Tlsr8258::GpioBase) & 1u) == 0u);
+    CHECK((aux.device().read8(mcuemu::Tlsr8258::GpioBase + 8) & 2u) == 0u);
     CHECK(main_mcu.state() == sim::McuState::Running);
     CHECK(world.now() == 1000000u);
 }
@@ -222,18 +222,18 @@ void test_uart_link_between_mcus() {
     auto &a = static_cast<sim::Tlsr8258Mcu &>(linked_world.mcu("d.a"));
     auto &b = static_cast<sim::Tlsr8258Mcu &>(linked_world.mcu("d.b"));
     // Firmware-free transmit: enable the UART and write a byte to A's TX FIFO.
-    a.device().write8(tc32emu::Tlsr8258::UartControl0, 0x4f);
-    a.device().write8(tc32emu::Tlsr8258::UartData, 0x5a);
+    a.device().write8(mcuemu::Tlsr8258::UartControl0, 0x4f);
+    a.device().write8(mcuemu::Tlsr8258::UartData, 0x5a);
     linked_world.run_until(2000000); // frame time at default baud << 2 ms
     // Byte arrived in B's RX FIFO (low nibble of the buffer count).
-    CHECK((b.device().read8(tc32emu::Tlsr8258::UartBufferCount) & 0x0fu) == 1);
-    CHECK(b.device().read8(tc32emu::Tlsr8258::UartData + 3) == 0x5a);
+    CHECK((b.device().read8(mcuemu::Tlsr8258::UartBufferCount) & 0x0fu) == 1);
+    CHECK(b.device().read8(mcuemu::Tlsr8258::UartData + 3) == 0x5a);
     CHECK(a.uart_take_tx(0).empty()); // the link consumed A's output
 }
 
-} // namespace tc32emu_tests
+} // namespace mcuemu_tests
 
-namespace tc32emu_tests {
+namespace mcuemu_tests {
 
 void test_config_include() {
     namespace fs = std::filesystem;
@@ -304,14 +304,14 @@ void test_config_include() {
     CHECK(contains(load("/etc/passwd"), "outside the allowed directory"));
 }
 
-} // namespace tc32emu_tests
+} // namespace mcuemu_tests
 
-namespace tc32emu_tests {
+namespace mcuemu_tests {
 
 // The shipped examples must stay loadable: parse the world with its
 // insertions and check the wiring (firmware files are not needed to parse).
 void test_shipped_examples() {
-    const std::string dir = std::string(TC32EMU_SOURCE_DIR) + "/examples";
+    const std::string dir = std::string(MCUEMU_SOURCE_DIR) + "/examples";
     const sim::SystemConfig config = sim::load_system_config(dir + "/world.yaml");
     CHECK(config.devices.size() == 3);
     CHECK(config.devices[0].id == "coordinator");
@@ -342,4 +342,4 @@ void test_shipped_examples() {
     }
 }
 
-} // namespace tc32emu_tests
+} // namespace mcuemu_tests

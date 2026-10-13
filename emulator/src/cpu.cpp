@@ -1,6 +1,6 @@
-#include "tc32emu/cpu.hpp"
+#include "mcuemu/cpu.hpp"
 
-#include "tc32emu/tlsr8258.hpp"
+#include "mcuemu/tlsr8258.hpp"
 #include "unicorn/unicorn.h"
 
 #include <algorithm>
@@ -10,7 +10,7 @@
 #include <sstream>
 #include <stdexcept>
 
-namespace tc32emu {
+namespace mcuemu {
 namespace {
 
 constexpr std::uint32_t irq_mode = 0x12;
@@ -622,4 +622,4 @@ RunResult Cpu::run(std::size_t instruction_limit, std::uint64_t deadline_ns) {
     return result;
 }
 
-} // namespace tc32emu
+} // namespace mcuemu

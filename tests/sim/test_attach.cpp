@@ -17,11 +17,11 @@
 #include <sstream>
 #include <string>
 
-namespace tc32emu_tests {
+namespace mcuemu_tests {
 
 namespace {
 
-using tc32emu::Tlsr8258;
+using mcuemu::Tlsr8258;
 
 const std::filesystem::path &scratch() {
     static const std::filesystem::path dir = [] {
@@ -278,9 +278,9 @@ world: { radio: [ { id: air0 } ] }
     // pcap: Zigbee frames, 802.15.4 without FCS (link type 230).
     session.attach("air0", "pcap:" + path_of("air.pcap"));
     auto &air = world.radio("air0");
-    air.transmit("x", "", tc32emu::RadioProtocol::Zigbee802154, 15, 1500000000, {1, 2, 3});
-    air.transmit("x", "", tc32emu::RadioProtocol::Ble, 37, 1600000000, {9});
-    air.transmit("y", "", tc32emu::RadioProtocol::Zigbee802154, 15, 2000000, {4, 5});
+    air.transmit("x", "", mcuemu::RadioProtocol::Zigbee802154, 15, 1500000000, {1, 2, 3});
+    air.transmit("x", "", mcuemu::RadioProtocol::Ble, 37, 1600000000, {9});
+    air.transmit("y", "", mcuemu::RadioProtocol::Zigbee802154, 15, 2000000, {4, 5});
     session.finish();
     const std::string pcap = read_file(path_of("air.pcap"));
     auto u32 = [&](std::size_t at) {
@@ -440,4 +440,4 @@ attach:
                    "cannot write"));
 }
 
-} // namespace tc32emu_tests
+} // namespace mcuemu_tests

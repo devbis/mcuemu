@@ -19,12 +19,12 @@
 // period after the channel is enabled; the left/right channels, PGA and the
 // temperature sensor are not modeled (they read as 0 mV).
 
-#include "tc32emu/tlsr8258.hpp"
+#include "mcuemu/tlsr8258.hpp"
 
 #include <algorithm>
 #include <cmath>
 
-namespace tc32emu {
+namespace mcuemu {
 
 namespace {
 
@@ -120,4 +120,4 @@ void Tlsr8258::adc_advance() {
     }
 }
 
-} // namespace tc32emu
+} // namespace mcuemu

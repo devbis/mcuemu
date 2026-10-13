@@ -13,8 +13,8 @@
 #include <string>
 #include <vector>
 
-using tc32emu_tests::words;
-using tc32emu::Tlsr8258;
+using mcuemu_tests::words;
+using mcuemu::Tlsr8258;
 
 namespace {
 
@@ -318,7 +318,7 @@ void test_ca51_uart1_receive() {
 
 } // namespace
 
-namespace tc32emu_tests {
+namespace mcuemu_tests {
 void test_config_parsing();
 void test_config_errors();
 void test_system_build_and_run();
@@ -364,7 +364,7 @@ void test_i2c_master_with_sensor();
 }
 
 int main() {
-    using namespace tc32emu_tests;
+    using namespace mcuemu_tests;
     test_config_parsing();
     test_config_errors();
     test_system_build_and_run();
@@ -418,8 +418,8 @@ int main() {
     test_world_jumps_when_nothing_runs();
     test_ca51_adapter_basics();
     test_ca51_uart1_receive();
-    if (tc32emu_tests::failures) {
-        std::cerr << tc32emu_tests::failures << " sim check(s) failed\n";
+    if (mcuemu_tests::failures) {
+        std::cerr << mcuemu_tests::failures << " sim check(s) failed\n";
         return 1;
     }
     std::cout << "all simcore checks passed\n";
