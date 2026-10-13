@@ -100,6 +100,12 @@ Facts about the fork that bit us:
   code hook is baked in at translation time. If you add or remove a code hook
   while code is already translated, call `uc_ctl_flush_tb()`
   (`Ca51F253L3::set_code_hook_enabled` does).
+- On Apple Silicon the JIT area is flipped between writable and executable
+  with `pthread_jit_write_protect_np`, and that was 45% of a TLSR8258 run. It
+  now stays executable between translation blocks (`cpu_tb_exec`), and
+  `JIT_CALLBACK_GUARD` restores the mode only when a callback changed it. Every
+  JIT writer must unlock the area itself and put back the state it found
+  (`tb_gen_code`, `tb_add_jump`, `tb_flush`, `tb_phys_invalidate` do).
 - `uc_emu_start(..., count)` is unreliable after other runs have translated
   blocks: with `count=1` it executed dozens of instructions. The TC32 wrapper
   never uses `count`; it limits execution from its own code hook.
@@ -233,11 +239,26 @@ thermostat's display, keys, relay and NTC are not modelled.
 
 ## Performance reference
 
-Rough speed on an Apple Silicon laptop after the batching work: one CA51 runs
-about 1.5x slower than real time; the full thermostat example (coordinator +
-ZT3L + CA51) runs about 4x slower than real time. A busy-looping TLSR8258 at
-48 MHz is still the dominant cost. Profile with `sample <pid> 3 -file out.txt`
-rather than guessing.
+Rough speed on an Apple Silicon laptop: a TLSR8258 coordinator running the
+Telink sample gateway (a busy main loop) simulates 30 s in about 15 s, twice as
+fast as real time; one nRF52840 mostly asleep runs hundreds of times faster, and
+a spinning Cortex-M core executes about 175 million instructions per second.
+Profile with `sample <pid> 3 -file out.txt` rather than guessing. What mattered:
+
+- **The TLSR8258 device clock is lazy inside a batch** (`Cpu::code_hook`,
+  `Tlsr8258::cycles_until_event()`). Instructions only add to `owed_cycles_`;
+  the device is ticked for the whole span when a conservative bound is reached,
+  before every MMIO access and at the end of the batch. The result is the same as
+  ticking every instruction (checked: pcap, VCD and RTT output of the two-chip
+  example are byte-identical to the per-instruction version), but only if the
+  bound never overestimates. **When a tick subsystem gets a new time-driven
+  effect, add it to `cycles_until_event()`**, or return 0 while it is active.
+  A state the batch checks before each instruction (power state, pending IRQ) must
+  be re-read after the tick that can change it, which `code_hook` does.
+- Instruction bytes are read from the host copy of flash/SRAM, not through
+  `uc_mem_read`.
+- The fork keeps the Apple JIT area executable between translation blocks and does
+  not re-flip it around hooks; see the fork facts above.
 
 ## Known limitations
 

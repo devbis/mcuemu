@@ -160,6 +160,13 @@ public:
     std::uint8_t read8(std::uint32_t address) override;
     void write8(std::uint32_t address, std::uint8_t value) override;
     void tick(std::uint32_t cycles) override;
+    // A lower bound on the number of core cycles before tick() changes
+    // anything the CPU or the outside could observe other than plain counters:
+    // an interrupt source, a DMA or FIFO movement, a pad change, a radio event.
+    // Ticking the whole span at once, no later than this many cycles from now,
+    // gives the same result as ticking it cycle by cycle. Register accesses
+    // must tick first (the wrapper does so before every MMIO access).
+    std::uint64_t cycles_until_event() const noexcept;
     bool interrupt_pending() const noexcept override;
     Tlsr8258PowerState power_state() const noexcept { return power_state_; }
     bool advance_sleep_to_wakeup();

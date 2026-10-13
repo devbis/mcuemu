@@ -132,6 +132,15 @@ private:
     bool batch_first_{false};
     std::size_t batch_remaining_{0};
     std::uint64_t batch_deadline_ns_{UINT64_MAX};
+    // Lazy device clock inside a batch. Instructions whose cycles cannot change
+    // anything yet are only counted (`owed_cycles_`); the device is ticked for
+    // the whole span when the bound `slack_cycles_` is reached, before any
+    // register access, and at the end of the batch. See Tlsr8258::cycles_until_event().
+    std::uint64_t owed_cycles_{0};
+    std::uint64_t slack_cycles_{0};
+    bool full_next_{true};
+    void flush_owed();
+    void refresh_slack();
     bool has_previous_instruction_{false};
     std::uint32_t current_pc_{0};
     std::uint16_t current_instruction_{0};

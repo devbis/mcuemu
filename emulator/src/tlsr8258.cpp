@@ -634,6 +634,85 @@ void Tlsr8258::tick(std::uint32_t cycles) {
     poll_radio();
 }
 
+std::uint64_t Tlsr8258::cycles_until_event() const noexcept {
+    constexpr std::uint64_t unlimited = std::numeric_limits<std::uint64_t>::max() / 4;
+    std::uint64_t bound = unlimited;
+    auto limit = [&bound](std::uint64_t cycles) {
+        if (cycles < bound)
+            bound = cycles;
+    };
+    // Nanoseconds to core cycles, rounded down (and one nanosecond short, as
+    // the fractional carry of the clock can add one).
+    auto ns_to_cycles = [this](std::uint64_t ns) -> std::uint64_t {
+        constexpr std::uint64_t cap_ns = 4000000000ull;
+        if (ns <= 1)
+            return 0;
+        ns = std::min(ns - 1, cap_ns);
+        return ns * clock_hz_ / 1000000000ull;
+    };
+
+    // System timer compare interrupt.
+    if ((registers_[SystemTimerMode - RegisterBase] & SystemTimerIrqEnable) != 0) {
+        const std::uint32_t compare =
+            static_cast<std::uint32_t>(registers_[0x744]) |
+            (static_cast<std::uint32_t>(registers_[0x745]) << 8) |
+            (static_cast<std::uint32_t>(registers_[0x746]) << 16) |
+            (static_cast<std::uint32_t>(registers_[0x747]) << 24);
+        const std::uint32_t distance = compare - system_timer_count_;
+        if (static_cast<std::int32_t>(distance) > 0)
+            limit((static_cast<std::uint64_t>(distance) - 1) *
+                  (clock_hz_ / SystemTimerClockHz));
+    }
+
+    // Timers 0..2.
+    const std::uint32_t control =
+        static_cast<std::uint32_t>(registers_[0x620]) |
+        (static_cast<std::uint32_t>(registers_[0x621]) << 8) |
+        (static_cast<std::uint32_t>(registers_[0x622]) << 16) |
+        (static_cast<std::uint32_t>(registers_[0x623]) << 24);
+    for (unsigned timer = 0; timer != 3; ++timer) {
+        if ((control & (1u << (timer * 3u))) == 0 || timer_fired_[timer])
+            continue;
+        const std::uint32_t capture =
+            static_cast<std::uint32_t>(registers_[0x624 + timer * 4]) |
+            (static_cast<std::uint32_t>(registers_[0x625 + timer * 4]) << 8) |
+            (static_cast<std::uint32_t>(registers_[0x626 + timer * 4]) << 16) |
+            (static_cast<std::uint32_t>(registers_[0x627 + timer * 4]) << 24);
+        if (capture == 0)
+            continue;
+        const std::uint32_t count = timer_last_tick_[timer];
+        limit(count >= capture ? 0 : capture - count);
+    }
+
+    // UART transmit and receive timing: not worth predicting, it is brief.
+    if (!uart_tx_fifo_.empty() || !uart_dma_tx_queue_.empty())
+        limit(0);
+    if (uart_dma_rx_idle_cycles_ != 0)
+        limit(uart_dma_rx_idle_cycles_);
+    if (sleep_entry_pending_)
+        limit(sleep_entry_cycles_remaining_);
+    if (aes_cycles_remaining_ != 0)
+        limit(aes_cycles_remaining_);
+    if (!i2c_steps_.empty()) {
+        const std::uint64_t next = i2c_steps_.front().cycle;
+        limit(next > i2c_cycles_ ? next - i2c_cycles_ : 0);
+    }
+    // The ADC samples on a clock of its own while it is running.
+    if ((analog_registers_[0xfc] & (1u << 5)) == 0 &&
+        (analog_registers_[0xf2] & (1u << 2)) != 0 &&
+        (registers_[0xb10] & (1u << 2)) != 0)
+        limit(0);
+
+    // Radio: the end of a transmission and the 10 us receive poll.
+    if (radio_tx_busy_) {
+        const std::uint64_t now_ns = network_time_ns();
+        limit(radio_tx_finish_ns_ > now_ns ? ns_to_cycles(radio_tx_finish_ns_ - now_ns) : 0);
+    }
+    if (radio_air_)
+        limit(radio_next_poll_ns_ > time_ns_ ? ns_to_cycles(radio_next_poll_ns_ - time_ns_) : 0);
+    return bound;
+}
+
 bool Tlsr8258::interrupt_pending() const noexcept {
     if ((registers_[IrqGlobalEnable - RegisterBase] & 1u) == 0)
         return false;

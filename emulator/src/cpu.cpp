@@ -257,6 +257,8 @@ std::uint64_t Cpu::mmio_read(uc_struct *opaque, std::uint64_t offset,
     auto *binding = static_cast<MmioBinding *>(user_data);
     auto *self = binding->cpu;
     std::uint64_t value = 0;
+    self->flush_owed();
+    self->full_next_ = true;
     try {
         if (size > sizeof(value))
             throw std::runtime_error("unsupported MMIO read width");
@@ -297,6 +299,8 @@ void Cpu::mmio_write(uc_struct *opaque, std::uint64_t offset, unsigned size,
                      std::uint64_t value, void *user_data) {
     auto *binding = static_cast<MmioBinding *>(user_data);
     auto *self = binding->cpu;
+    self->flush_owed();
+    self->full_next_ = true;
     try {
         if (size > sizeof(value))
             throw std::runtime_error("unsupported MMIO write width");
@@ -342,20 +346,31 @@ void Cpu::mmio_write(uc_struct *opaque, std::uint64_t offset, unsigned size,
 void Cpu::code_hook(uc_struct *opaque, std::uint64_t address,
                     std::uint32_t size, void *user_data) {
     auto *self = static_cast<Cpu *>(user_data);
+    bool tick_now = true;
     if (self->batch_active_) {
-        // The first instruction of a batch always runs: the caller has just
-        // handled whatever was pending. Later ones stop the batch instead of
-        // starting when something needs the wrapper (see batch_must_end()).
-        if (self->batch_first_)
-            self->batch_first_ = false;
-        else if (self->batch_must_end()) {
-            const std::uint32_t resume_pc = static_cast<std::uint32_t>(address);
-            auto *engine = reinterpret_cast<uc_engine *>(opaque);
-            uc_reg_write(engine, UC_TC32_REG_PC, &resume_pc);
-            uc_emu_stop(engine);
-            return;
+        if (!self->batch_first_ && !self->full_next_ && self->batch_remaining_ != 0 &&
+            self->owed_cycles_ + estimated_cycles_per_instruction < self->slack_cycles_ &&
+            self->device_.power_state() == Tlsr8258PowerState::Awake) {
+            // Nothing can need the wrapper yet: count the instruction only.
+            self->owed_cycles_ += estimated_cycles_per_instruction;
+            --self->batch_remaining_;
+            tick_now = false;
+        } else {
+            self->flush_owed();
+            // The first instruction of a batch always runs: the caller has just
+            // handled whatever was pending. Later ones stop the batch instead of
+            // starting when something needs the wrapper (see batch_must_end()).
+            if (self->batch_first_)
+                self->batch_first_ = false;
+            else if (self->batch_must_end()) {
+                const std::uint32_t resume_pc = static_cast<std::uint32_t>(address);
+                auto *engine = reinterpret_cast<uc_engine *>(opaque);
+                uc_reg_write(engine, UC_TC32_REG_PC, &resume_pc);
+                uc_emu_stop(engine);
+                return;
+            }
+            --self->batch_remaining_;
         }
-        --self->batch_remaining_;
     }
     const std::uint32_t previous_pc = self->previous_pc_;
     const std::uint16_t previous_instruction = self->previous_instruction_;
@@ -363,7 +378,15 @@ void Cpu::code_hook(uc_struct *opaque, std::uint64_t address,
     self->instruction_seen_ = true;
     // Unicorn exposes instruction hooks but no per-instruction cycle count.
     // Use a coarse TC32 estimate so device timers advance in core cycles.
-    self->device_.tick(estimated_cycles_per_instruction);
+    if (tick_now) {
+        self->device_.tick(estimated_cycles_per_instruction);
+        if (self->batch_active_) {
+            self->refresh_slack();
+            // While an interrupt is pending every instruction is checked, as
+            // the mode of the CPU decides whether it can be taken.
+            self->full_next_ = self->device_.interrupt_pending();
+        }
+    }
     self->current_pc_ = static_cast<std::uint32_t>(address);
     ++self->executed_instructions_;
 
@@ -403,10 +426,24 @@ void Cpu::code_hook(uc_struct *opaque, std::uint64_t address,
                   Tlsr8258::RetainedSramBase
             : UINT64_MAX;
     const auto &flash = self->device_.flash();
+    // Instructions come from flash (through the SRAM-window alias or at its own
+    // addresses) or from SRAM; reading them through the engine is far slower.
     if (size >= bytes.size() && flash_offset < flash.size() &&
         bytes.size() <= flash.size() - flash_offset) {
         bytes[0] = flash[static_cast<std::size_t>(flash_offset)];
         bytes[1] = flash[static_cast<std::size_t>(flash_offset + 1)];
+        have_instruction = true;
+    } else if (size >= bytes.size() && address < flash.size() &&
+               bytes.size() <= flash.size() - address) {
+        bytes[0] = flash[static_cast<std::size_t>(address)];
+        bytes[1] = flash[static_cast<std::size_t>(address + 1)];
+        have_instruction = true;
+    } else if (size >= bytes.size() && address >= Tlsr8258::RetainedSramBase &&
+               address - Tlsr8258::RetainedSramBase <= Tlsr8258::SramSize - bytes.size()) {
+        const std::uint8_t *sram = self->device_.sram_data();
+        const std::size_t offset = static_cast<std::size_t>(address - Tlsr8258::RetainedSramBase);
+        bytes[0] = sram[offset];
+        bytes[1] = sram[offset + 1];
         have_instruction = true;
     } else if (size >= bytes.size() &&
                uc_mem_read(reinterpret_cast<uc_engine *>(opaque), address,
@@ -509,6 +546,32 @@ bool Cpu::enter_pending_irq() {
     return true;
 }
 
+void Cpu::flush_owed() {
+    if (owed_cycles_ == 0)
+        return;
+    // tick() takes 32 bits; the span is bounded by the slack, but be safe.
+    while (owed_cycles_ != 0) {
+        const std::uint32_t chunk = static_cast<std::uint32_t>(
+            std::min<std::uint64_t>(owed_cycles_, 0x40000000u));
+        device_.tick(chunk);
+        owed_cycles_ -= chunk;
+    }
+}
+
+void Cpu::refresh_slack() {
+    std::uint64_t slack = device_.cycles_until_event();
+    if (batch_deadline_ns_ != UINT64_MAX) {
+        const std::uint64_t now = device_.network_time_ns();
+        if (now >= batch_deadline_ns_) {
+            slack = 0;
+        } else {
+            const std::uint64_t diff = std::min<std::uint64_t>(batch_deadline_ns_ - now - 1, 4000000000ull);
+            slack = std::min(slack, diff * device_.clock_hz() / 1000000000ull);
+        }
+    }
+    slack_cycles_ = slack;
+}
+
 bool Cpu::batch_must_end() {
     if (halted_ || batch_remaining_ == 0 ||
         device_.power_state() != Tlsr8258PowerState::Awake ||
@@ -543,9 +606,12 @@ bool Cpu::run_batch(std::size_t limit, std::string *fault,
     batch_active_ = true;
     batch_first_ = true;
     batch_remaining_ = limit;
+    owed_cycles_ = 0;
+    full_next_ = true;
     const uc_err error =
         uc_emu_start(reinterpret_cast<uc_engine *>(uc_), start_pc, emulation_end,
                      0, 0);
+    flush_owed();
     batch_active_ = false;
     *executed = executed_instructions_ - before;
     if (instruction)
