@@ -151,6 +151,27 @@ void test_nrf52_ppi_fork_disables_a_channel_group() {
     CHECK(c.read(Timer1 + 0x540) == 2);     // enabled again: one more, then off again
 }
 
+// A timer compare triggers RADIO TASKS_TXEN through PPI. The radio is serviced
+// before the timer in the same pass, so its ramp-up end has to be requested
+// from inside that pass; the Nordic 802.15.4 driver sends every ACK this way.
+void test_nrf52_ppi_task_from_a_service_pass_arms_the_radio() {
+    Chip c;
+    c.write(0x40001510, 15);                // RADIO MODE: IEEE 802.15.4
+    c.write(Timer0 + 0x508, 3);             // BITMODE 32
+    c.write(Timer0 + 0x510, 4);             // PRESCALER 4: 1 MHz
+    c.write(Timer0 + 0x544, 100);           // CC[1] = 100 us
+    c.write(Timer0 + 0x200, 1u << 9);       // COMPARE1_STOP
+    c.write(Ppi + 0x558, Timer0 + 0x144);   // CH9.EEP = COMPARE[1]
+    c.write(Ppi + 0x55c, 0x40001000);       // CH9.TEP = RADIO TASKS_TXEN
+    c.write(Ppi + 0x504, 1u << 9);          // CHENSET
+    c.write(Timer0 + 0x000, 1);             // START
+    c.run_to_us(50);
+    CHECK(c.read(0x40001550) == 0);         // not triggered yet: disabled
+    c.run_to_us(400);
+    CHECK(c.read(0x40001550) == 10);        // TXIDLE after the ramp-up
+    CHECK(c.read(0x40001100) == 1);         // EVENTS_READY
+}
+
 void test_nrf52_gpio_pads_and_sense() {
     Chip c;
     unsigned seen = 99;

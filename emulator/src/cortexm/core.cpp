@@ -334,8 +334,13 @@ struct Core::Impl final : Bus {
     void run_service() {
         systick_sync(core.cycles_);
         std::uint64_t next = systick_next();
+        // A peripheral serviced early in the pass can be armed by an event a later one raises
+        // (a timer compare triggering a radio task through PPI): that request_service() call
+        // lands in service_deadline while the pass runs and must not be overwritten.
+        service_deadline = std::numeric_limits<std::uint64_t>::max();
         if (service)
             next = std::min(next, service(core.cycles_));
+        next = std::min(next, service_deadline);
         service_deadline = next <= core.cycles_ ? core.cycles_ + 1 : next;
     }
 };
