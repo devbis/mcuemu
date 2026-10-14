@@ -355,7 +355,7 @@ McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
     require_map(node, "mcu");
     check_keys(node, "mcu",
                {"id", "model", "variant", "firmware", "clock_hz", "supply_mv",
-                "start_at", "radio", "rtt"});
+                "start_at", "radio", "rtt", "flash_timing"});
     McuConfig mcu;
     mcu.line = node.Mark().line + 1;
     mcu.id = required_string(node, "id", "mcu");
@@ -409,6 +409,12 @@ McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
         if (value < 1000 || value > 5500)
             fail(supply, "supply_mv must be between 1000 and 5500");
         mcu.supply_mv = static_cast<std::uint32_t>(value);
+    }
+    if (const YAML::Node timing = node["flash_timing"]) {
+        const std::string text = timing.Scalar();
+        if (text != "true" && text != "false")
+            fail(timing, "flash_timing must be true or false");
+        mcu.flash_timing = text == "true";
     }
     if (const YAML::Node start = node["start_at"])
         mcu.start_at_ns = config_duration(start, "start_at");

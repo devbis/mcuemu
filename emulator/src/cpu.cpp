@@ -127,6 +127,7 @@ void Cpu::reset(std::uint32_t pc_value) {
     recent_trace_head_ = 0;
     recent_trace_count_ = 0;
     instruction_seen_ = false;
+    icache_tags_.fill(0); // the cache is empty after a reset or a deep-sleep wake
 }
 
 std::uint32_t Cpu::reg(unsigned index) const {
@@ -343,16 +344,44 @@ void Cpu::mmio_write(uc_struct *opaque, std::uint64_t offset, unsigned size,
     }
 }
 
+std::uint32_t Cpu::fetch_penalty(std::uint64_t address) const noexcept {
+    // Flash is read through a direct-mapped instruction cache of 16-byte lines.
+    // Geometry is inferred: the SDK linker script reserves 0x800 bytes of cache
+    // RAM and a 0x100-byte tag RAM after the RAM code, which fits 128 lines with
+    // 2-byte tags. A miss reads 16 bytes over the flash SPI at half the system
+    // clock, 128 bits * 2 cycles = 256 cycles (the datasheet gives the half
+    // clock; the cost agrees with times measured on a TB03F: a cold stretch of
+    // the Zephyr radio driver took 21, 40 and 51 us where this model gives 24,
+    // 35 and 64). Code in SRAM never misses. Data reads of flash are not charged.
+    constexpr std::uint32_t miss_cycles = 256;
+    if (!flash_timing_ || address >= device_.flash().size())
+        return 0;
+    const std::uint32_t line = static_cast<std::uint32_t>(address >> 4);
+    const std::uint16_t wanted =
+        static_cast<std::uint16_t>(((line / icache_lines) & 0x7fffu) | 0x8000u);
+    return icache_tags_[line % icache_lines] == wanted ? 0 : miss_cycles;
+}
+
+void Cpu::fetch_commit(std::uint64_t address) noexcept {
+    if (!flash_timing_ || address >= device_.flash().size())
+        return;
+    const std::uint32_t line = static_cast<std::uint32_t>(address >> 4);
+    icache_tags_[line % icache_lines] =
+        static_cast<std::uint16_t>(((line / icache_lines) & 0x7fffu) | 0x8000u);
+}
+
 void Cpu::code_hook(uc_struct *opaque, std::uint64_t address,
                     std::uint32_t size, void *user_data) {
     auto *self = static_cast<Cpu *>(user_data);
     bool tick_now = true;
+    const std::uint32_t cost = estimated_cycles_per_instruction + self->fetch_penalty(address);
     if (self->batch_active_) {
         if (!self->batch_first_ && !self->full_next_ && self->batch_remaining_ != 0 &&
-            self->owed_cycles_ + estimated_cycles_per_instruction < self->slack_cycles_ &&
+            self->owed_cycles_ + cost < self->slack_cycles_ &&
             self->device_.power_state() == Tlsr8258PowerState::Awake) {
             // Nothing can need the wrapper yet: count the instruction only.
-            self->owed_cycles_ += estimated_cycles_per_instruction;
+            self->fetch_commit(address);
+            self->owed_cycles_ += cost;
             --self->batch_remaining_;
             tick_now = false;
         } else {
@@ -370,8 +399,11 @@ void Cpu::code_hook(uc_struct *opaque, std::uint64_t address,
                 return;
             }
             --self->batch_remaining_;
+            self->fetch_commit(address);
         }
     }
+    if (!self->batch_active_)
+        self->fetch_commit(address);
     const std::uint32_t previous_pc = self->previous_pc_;
     const std::uint16_t previous_instruction = self->previous_instruction_;
     const bool has_previous_instruction = self->has_previous_instruction_;
@@ -379,7 +411,7 @@ void Cpu::code_hook(uc_struct *opaque, std::uint64_t address,
     // Unicorn exposes instruction hooks but no per-instruction cycle count.
     // Use a coarse TC32 estimate so device timers advance in core cycles.
     if (tick_now) {
-        self->device_.tick(estimated_cycles_per_instruction);
+        self->device_.tick(cost);
         if (self->batch_active_) {
             self->refresh_slack();
             // While an interrupt is pending every instruction is checked, as

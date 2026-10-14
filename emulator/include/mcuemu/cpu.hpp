@@ -74,6 +74,10 @@ public:
                         std::optional<AddressRange> range = std::nullopt);
     void set_stack_trace(std::ostream *output);
     void set_trace_prefix(std::string prefix);
+    // Charges instruction fetches from flash for a cache miss (see
+    // Cpu::fetch_penalty in cpu.cpp). Off by default: the stall is an inferred
+    // model that was checked against Zephyr's radio driver on a TB03F only.
+    void set_flash_timing(bool enabled) noexcept { flash_timing_ = enabled; }
     void set_trace_limit(std::size_t limit) noexcept { trace_limit_ = limit; }
     void set_trace_after_step(std::size_t step) noexcept {
         trace_after_step_ = step;
@@ -136,6 +140,14 @@ private:
     // anything yet are only counted (`owed_cycles_`); the device is ticked for
     // the whole span when the bound `slack_cycles_` is reached, before any
     // register access, and at the end of the batch. See Tlsr8258::cycles_until_event().
+    // Instruction cache in front of the flash, off unless set_flash_timing().
+    static constexpr unsigned icache_lines = 128;
+    bool flash_timing_{false};
+    std::array<std::uint16_t, icache_lines> icache_tags_{};
+    // Cycles an instruction fetch at `address` stalls; `fetch_commit` fills the
+    // line once the instruction really executes (a batch can stop before it).
+    std::uint32_t fetch_penalty(std::uint64_t address) const noexcept;
+    void fetch_commit(std::uint64_t address) noexcept;
     std::uint64_t owed_cycles_{0};
     std::uint64_t slack_cycles_{0};
     bool full_next_{true};

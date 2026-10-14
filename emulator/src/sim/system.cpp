@@ -47,6 +47,7 @@ const McuRegistry &McuRegistry::builtin() {
                 name, model, config.clock_hz.value_or(48000000));
             if (config.supply_mv)
                 mcu->device().set_supply_mv(*config.supply_mv);
+            mcu->cpu().set_flash_timing(config.flash_timing);
             return mcu;
         });
         r.add("ca51f253l3", [](const McuConfig &config, const std::string &name) {
@@ -56,6 +57,8 @@ const McuRegistry &McuRegistry::builtin() {
             if (config.supply_mv)
                 throw std::invalid_argument(
                     "ca51f253l3 does not model its supply; remove 'supply_mv'");
+            if (config.flash_timing)
+                throw std::invalid_argument("flash_timing is only modelled for tlsr8258");
             return std::make_unique<Ca51F253L3Mcu>(
                 name, config.clock_hz.value_or(24000000));
         });
@@ -65,6 +68,8 @@ const McuRegistry &McuRegistry::builtin() {
             if (config.clock_hz)
                 throw std::invalid_argument(
                     "nrf52840 runs at a fixed 64 MHz; remove 'clock_hz'");
+            if (config.flash_timing)
+                throw std::invalid_argument("flash_timing is only modelled for tlsr8258");
             auto mcu = std::make_unique<Nrf52840Mcu>(name);
             if (config.supply_mv)
                 mcu->chip().set_supply_mv(*config.supply_mv);
@@ -79,6 +84,8 @@ const McuRegistry &McuRegistry::builtin() {
             if (config.supply_mv)
                 throw std::invalid_argument(
                     "efr32mg21 does not model its supply; remove 'supply_mv'");
+            if (config.flash_timing)
+                throw std::invalid_argument("flash_timing is only modelled for tlsr8258");
             return std::make_unique<Efr32mg21Mcu>(name);
         });
         return r;

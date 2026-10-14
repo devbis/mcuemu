@@ -26,6 +26,7 @@ void test_tlsr_divider_registers();
 void test_tlsr_uart_fifo_and_virtual_timing();
 void test_tlsr_uart_irq_enters_and_returns_from_irq_mode();
 void test_tlsr_batched_run_matches_single_steps();
+void test_tlsr_flash_timing_charges_cache_misses();
 void test_virtual_air();
 void test_tlsr_radio_dma_packet_exchange();
 void test_c_api_register_access();
@@ -65,6 +66,7 @@ int main() {
     RUN(test_tlsr_uart_fifo_and_virtual_timing);
     RUN(test_tlsr_uart_irq_enters_and_returns_from_irq_mode);
     RUN(test_tlsr_batched_run_matches_single_steps);
+    RUN(test_tlsr_flash_timing_charges_cache_misses);
     RUN(test_virtual_air);
     RUN(test_tlsr_radio_dma_packet_exchange);
     RUN(test_c_api_register_access);

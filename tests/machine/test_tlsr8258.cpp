@@ -564,6 +564,35 @@ void test_tlsr_uart_irq_enters_and_returns_from_irq_mode() {
     CHECK(!device.interrupt_pending());
 }
 
+// Flash timing: a fetch from flash that misses the 128-line, 16-byte-line
+// instruction cache stalls for 256 cycles; SRAM code and warm lines do not.
+void test_tlsr_flash_timing_charges_cache_misses() {
+    std::vector<std::uint8_t> bytes;
+    for (int i = 0; i != 300; ++i) {
+        bytes.push_back(0x00);
+        bytes.push_back(0x00);
+    }
+    bytes.push_back(0x00);
+    bytes.push_back(0xcf); // stop marker
+    const std::uint64_t instructions = 301;
+    const std::uint64_t lines = (bytes.size() + 15) / 16;
+
+    auto run = [&](bool timing) {
+        mcuemu::Tlsr8258 device;
+        device.load_firmware(bytes);
+        mcuemu::Cpu cpu(device);
+        cpu.set_flash_timing(timing);
+        const auto result = cpu.run(100000);
+        CHECK(result.reason == mcuemu::StopReason::Halted);
+        return device.time_ns();
+    };
+    const std::uint64_t plain = run(false);
+    const std::uint64_t timed = run(true);
+    // 3 cycles per instruction at 48 MHz, plus a 256-cycle fill per new line.
+    CHECK(plain == instructions * 3 * 1000000000ull / 48000000ull);
+    CHECK(timed == (instructions * 3 + lines * 256) * 1000000000ull / 48000000ull);
+}
+
 void test_tlsr_batched_run_matches_single_steps() {
     std::vector<std::uint16_t> program(300, 0x0000);
     program.push_back(0xcf00); // stop marker

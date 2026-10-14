@@ -238,6 +238,14 @@ strobes; it runs after reset) and with its clock selected (0x74c bit 4). A
 firmware that starts it with 0x74c = 0 gets a frozen counter, as on the board
 (`firmware_zephyr_stimer_wake`). Do not make the counter run unconditionally.
 
+`flash_timing: true` (YAML, tlsr8258 only, off by default) models the flash
+instruction cache: a Zephyr end device does not take its parent's Transport-Key
+without it, because cold flash code is ~10x slower than the 3-cycles-per-instruction
+estimate and the MAC reads the ACK's Frame Pending bit later than the ACK arrives
+(`docs/tlsr8258.md`, `firmware_zephyr_ed_poll`). The Telink SDK images and their
+tests are not run with it. Frames last their on-air time including the FCS (8 bytes
+of overhead for 802.15.4 in `VirtualAir::airtime_ns`).
+
 Peripheral behaviour is documented in `docs/tlsr8258-register-model.md`; check
 it before changing registers. Facts that mattered: UART DMA (rx/tx channels,
 idle-timeout packet close) is modelled because SDK drivers use it; the ADC
