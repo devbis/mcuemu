@@ -153,6 +153,32 @@ bool VirtualAir::decodable(const RadioFrame &frame, const std::string &node_name
     return sinr_db >= propagation_.sinr_threshold_db;
 }
 
+std::vector<RadioFrame> VirtualAir::in_flight(const std::string &node,
+                                              RadioProtocol protocol,
+                                              std::uint8_t channel,
+                                              std::uint64_t at_ns,
+                                              std::uint64_t lead_ns) const {
+    std::vector<RadioFrame> result;
+    for (const RadioFrame &frame : frames_) {
+        if (frame.end_ns <= at_ns || frame.start_ns + lead_ns > at_ns ||
+            frame.source == node || frame.protocol != protocol ||
+            frame.channel != channel ||
+            (!frame.destination.empty() && frame.destination != node))
+            continue;
+        RadioFrame heard = frame;
+        if (propagation_.model == Propagation::Model::LogDistance) {
+            const RadioNodeConfig defaults;
+            const RadioNodeConfig *receiver = this->node(node);
+            const double rssi = rx_power_dbm(frame, node);
+            if (rssi < (receiver ? receiver : &defaults)->sensitivity_dbm)
+                continue;
+            heard.rssi_dbm = static_cast<int>(std::lround(rssi));
+        }
+        result.push_back(std::move(heard));
+    }
+    return result;
+}
+
 std::vector<RadioFrame> VirtualAir::receive(const std::string &node,
                                            RadioProtocol protocol,
                                            std::uint8_t channel,

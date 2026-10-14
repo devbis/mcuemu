@@ -32,6 +32,10 @@ constexpr EventRegister event_registers[] = {
 };
 
 constexpr std::uint64_t DisableUs = 6, PollUs = 16, CcaUs = 128, EdUs = 128, SfdNs = 128000;
+// Preamble (4 bytes) and SFD (1 byte): SYNC and ADDRESS come this long after the frame starts (FRAMESTART
+// follows the PHR 32 us later; folded in). The driver's ACK timeout is stopped by ADDRESS, so it must not
+// wait for the frame end.
+constexpr std::uint64_t AddressNs = 160000;
 constexpr std::uint32_t ModeIeee802154 = 15;
 
 std::uint16_t fcs16(const std::uint8_t *data, std::size_t length) {
@@ -217,6 +221,7 @@ void Radio::start() {
     if (state_ == State::RxIdle) {
         state_ = State::Rx;
         rx_start_ns_ = last_poll_ns_ = to_ns(t);
+        rx_lock_id_ = 0;
         if (chip_.trace())
             *chip_.trace() << "RADIO listening from " << rx_start_ns_ << " ch " << int(channel()) << '\n';
         request_service(t + PollUs * (clock_hz() / 1000000u));
@@ -276,9 +281,13 @@ void Radio::deliver(const mcuemu::RadioFrame &frame, std::uint64_t) {
     crcstatus_ = 1;
     rxcrc_ = crc;
     state_ = State::RxIdle;
-    raise(Sync);
-    raise(Address);
-    raise(FrameStart);
+    // poll_air() raised these when the frame's preamble went by.
+    if (rx_lock_id_ != frame.id) {
+        raise(Sync);
+        raise(Address);
+        raise(FrameStart);
+    }
+    rx_lock_id_ = 0;
     raise(Payload);
     raise(End);
     raise(CrcOk);
@@ -290,6 +299,19 @@ void Radio::poll_air(std::uint64_t ns) {
         return;
     const std::uint64_t after = last_poll_ns_;
     last_poll_ns_ = ns;
+    if (rx_lock_id_ == 0) {
+        for (const mcuemu::RadioFrame &frame :
+             air_->in_flight(node_, mcuemu::RadioProtocol::Zigbee802154, channel(), ns, AddressNs)) {
+            if (frame.start_ns + SfdNs < rx_start_ns_)
+                continue;
+            rx_lock_id_ = frame.id;
+            rx_lock_end_ns_ = frame.end_ns;
+            raise(Sync);
+            raise(Address);
+            raise(FrameStart);
+            break;
+        }
+    }
     for (const mcuemu::RadioFrame &frame :
          air_->receive(node_, mcuemu::RadioProtocol::Zigbee802154, channel(), ns, after)) {
         if (chip_.trace())
@@ -304,6 +326,8 @@ void Radio::poll_air(std::uint64_t ns) {
         deliver(frame, ns);
         break;
     }
+    if (rx_lock_id_ != 0 && ns >= rx_lock_end_ns_)
+        rx_lock_id_ = 0; // the frame ended without being received (collision)
 }
 
 std::uint64_t Radio::reschedule() {

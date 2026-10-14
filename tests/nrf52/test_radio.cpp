@@ -79,6 +79,44 @@ void test_nrf52_radio_frame_exchange() {
     CHECK(air.frames()[0].channel == 15 && air.frames()[0].payload.size() == 5);
 }
 
+// ADDRESS (and SYNC, FRAMESTART) come when the preamble and SFD have gone by, not
+// when the frame ends: the Nordic driver stops its ACK timeout on ADDRESS, and
+// an ACK that is only "heard" at its end arrives after that timeout has fired.
+void test_nrf52_radio_address_event_comes_before_the_frame_ends() {
+    mcuemu::VirtualAir air;
+    air.set_node("a", {});
+    air.set_node("b", {});
+    Node a(air, "a"), b(air, "b");
+    b.write(0x504, 0x20000100);
+    b.write(0x200, (1u << 19) | (1u << 1));
+    b.write(0x004, 1);
+    const std::uint8_t mac[5] = {0x41, 0x88, 0x07, 0xaa, 0xbb};
+    a.ram(0x200)[0] = 7;
+    std::memcpy(a.ram(0x201), mac, 5);
+    a.write(0x504, 0x20000200);
+    a.write(0x200, (1u << 18) | (1u << 20));
+    a.write(0x000, 1);
+
+    std::uint64_t address_us = 0;
+    for (std::uint64_t t = 5; t <= 1500 && address_us == 0; t += 5) {
+        a.chip.run(t * Us);
+        b.chip.run(t * Us);
+        if (b.read(0x104) == 1)
+            address_us = t;
+    }
+    CHECK(address_us != 0);
+    CHECK(b.read(0x10c) == 0);               // END: the frame is still on the air
+    CHECK(b.read(0x168) == 1);               // SYNC
+    CHECK(b.read(0x138) == 1);               // FRAMESTART
+    CHECK(air.frames().size() == 1);
+    CHECK(address_us * 1000 < air.frames()[0].end_ns);
+    b.write(0x104, 0);                       // clear ADDRESS: it must not come again at the end
+    run_both(a, b, 1500);
+    CHECK(b.read(0x10c) == 1);               // END
+    CHECK(b.read(0x130) == 1);               // CRCOK
+    CHECK(b.read(0x104) == 0);
+}
+
 void test_nrf52_radio_cca_sees_a_frame_on_air() {
     mcuemu::VirtualAir air;
     air.set_node("a", {});

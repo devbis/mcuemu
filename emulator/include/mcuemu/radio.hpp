@@ -99,6 +99,14 @@ public:
                                     std::uint8_t channel,
                                     std::uint64_t at_ns,
                                     std::uint64_t after_ns = 0);
+    // Frames of other nodes that are on the air at `at_ns` and have been for
+    // `lead_ns` (a receiver can lock onto them), heard at their power only:
+    // collisions are judged by receive() once the frame has ended.
+    std::vector<RadioFrame> in_flight(const std::string &node,
+                                      RadioProtocol protocol,
+                                      std::uint8_t channel,
+                                      std::uint64_t at_ns,
+                                      std::uint64_t lead_ns) const;
     const std::vector<RadioFrame> &frames() const noexcept { return frames_; }
     const std::vector<RadioReception> &receptions() const noexcept {
         return receptions_;

@@ -466,6 +466,7 @@ private:
     std::uint64_t tx_end_ns_{0};
     bool tx_active_{false};
     std::uint64_t rx_start_ns_{0}, last_poll_ns_{0};
+    std::uint64_t rx_lock_id_{0}, rx_lock_end_ns_{0}; // frame the receiver synced to before it ended
     std::uint64_t cca_end_{Never}, ed_end_{Never}, rssi_end_{Never};
     std::uint64_t cca_start_ns_{0};
     bool cca_active_{false}, ed_active_{false};
