@@ -252,6 +252,14 @@ public:
     bool inject_uart_rx(std::uint8_t value);
     std::vector<std::uint8_t> take_uart_transmitted();
     const std::vector<std::uint8_t> &flash() const noexcept { return flash_; }
+    // Bytes at the bottom of the code address space that the CPU fetches from
+    // SRAM instead of flash: the SDK startup copies `.vectors` and `.ram_code`
+    // there and writes their size (rounded up to 256) divided by 256 to 0x60c
+    // (the start of the instruction-cache tag RAM, which follows the RAM code).
+    // Inferred: the CPU treats everything below that tag start as SRAM.
+    std::uint32_t ram_code_bytes() const noexcept {
+        return static_cast<std::uint32_t>(registers_[0x60c]) << 8;
+    }
     // Flash bytes changed through the MSPI program/erase commands since the
     // last call; the CPU wrapper mirrors them into the engine's flash mapping.
     bool take_flash_dirty(std::uint32_t &begin, std::uint32_t &end) noexcept;

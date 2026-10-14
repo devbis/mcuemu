@@ -362,7 +362,7 @@ std::uint32_t Cpu::fetch_penalty(std::uint64_t address) const noexcept {
     // 5-10 ms, the model 6-11 ms). Code in SRAM never misses; data reads of
     // flash are not charged.
     constexpr std::uint32_t miss_cycles = 120;
-    if (!flash_timing_ || address >= device_.flash().size())
+    if (!flash_timing_ || address >= device_.flash().size() || address < device_.ram_code_bytes())
         return 0;
     const std::uint32_t line = static_cast<std::uint32_t>(address >> 4);
     const std::uint16_t wanted =
@@ -371,7 +371,7 @@ std::uint32_t Cpu::fetch_penalty(std::uint64_t address) const noexcept {
 }
 
 void Cpu::fetch_commit(std::uint64_t address) noexcept {
-    if (!flash_timing_ || address >= device_.flash().size())
+    if (!flash_timing_ || address >= device_.flash().size() || address < device_.ram_code_bytes())
         return;
     const std::uint32_t line = static_cast<std::uint32_t>(address >> 4);
     icache_tags_[line % icache_lines] =

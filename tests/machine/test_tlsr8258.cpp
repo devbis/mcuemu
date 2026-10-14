@@ -618,6 +618,18 @@ void test_tlsr_flash_timing_charges_cache_misses() {
     // 3 cycles per instruction at 48 MHz, plus a 120-cycle fill per new line.
     CHECK(plain == instructions * 3 * 1000000000ull / 48000000ull);
     CHECK(timed == (instructions * 3 + lines * 120) * 1000000000ull / 48000000ull);
+
+    // The SDK startup writes the RAM code size (in 256-byte units) to 0x60c; code below it
+    // is fetched from SRAM, so a firmware that sets it never stalls on those lines.
+    mcuemu::Tlsr8258 device;
+    device.load_firmware(bytes);
+    device.write8(0x80060c, 3); // 768 bytes, covers the whole program
+    CHECK(device.ram_code_bytes() == 768);
+    mcuemu::Cpu cpu(device);
+    cpu.set_flash_timing(true);
+    const auto result = cpu.run(100000);
+    CHECK(result.reason == mcuemu::StopReason::Halted);
+    CHECK(device.time_ns() == plain);
 }
 
 void test_tlsr_batched_run_matches_single_steps() {
