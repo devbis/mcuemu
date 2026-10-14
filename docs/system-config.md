@@ -27,7 +27,7 @@ devices:
         clock_hz: 48MHz    # 48000000 | 48MHz | 32kHz
         supply_mv: 3300    # tlsr8258 only: supply seen by the ADC's VBAT input (default 3300)
         start_at: 100us    # power-on delay on the world timeline
-        flash_timing: true # tlsr8258 only: charge flash instruction-cache misses (default false)
+        flash_timing: true # tlsr8258 only: flash instruction-cache and register-bus timing (default true)
         rtt: { address: 0x20000100 }   # optional: SEGGER RTT control block
         radio:             # optional: attach to a medium
           air: air0

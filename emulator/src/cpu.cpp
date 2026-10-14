@@ -18,6 +18,9 @@ constexpr std::uint32_t svc_mode = 0x13;
 constexpr std::uint32_t mode_mask = 0x1f;
 constexpr std::uint64_t emulation_end = std::uint64_t{1} << 32;
 constexpr std::uint32_t estimated_cycles_per_instruction = 3;
+// Extra cycles for an access to the register window with flash_timing (inferred
+// together with the cache miss cost, see Cpu::fetch_penalty).
+constexpr std::uint32_t register_access_cycles = 40;
 
 std::string instruction_text(std::uint32_t pc, std::uint16_t instruction) {
     std::ostringstream out;
@@ -260,6 +263,8 @@ std::uint64_t Cpu::mmio_read(uc_struct *opaque, std::uint64_t offset,
     std::uint64_t value = 0;
     self->flush_owed();
     self->full_next_ = true;
+    if (self->flash_timing_)
+        self->owed_cycles_ += register_access_cycles;
     try {
         if (size > sizeof(value))
             throw std::runtime_error("unsupported MMIO read width");
@@ -302,6 +307,8 @@ void Cpu::mmio_write(uc_struct *opaque, std::uint64_t offset, unsigned size,
     auto *self = binding->cpu;
     self->flush_owed();
     self->full_next_ = true;
+    if (self->flash_timing_)
+        self->owed_cycles_ += register_access_cycles;
     try {
         if (size > sizeof(value))
             throw std::runtime_error("unsupported MMIO write width");
@@ -348,12 +355,13 @@ std::uint32_t Cpu::fetch_penalty(std::uint64_t address) const noexcept {
     // Flash is read through a direct-mapped instruction cache of 16-byte lines.
     // Geometry is inferred: the SDK linker script reserves 0x800 bytes of cache
     // RAM and a 0x100-byte tag RAM after the RAM code, which fits 128 lines with
-    // 2-byte tags. A miss reads 16 bytes over the flash SPI at half the system
-    // clock, 128 bits * 2 cycles = 256 cycles (the datasheet gives the half
-    // clock; the cost agrees with times measured on a TB03F: a cold stretch of
-    // the Zephyr radio driver took 21, 40 and 51 us where this model gives 24,
-    // 35 and 64). Code in SRAM never misses. Data reads of flash are not charged.
-    constexpr std::uint32_t miss_cycles = 256;
+    // 2-byte tags. The datasheet puts the flash SPI at half the system clock; a
+    // miss costs 120 cycles, chosen with the register-access cost below to fit
+    // times measured on a TB03F (Zephyr radio driver: 21, 40, 51 us per stretch,
+    // the model gives 19, 33, 50; Telink sample light answering ZDO requests in
+    // 5-10 ms, the model 6-11 ms). Code in SRAM never misses; data reads of
+    // flash are not charged.
+    constexpr std::uint32_t miss_cycles = 120;
     if (!flash_timing_ || address >= device_.flash().size())
         return 0;
     const std::uint32_t line = static_cast<std::uint32_t>(address >> 4);

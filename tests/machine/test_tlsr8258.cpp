@@ -565,7 +565,7 @@ void test_tlsr_uart_irq_enters_and_returns_from_irq_mode() {
 }
 
 // Flash timing: a fetch from flash that misses the 128-line, 16-byte-line
-// instruction cache stalls for 256 cycles; SRAM code and warm lines do not.
+// instruction cache stalls for 120 cycles; SRAM code and warm lines do not.
 void test_tlsr_flash_timing_charges_cache_misses() {
     std::vector<std::uint8_t> bytes;
     for (int i = 0; i != 300; ++i) {
@@ -588,9 +588,9 @@ void test_tlsr_flash_timing_charges_cache_misses() {
     };
     const std::uint64_t plain = run(false);
     const std::uint64_t timed = run(true);
-    // 3 cycles per instruction at 48 MHz, plus a 256-cycle fill per new line.
+    // 3 cycles per instruction at 48 MHz, plus a 120-cycle fill per new line.
     CHECK(plain == instructions * 3 * 1000000000ull / 48000000ull);
-    CHECK(timed == (instructions * 3 + lines * 256) * 1000000000ull / 48000000ull);
+    CHECK(timed == (instructions * 3 + lines * 120) * 1000000000ull / 48000000ull);
 }
 
 void test_tlsr_batched_run_matches_single_steps() {

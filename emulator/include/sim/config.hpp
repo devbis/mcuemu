@@ -69,7 +69,7 @@ struct McuConfig {
     std::vector<FirmwareImage> images;
     std::optional<std::uint32_t> clock_hz;
     std::optional<std::uint32_t> supply_mv; // supply voltage (default 3300)
-    bool flash_timing{false}; // tlsr8258: charge flash fetches for cache misses
+    std::optional<bool> flash_timing; // tlsr8258: flash and register-bus timing (default on)
     std::uint64_t start_at_ns{0};
     std::optional<RadioAttachConfig> radio;
     std::optional<RttConfig> rtt;

@@ -29,7 +29,9 @@ devices:
 scenario:
   events:
     # The firmware scans once at power-up, before the coordinator has formed
-    # its network, and steers again after 60 s, so the join happens at about 65 s.
+    # its network (the timing model makes the scan late enough to find it, so it
+    # joins at about 7 s; without it the join came at about 65 s), and steers again
+    # after 60 s otherwise. 80 s covers both.
     - { at: 8s, endpoint: sensor.sensor.temperature_c, set: 26.3 }
     - { at: 8s, endpoint: sensor.sensor.humidity, set: 61 }
 

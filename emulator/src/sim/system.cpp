@@ -47,7 +47,7 @@ const McuRegistry &McuRegistry::builtin() {
                 name, model, config.clock_hz.value_or(48000000));
             if (config.supply_mv)
                 mcu->device().set_supply_mv(*config.supply_mv);
-            mcu->cpu().set_flash_timing(config.flash_timing);
+            mcu->cpu().set_flash_timing(config.flash_timing.value_or(true));
             return mcu;
         });
         r.add("ca51f253l3", [](const McuConfig &config, const std::string &name) {
