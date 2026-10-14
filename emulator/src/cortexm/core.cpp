@@ -131,9 +131,11 @@ struct Core::Impl final : Bus {
         if (uc_open(UC_ARCH_ARM, static_cast<uc_mode>(UC_MODE_THUMB | UC_MODE_MCLASS), &uc) != UC_ERR_OK)
             throw std::runtime_error("cannot create the ARM engine");
         core.uc_ = uc;
-        const uc_cpu_arm model = core.config_.model == Model::M3 ? UC_CPU_ARM_CORTEX_M3
-                                                                 : UC_CPU_ARM_CORTEX_M4;
+        const uc_cpu_arm model = core.config_.model == Model::M3    ? UC_CPU_ARM_CORTEX_M3
+                                 : core.config_.model == Model::M33 ? UC_CPU_ARM_CORTEX_M33
+                                                                    : UC_CPU_ARM_CORTEX_M4;
         check(uc_ctl_set_cpu_model(uc, model), "set CPU model");
+
         for (auto &region : regions) {
             const uc_prot perms = region->writable
                                       ? static_cast<uc_prot>(UC_PROT_READ | UC_PROT_WRITE | UC_PROT_EXEC)
@@ -161,6 +163,9 @@ struct Core::Impl final : Bus {
         std::uint32_t priority_bits = core.config_.priority_bits;
         check(uc_arm_nvic(uc, UC_ARM_NVIC_CONFIG, core.config_.irq_count, &priority_bits, 0),
               "configure NVIC");
+        if (core.config_.model == Model::M33)
+            check(uc_arm_nvic(uc, UC_ARM_NVIC_NO_SECURITY, 0, nullptr, 0),
+                  "drop the Security Extension");
     }
 
     static std::uint64_t private_read_thunk(uc_engine *, std::uint64_t offset, unsigned size,
@@ -399,7 +404,7 @@ bool Core::write_memory(std::uint32_t address, const void *data, std::size_t len
     return uc_ && uc_mem_write(uc_, address, data, length) == UC_ERR_OK;
 }
 
-void Core::reset() {
+void Core::reset(std::uint32_t vector_table) {
     impl_->build();
     impl_->event = false;
     impl_->deferred.clear();
@@ -409,7 +414,9 @@ void Core::reset() {
     impl_->dwt_ctrl = 0;
     sleeping_ = false;
     std::uint32_t vector[2] = {0, 0};
-    read_memory(0, vector, sizeof vector);
+    read_memory(vector_table, vector, sizeof vector);
+    if (vector_table != 0)
+        uc_arm_nvic(uc_, UC_ARM_NVIC_SCS_WRITE, 0xd08, &vector_table, 4);
     std::uint32_t sp = vector[0];
     std::uint32_t pc = vector[1] & ~1u;
     uc_reg_write(uc_, UC_ARM_REG_SP, &sp);

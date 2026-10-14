@@ -11,7 +11,8 @@ struct uc_struct;
 
 namespace cortexm {
 
-enum class Model { M3, M4 };
+// M33 is ARMv8-M Mainline without the Security Extension (one security state).
+enum class Model { M3, M4, M33 };
 
 // Peripheral window: a chip model implements this for each MMIO range it
 // maps. Addresses are absolute; `size` is 1, 2 or 4 bytes.
@@ -79,8 +80,10 @@ public:
     bool write_memory(std::uint32_t address, const void *data, std::size_t length);
 
     // ---- execution -------------------------------------------------------
-    // Loads SP and PC from the vector table at 0 and clears the NVIC.
-    void reset();
+    // Loads SP and PC from the vector table at `vector_table` (VTOR is set to
+    // it too) and clears the NVIC. A chip with a boot loader in front of the
+    // application starts the application directly this way.
+    void reset(std::uint32_t vector_table = 0);
     // Runs until `until_cycle` (absolute core cycles) or a stop condition.
     // While the core sleeps in WFI/WFE the clock jumps to the next event.
     RunResult run(std::uint64_t until_cycle);

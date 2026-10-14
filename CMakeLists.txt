@@ -49,7 +49,7 @@ target_compile_options(mcuemu-core PRIVATE ${MCUEMU_WARNING_FLAGS})
 target_link_libraries(mcuemu-core PUBLIC unicorn)
 
 add_executable(mcuemu emulator/src/main.cpp)
-target_link_libraries(mcuemu PRIVATE mcuemu-core mcs51emu nrf52emu simcore)
+target_link_libraries(mcuemu PRIVATE mcuemu-core mcs51emu nrf52emu efr32emu simcore)
 
 add_library(mcs51emu
     emulator/src/mcs51/ca51f253l3.cpp
@@ -84,6 +84,17 @@ target_include_directories(nrf52emu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/emulator
 target_include_directories(nrf52emu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(nrf52emu PRIVATE ${MCUEMU_WARNING_FLAGS})
 target_link_libraries(nrf52emu PUBLIC cortexm mcuemu-core)
+
+add_library(efr32emu
+    emulator/src/efr32/efr32mg21.cpp
+    emulator/src/efr32/blocks.cpp
+    emulator/src/efr32/radio.cpp
+    emulator/src/efr32/run_command.cpp
+)
+target_include_directories(efr32emu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/emulator/src)
+target_include_directories(efr32emu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
+target_compile_options(efr32emu PRIVATE ${MCUEMU_WARNING_FLAGS})
+target_link_libraries(efr32emu PUBLIC cortexm mcuemu-core)
 
 find_package(yaml-cpp QUIET)
 if(NOT yaml-cpp_FOUND)
@@ -155,10 +166,11 @@ add_library(simcore
     emulator/src/sim/tlsr8258_mcu.cpp
     emulator/src/sim/ca51f253l3_mcu.cpp
     emulator/src/sim/nrf52840_mcu.cpp
+    emulator/src/sim/efr32mg21_mcu.cpp
 )
 target_include_directories(simcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(simcore PRIVATE ${MCUEMU_WARNING_FLAGS})
-target_link_libraries(simcore PUBLIC mcuemu-core mcs51emu nrf52emu ${MCUEMU_YAML_TARGET} lua54
+target_link_libraries(simcore PUBLIC mcuemu-core mcs51emu nrf52emu efr32emu ${MCUEMU_YAML_TARGET} lua54
     nlohmann_json::nlohmann_json)
 if(WIN32)
     target_link_libraries(simcore PUBLIC ws2_32)
@@ -192,6 +204,14 @@ if(MCUEMU_BUILD_TESTS)
     target_link_libraries(nrf52emu-tests PRIVATE nrf52emu)
     add_test(NAME nrf52emu-tests COMMAND nrf52emu-tests)
 
+    add_executable(efr32emu-tests
+        tests/efr32/test_main.cpp
+        tests/efr32/test_efr32.cpp
+    )
+    target_include_directories(efr32emu-tests PRIVATE tests/efr32)
+    target_link_libraries(efr32emu-tests PRIVATE efr32emu)
+    add_test(NAME efr32emu-tests COMMAND efr32emu-tests)
+
     add_executable(simcore-tests
         tests/sim/test_sim.cpp
         tests/sim/test_config.cpp
@@ -201,6 +221,7 @@ if(MCUEMU_BUILD_TESTS)
         tests/sim/test_radio_medium.cpp
         tests/sim/test_attach.cpp
         tests/sim/test_nrf52.cpp
+        tests/sim/test_efr32.cpp
         tests/sim/test_control.cpp
     )
     target_link_libraries(simcore-tests PRIVATE simcore)
@@ -302,6 +323,23 @@ if(MCUEMU_BUILD_TESTS)
                         "$<TARGET_FILE:mcuemu>"
                         "${CMAKE_CURRENT_SOURCE_DIR}/examples/nrf52840_zigbee.yaml")
             set_tests_properties(firmware_nrf52840_zigbee_join PROPERTIES
+                TIMEOUT 300
+                LABELS "firmware;zigbee"
+            )
+        endif()
+    endif()
+
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/firmware/efr32mg21-sensor.bin" AND
+       EXISTS "${MCUEMU_SAMPLE_GW_FIRMWARE}")
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            add_test(
+                NAME firmware_efr32mg21_zigbee_join
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_efr32mg21_zigbee_join.py"
+                        "$<TARGET_FILE:mcuemu>"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/examples/efr32mg21_zigbee.yaml")
+            set_tests_properties(firmware_efr32mg21_zigbee_join PROPERTIES
                 TIMEOUT 300
                 LABELS "firmware;zigbee"
             )

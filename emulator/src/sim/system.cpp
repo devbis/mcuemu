@@ -1,6 +1,7 @@
 #include "sim/system.hpp"
 
 #include "sim/ca51f253l3_mcu.hpp"
+#include "sim/efr32mg21_mcu.hpp"
 #include "sim/nrf52840_mcu.hpp"
 #include "sim/tlsr8258_mcu.hpp"
 
@@ -68,6 +69,17 @@ const McuRegistry &McuRegistry::builtin() {
             if (config.supply_mv)
                 mcu->chip().set_supply_mv(*config.supply_mv);
             return mcu;
+        });
+        r.add("efr32mg21", [](const McuConfig &config, const std::string &name) {
+            if (config.variant)
+                throw std::invalid_argument("efr32mg21 has no variants; remove 'variant'");
+            if (config.clock_hz)
+                throw std::invalid_argument(
+                    "efr32mg21 runs at a fixed 38.4 MHz; remove 'clock_hz'");
+            if (config.supply_mv)
+                throw std::invalid_argument(
+                    "efr32mg21 does not model its supply; remove 'supply_mv'");
+            return std::make_unique<Efr32mg21Mcu>(name);
         });
         return r;
     }();
