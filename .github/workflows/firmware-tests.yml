@@ -1,0 +1,347 @@
+name: Firmware tests
+
+# Runs real firmware images on the emulator built by "Build mcuemu".
+#
+# 1. `prepare` finds the build run whose Linux binary is tested.
+# 2. The `firmware-*` jobs build or download every image from source (Telink SDK
+#    samples, z03mmc, the zigbee-rs plug and nRF52840 sensor, the thermostat
+#    releases). Each image is its own artifact, so one broken build only fails
+#    the tests that need it.
+# 3. `test` runs one job per scenario. Scenarios are independent
+#    (`fail-fast: false`). The Zigbee scenarios pass when the device joins the
+#    network and the two sides exchange data (tests/firmware/zigbee_air_check.py).
+#    UART and RTT output goes to the job log and to the `logs-*` artifacts.
+#
+# Images with no buildable source are committed in tests/firmware-images/.
+
+on:
+  workflow_run:
+    workflows: ["Build mcuemu"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Build mcuemu run to test (empty: the latest successful run on main)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: firmware-tests-${{ github.event.workflow_run.head_branch || github.ref }}
+  cancel-in-progress: true
+
+env:
+  TELINK_SDK_REF: V3.7.2.0
+  TC32_GCC_REPOSITORY: devbis/tc32          # branch `linux`, as in the z03mmc workflow
+  Z03MMC_REPOSITORY: devbis/z03mmc
+  PLUGS_REPOSITORY: faronov/zigbee-rs-plugs
+  ZIGBEE_RS_REPOSITORY: devbis/zigbee-rs
+  ZIGBEE_RS_REF: nrf-experiment             # has the TCLK-exchange fixes the nRF image needs
+  ZIGBEE_RS_RUST_TOOLCHAIN: nightly-2026-03-23
+  TC32_RUST_URL: https://github.com/modern-tc32/rust/releases/download/tc32-1.99.0-20261009-d79c44/tc32-rust-toolchain-linux-amd64.tar.gz
+  TC32_RUST_SHA256: a3b1e187a03311d00551e0df33b78746e5f1d853d5bb48f4b2977583d33e9356
+  THERMOSTAT_BASE: https://github.com/slacky1965/tuya_thermostat_full_custom_r02_zrd/raw/refs/heads/main/bin
+
+jobs:
+  prepare:
+    name: Find the emulator build
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    outputs:
+      run_id: ${{ steps.run.outputs.run_id }}
+      sha: ${{ steps.run.outputs.sha }}
+    steps:
+      - id: run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_RUN_ID: ${{ github.event.workflow_run.id }}
+          INPUT_RUN_ID: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+          run_id="${EVENT_RUN_ID:-$INPUT_RUN_ID}"
+          if [ -z "$run_id" ]; then
+            run_id="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build.yml --branch main \
+              --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
+          fi
+          sha="$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json headSha --jq .headSha)"
+          echo "Testing build run $run_id at $sha" >> "$GITHUB_STEP_SUMMARY"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+  # ------------------------------------------------------------------ images
+
+  firmware-telink:
+    name: Telink ${{ matrix.app }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { app: sampleGW,    image: telink-gw }
+          - { app: sampleLight, image: telink-light }
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - name: Get the tc32 toolchain and the SDK
+        run: |
+          set -euo pipefail
+          git clone --depth 1 -b linux "https://github.com/$TC32_GCC_REPOSITORY.git" "$RUNNER_TEMP/tc32"
+          git clone --depth 1 -b "$TELINK_SDK_REF" https://github.com/telink-semi/telink_zigbee_sdk.git "$RUNNER_TEMP/sdk"
+      - name: Build ${{ matrix.app }} (TLSR8258, EVK v1.2)
+        run: |
+          set -euo pipefail
+          cmake -S tests/ci/telink -B build -DAPP=${{ matrix.app }} \
+            -DSDK_PREFIX="$RUNNER_TEMP/sdk/tl_zigbee_sdk" -DTOOLCHAIN_PREFIX="$RUNNER_TEMP/tc32"
+          cmake --build build --target ${{ matrix.app }}.bin --parallel
+          mkdir -p out
+          cp build/${{ matrix.app }}.bin out/${{ matrix.image }}.bin
+          sha256sum out/*.bin
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fw-${{ matrix.image }}
+          path: out/*.bin
+          if-no-files-found: error
+
+  firmware-z03mmc:
+    name: z03mmc
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get the sources, the tc32 toolchain and the SDK
+        run: |
+          set -euo pipefail
+          git clone --depth 1 "https://github.com/$Z03MMC_REPOSITORY.git" z03mmc
+          git clone --depth 1 -b linux "https://github.com/$TC32_GCC_REPOSITORY.git" "$RUNNER_TEMP/tc32"
+          git clone --depth 1 -b "$TELINK_SDK_REF" https://github.com/telink-semi/telink_zigbee_sdk.git "$RUNNER_TEMP/sdk"
+          git -C z03mmc log -1 --format='z03mmc %H'
+      - name: Build z03mmc (same steps as its own workflow)
+        working-directory: z03mmc
+        run: |
+          set -euo pipefail
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DSDK_PREFIX="$RUNNER_TEMP/sdk/tl_zigbee_sdk" -DTOOLCHAIN_PREFIX="$RUNNER_TEMP/tc32"
+          cmake --build build --config Release --target=z03mmc.zigbee
+          mkdir -p ../out
+          cp build/src/z03mmc.bin ../out/z03mmc.bin
+          sha256sum ../out/z03mmc.bin
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fw-z03mmc
+          path: out/z03mmc.bin
+          if-no-files-found: error
+
+  firmware-plug:
+    name: tlsr8258 plug
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ env.PLUGS_REPOSITORY }}
+          path: plugs
+          persist-credentials: false
+      - name: Cache the tc32 Rust toolchain archive
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/tc32-rust-archive
+          key: tc32-rust-archive-${{ env.TC32_RUST_SHA256 }}
+      - name: Download the tc32 Rust toolchain
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/tc32-rust-archive"
+          curl --proto '=https' --tlsv1.2 -fL --retry 3 "$TC32_RUST_URL" -o "$RUNNER_TEMP/tc32-rust-archive/tc32.tar.gz"
+      - name: Install the tc32 Rust toolchain
+        run: |
+          set -euo pipefail
+          echo "$TC32_RUST_SHA256  $RUNNER_TEMP/tc32-rust-archive/tc32.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/tc32-rust"
+          tar -xzf "$RUNNER_TEMP/tc32-rust-archive/tc32.tar.gz" --strip-components=1 -C "$RUNNER_TEMP/tc32-rust"
+          "$RUNNER_TEMP/tc32-rust/bin/rustc" --version --verbose
+      - name: Build the Zbeacon TS011F plug (512 KiB layout)
+        working-directory: plugs
+        env:
+          TC32_TOOLCHAIN: ${{ runner.temp }}/tc32-rust
+        run: |
+          set -euo pipefail
+          ./scripts/tlsr8258-firmware.sh build firmware/tlsr8258-plug tlsr8258-plug 512k zbeacon-ts011f-512k
+          mkdir -p ../out
+          cp target/tc32-unknown-none-elf/release/tlsr8258-plug.bin ../out/tlsr8258-plug.bin
+          sha256sum ../out/tlsr8258-plug.bin
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fw-tlsr8258-plug
+          path: out/tlsr8258-plug.bin
+          if-no-files-found: error
+
+  firmware-nrf52840:
+    name: nRF52840 sensor (${{ matrix.variant }})
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { variant: default, features: "",             image: nrf52840-sensor }
+          - { variant: sht31,   features: "sensor-sht31", image: nrf52840-sensor-sht31 }
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ env.ZIGBEE_RS_REPOSITORY }}
+          ref: ${{ env.ZIGBEE_RS_REF }}
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$ZIGBEE_RS_RUST_TOOLCHAIN" --profile minimal \
+            --target thumbv7em-none-eabihf --component llvm-tools
+          rustup default "$ZIGBEE_RS_RUST_TOOLCHAIN"
+      - name: Build
+        working-directory: examples/nrf52840-sensor
+        run: |
+          set -euo pipefail
+          if [ -n "${{ matrix.features }}" ]; then
+            cargo build --release --locked --features "${{ matrix.features }}"
+          else
+            cargo build --release --locked
+          fi
+      - name: Make the raw image
+        run: |
+          set -euo pipefail
+          ELF=examples/nrf52840-sensor/target/thumbv7em-none-eabihf/release/nrf52840-sensor
+          OBJCOPY="$(find "$(rustc --print sysroot)" -name llvm-objcopy -print -quit)"
+          mkdir -p out
+          "$OBJCOPY" -O binary "$ELF" out/${{ matrix.image }}.bin
+          sha256sum out/*.bin
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fw-${{ matrix.image }}
+          path: out/*.bin
+          if-no-files-found: error
+
+  firmware-thermostat:
+    name: Tuya thermostat releases
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the CA51F253L3 and ZT3L images
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          curl -fL --retry 3 -o out/thermostat-ca51.bin  "$THERMOSTAT_BASE/osrctherm_r02_v1.01_CA51F253L3.bin"
+          curl -fL --retry 3 -o out/thermostat-zt3l.bin  "$THERMOSTAT_BASE/osrctherm_r02_zrd_v1.0.01_ZT3L.bin"
+          sha256sum out/*.bin
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fw-thermostat
+          path: out/*.bin
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------- tests
+
+  test:
+    name: ${{ matrix.name }}
+    needs:
+      - prepare
+      - firmware-telink
+      - firmware-z03mmc
+      - firmware-plug
+      - firmware-nrf52840
+      - firmware-thermostat
+    # Run even when an unrelated image failed to build: the scenario that needs
+    # it fails on its own, the others still report.
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: zigbee-light
+            command: >-
+              python3 tests/firmware/zigbee_air_check.py "$MCUEMU"
+              tests/firmware/scenarios/zigbee_light.yaml --workdir "$LOGS" --for 40s --min-unicast 1
+          - name: zigbee-z03mmc
+            command: >-
+              python3 tests/firmware/zigbee_air_check.py "$MCUEMU"
+              tests/firmware/scenarios/zigbee_z03mmc.yaml --workdir "$LOGS" --for 80s --min-unicast 1
+          - name: zigbee-plug
+            command: >-
+              python3 tests/firmware/zigbee_air_check.py "$MCUEMU"
+              tests/firmware/scenarios/zigbee_plug.yaml --workdir "$LOGS" --for 60s
+          - name: zigbee-nrf52840
+            command: >-
+              python3 tests/firmware/zigbee_air_check.py "$MCUEMU"
+              tests/firmware/scenarios/zigbee_nrf52840.yaml --workdir "$LOGS" --for 100s
+              --min-unicast 2 --late-after 75 --min-late 1
+              --expect 'ch 15: 1 beacon\(s\) found'
+              --expect 'Joined PAN 0x[0-9A-F]+ ch 15 as 0x[0-9A-F]+'
+              --expect 'NWK key received from TC'
+              --expect 'Sending APSME-REQUEST-KEY to TC'
+              --expect 'Confirm-Key SUCCESS from the Trust Center'
+              --expect 'Commissioning security complete.{1,16}network committed'
+          - name: thermostat
+            command: >-
+              python3 tests/firmware/zigbee_air_check.py "$MCUEMU"
+              tests/firmware/scenarios/thermostat.yaml --workdir "$LOGS" --for 30s --min-unicast 1
+              --no-uart-trace
+              --expect 'thermostat\.main\.uart1 +[0-9]+ bytes: aa 55'
+              --expect 'thermostat\.zb\.uart0 +[0-9]+ bytes: aa 55'
+          - name: nrf52840-boot
+            command: python3 tests/firmware/test_nrf52840_boot.py "$MCUEMU" firmware/nrf52840-sensor.bin
+          - name: zephyr-pm-wake
+            command: python3 tests/firmware/test_zephyr_pm_wake.py "$MCUEMU" tests/firmware-images/zephyr-pmtest.bin
+          - name: vendor-sleep-1s
+            command: python3 tests/firmware/test_vendor_sleep_1s.py "$MCUEMU" tests/firmware-images/vendor_sleep_1s.bin
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - name: Get the emulator build
+        uses: actions/download-artifact@v5
+        with:
+          name: mcuemu-linux-amd64
+          path: dl
+          run-id: ${{ needs.prepare.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Get the images
+        uses: actions/download-artifact@v5
+        with:
+          pattern: fw-*
+          merge-multiple: true
+          path: firmware
+      - name: Unpack the emulator
+        run: |
+          set -euo pipefail
+          tar -xzf "$(find dl -name 'mcuemu-linux-amd64.tar.gz' -print -quit)" -C dl
+          chmod +x dl/mcuemu-linux-amd64/bin/mcuemu
+          dl/mcuemu-linux-amd64/bin/mcuemu models | head -3
+          ls -l firmware
+      - name: Run ${{ matrix.name }}
+        env:
+          MCUEMU: ${{ github.workspace }}/dl/mcuemu-linux-amd64/bin/mcuemu
+          LOGS: ${{ github.workspace }}/logs/${{ matrix.name }}
+        run: |
+          mkdir -p "$LOGS"
+          # The console (UART and RTT text included) is shown here and kept in the log artifact.
+          ${{ matrix.command }} 2>&1 | tee "$LOGS/run.log"
+      - name: Summary
+        if: ${{ always() }}
+        run: |
+          {
+            echo "### ${{ matrix.name }}"
+            grep -h '^zigbee:\|^FAIL\|firmware_.*:' "logs/${{ matrix.name }}/run.log" 2>/dev/null | sed 's/^/    /' || true
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: ${{ always() }}
+        with:
+          name: logs-${{ matrix.name }}
+          path: logs/${{ matrix.name }}
+          if-no-files-found: ignore
+          retention-days: 14

@@ -1,0 +1,33 @@
+# CI scenario: the Telink sampleLight router joins the sampleGW coordinator
+# (both built from the Telink Zigbee SDK, see tests/ci/telink). Checked by
+# tests/firmware/zigbee_air_check.py.
+version: 1
+
+world:
+  seed: 1
+  duration: 40s
+  radio:
+    - id: air0
+      model: log_distance
+      reference_loss_db: 40
+      path_loss_exponent: 2.5
+
+devices:
+  - id: coordinator
+    mcus:
+      - id: zb
+        model: tlsr8258
+        variant: F1K
+        firmware: ../../../firmware/telink-gw.bin
+        radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+  - id: light
+    mcus:
+      - id: zb
+        model: tlsr8258
+        variant: F1K
+        firmware: ../../../firmware/telink-light.bin
+        radio: { air: air0, position: [3, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+attach:
+  - { endpoint: air0, sink: "pcap:air.pcap" }

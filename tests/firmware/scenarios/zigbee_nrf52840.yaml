@@ -1,0 +1,39 @@
+# CI scenario: the zigbee-rs nRF52840 sensor (SHT31 variant, Pro Micro board)
+# joins the sampleGW coordinator, finishes the trust-center link key exchange
+# and sends measurement reports. The defmt log is printed from board.mcu.rtt.
+# Checked by zigbee_air_check.py.
+version: 1
+
+world:
+  seed: 1
+  duration: 100s
+  radio:
+    - id: air0
+      model: log_distance
+      reference_loss_db: 40
+      path_loss_exponent: 2.5
+
+devices:
+  - id: coordinator
+    mcus:
+      - id: zb
+        model: tlsr8258
+        variant: F1K
+        firmware: ../../../firmware/telink-gw.bin
+        radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+  - include: ../../../examples/devices/nrf52840_promicro.yaml
+    id: board
+    params:
+      led_pin: P0.13
+      position: [4, 0, 1]
+      firmware: ../../firmware/nrf52840-sensor-sht31.bin
+
+scenario:
+  events:
+    - { at: 70s, endpoint: board.sensor.temperature_c, set: 31.5 }
+    - { at: 70s, endpoint: board.sensor.humidity, set: 70 }
+
+attach:
+  - { endpoint: air0, sink: "pcap:air.pcap" }
+  - { endpoint: board.mcu.rtt, sink: "text" }

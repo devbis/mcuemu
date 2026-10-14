@@ -1,0 +1,37 @@
+# CI scenario: the z03mmc firmware (Zigbee LYWSD03MMC replacement, built from
+# devbis/z03mmc) joins the sampleGW coordinator. Checked by zigbee_air_check.py.
+version: 1
+
+world:
+  seed: 1
+  duration: 80s
+  radio:
+    - id: air0
+      model: log_distance
+      reference_loss_db: 40
+      path_loss_exponent: 2.5
+
+devices:
+  - id: coordinator
+    mcus:
+      - id: zb
+        model: tlsr8258
+        variant: F1K
+        firmware: ../../../firmware/telink-gw.bin
+        radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+  - include: ../../../examples/devices/lywsd03mmc_v14.yaml
+    id: sensor
+    params:
+      firmware: ../../firmware/z03mmc.bin
+      position: [3, 0, 1]
+
+scenario:
+  events:
+    # The firmware scans once at power-up, before the coordinator has formed
+    # its network, and steers again after 60 s, so the join happens at about 65 s.
+    - { at: 8s, endpoint: sensor.sensor.temperature_c, set: 26.3 }
+    - { at: 8s, endpoint: sensor.sensor.humidity, set: 61 }
+
+attach:
+  - { endpoint: air0, sink: "pcap:air.pcap" }

@@ -63,7 +63,8 @@ ctest --test-dir build --output-on-failure
 Firmware-level scenarios (Zigbee join, button/light, Zephyr PM, vendor sleep) are
 registered by CMake when the local images are present in `firmware/`; see
 [`docs/tlsr8258.md`](docs/tlsr8258.md). Run them after any change to CPU execution,
-timing or peripherals. `firmware/` is local-only and ignored by git;
+timing or peripherals. `firmware/` is local-only and ignored by git; CI builds
+and downloads the images itself (see [`docs/firmware-ci.md`](docs/firmware-ci.md));
 `mcuemu models` lists the supported flash capacities.
 
 ## Project layout

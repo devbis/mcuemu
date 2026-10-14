@@ -25,6 +25,7 @@ params:
   firmware: ../../firmware/tlsr8258-plug.bin
   variant: F512                   # flash size of the module (F512 or F1K)
   air: air0                       # radio medium defined in the world
+  start_at: 0s                    # power-on delay on the world timeline
   position: [0, 0, 0]             # meters
   tx_power_dbm: 10
   relay_pin: PD2
@@ -48,6 +49,7 @@ device:
       model: tlsr8258
       variant: "${variant}"
       firmware: "${firmware}"
+      start_at: "${start_at}"
       radio:
         air: "${air}"
         position: "${position}"

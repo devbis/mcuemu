@@ -74,6 +74,17 @@ ctest --test-dir build --output-on-failure
   (image `nrf52840-sensor.bin`) takes under a second. **Run them after any
   change to CPU execution, timing or peripherals**: they are the only check that
   catches subtle timing regressions across nodes.
+- **CI firmware tests** (`.github/workflows/firmware-tests.yml`, runs after
+  "Build mcuemu" succeeds, Ubuntu): every image is built from source or
+  downloaded, then one job per scenario runs the emulator; scenarios do not
+  block each other. Details and the policy for new images are in
+  `docs/firmware-ci.md`. Prefer building from source; commit an image to
+  `tests/firmware-images/` only when it has no buildable source. Zigbee scenarios
+  (`tests/firmware/scenarios/*.yaml`, `tests/firmware/zigbee_air_check.py`) pass
+  when the device joins and the two sides exchange NWK data, judged from the
+  pcap, not from RAM addresses. UART and RTT output must reach the job log
+  (sinks `hex`/`text` or `--trace-uart`). These scenarios also run locally:
+  put the images in `firmware/` under the names the scenario yaml uses.
 - Run ctest from the repository root with `--test-dir build`; running it from
   elsewhere creates a stray `Testing/` directory.
 - After renaming or moving the folder, delete `build/` and reconfigure (the

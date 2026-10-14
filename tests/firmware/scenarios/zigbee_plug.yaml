@@ -1,0 +1,35 @@
+# CI scenario: the zigbee-rs TLSR8258 plug firmware (Zbeacon TS011F board,
+# built from zigbee-rs-plugs) joins the sampleGW coordinator. Checked by
+# zigbee_air_check.py.
+version: 1
+
+world:
+  seed: 1
+  duration: 40s
+  radio:
+    - id: air0
+      model: log_distance
+      reference_loss_db: 40
+      path_loss_exponent: 2.5
+
+devices:
+  - id: coordinator
+    mcus:
+      - id: zb
+        model: tlsr8258
+        variant: F1K
+        firmware: ../../../firmware/telink-gw.bin
+        radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+  - include: ../../../examples/devices/tuya_plug.yaml
+    id: plug
+    params:
+      firmware: ../../firmware/tlsr8258-plug.bin
+      position: [3, 0, 1]
+      power_w: 60
+      # The firmware stops when its first scan finds no network, and the
+      # coordinator forms one only about 5 s after power-up.
+      start_at: 8s
+
+attach:
+  - { endpoint: air0, sink: "pcap:air.pcap" }

@@ -5,6 +5,8 @@
 /firmware/*
 !/firmware/.gitkeep
 *.bin
+# The few prebuilt test images that have no buildable source (tests/firmware-images/README.md).
+!/tests/firmware-images/*.bin
 *.elf
 *.hex
 *.map
