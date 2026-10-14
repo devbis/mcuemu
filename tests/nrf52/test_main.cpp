@@ -6,6 +6,7 @@ namespace mcuemu_tests {
 void test_core_svc_nested_irq_and_fpu_context();
 void test_core_wfe_sleeps_until_an_interrupt();
 void test_core_systick_interrupt();
+void test_core_exception_from_process_stack();
 void test_core_basepri_masks_lower_priority();
 void test_core_level_interrupt_stays_pending();
 void test_core_reset_and_breakpoint();
@@ -41,6 +42,7 @@ int main() {
     RUN(test_core_svc_nested_irq_and_fpu_context);
     RUN(test_core_wfe_sleeps_until_an_interrupt);
     RUN(test_core_systick_interrupt);
+    RUN(test_core_exception_from_process_stack);
     RUN(test_core_basepri_masks_lower_priority);
     RUN(test_core_level_interrupt_stays_pending);
     RUN(test_core_reset_and_breakpoint);

@@ -82,6 +82,21 @@ void test_core_systick_interrupt() {
     CHECK(f.word(0x20000100) == 10); // every 1000 cycles from about cycle 10
 }
 
+// Zephyr runs threads on the process stack. Entering the handler must switch to
+// the main stack (the exception frame stays on PSP) and the return must pop that
+// frame; the NVIC's acknowledge once skipped the stack switch and popped zeros.
+void test_core_exception_from_process_stack() {
+    Fixture f(nrf52_programs::psp);
+    CHECK(f.core.run(10500).reason == cortexm::StopReason::Deadline);
+    CHECK(f.word(0x20000100) == 10);          // ten SysTick interrupts, all returned
+    const std::uint32_t loop_before = f.word(0x20000104);
+    CHECK(loop_before > 100);                 // thread code kept running afterwards
+    CHECK(f.word(0x20000108) == 0x20000ff8);  // handler on MSP: 0x20001000 - push {r4, lr}
+    CHECK(f.core.run(14000).reason == cortexm::StopReason::Deadline); // the deadline is absolute
+    CHECK(f.word(0x20000104) > loop_before);
+    CHECK(f.core.reg(13) >= 0x200007e0 && f.core.reg(13) <= 0x20000800); // thread on PSP
+}
+
 void test_core_basepri_masks_lower_priority() {
     Fixture f(nrf52_programs::basepri);
     f.core.run(500);
