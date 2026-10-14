@@ -205,6 +205,33 @@ void test_tlsr_deep_sleep_sram_retention() {
     CHECK(device.read32(mcuemu::Tlsr8258::NonRetainedSramBase) == 0);
 }
 
+// The vendor deep-sleep sequence writes AREG 0x2c = 0xde for a timer wake; a
+// Zephyr build that wrote 0xd7 (digital timer bit) never woke on the board.
+void test_tlsr_deep_sleep_wake_gate() {
+    auto sleep_with_gate = [](std::uint8_t mode, std::uint8_t gate) {
+        mcuemu::Tlsr8258 device;
+        auto write_analog = [&device](std::uint8_t address, std::uint8_t value) {
+            device.write8(mcuemu::Tlsr8258::AnalogAddress, address);
+            device.write8(mcuemu::Tlsr8258::AnalogData, value);
+            device.write8(mcuemu::Tlsr8258::AnalogControl, 0x60);
+        };
+        write_analog(mcuemu::Tlsr8258::AnalogWakeSource,
+                     mcuemu::Tlsr8258::AnalogWakeTimerEnable);
+        write_analog(mcuemu::Tlsr8258::AnalogWakeGate, gate);
+        write_analog(0x7e, mode);
+        device.write32(mcuemu::Tlsr8258::System32kTickCompare, 1);
+        device.write8(mcuemu::Tlsr8258::SystemTimerControl, 0x08);
+        device.write8(mcuemu::Tlsr8258::PowerDownControl,
+                      mcuemu::Tlsr8258::PowerDownSleepEnable |
+                          mcuemu::Tlsr8258::PowerDownSleepTrigger);
+        device.tick(mcuemu::Tlsr8258::SleepEntryDelayCycles);
+        return device.advance_sleep_to_wakeup();
+    };
+    CHECK(sleep_with_gate(0x80, 0xde));  // deep sleep, analog timer bit
+    CHECK(!sleep_with_gate(0x80, 0xd7)); // deep sleep, digital timer bit only
+    CHECK(sleep_with_gate(0x00, 0x97));  // suspend, digital timer bit
+}
+
 // Zephyr's stimer driver (TB03F): STOP, wait for RUNNING to clear, select the
 // 16 MHz clock, START. A late handler that wrote 0x74c = 0 and 0x74f = START
 // left the counter at a constant value while the CPU ran, reading 0xf4.

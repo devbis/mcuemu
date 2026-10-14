@@ -335,10 +335,25 @@ bool Tlsr8258::selected_32k_clock_running() const noexcept {
     return (analog_registers_[AnalogClockPower] & power_down_mask) == 0;
 }
 
+// AREG 0x2c enables the wake sources while the core sleeps. Inferred from the
+// vendor sleep routine and a board measurement: a suspend sleeps with the
+// digital timer enabled (bit 0, 0x97), while deep sleep powers the core down
+// and only the analog timer path (bit 3, 0xde) wakes it. Deep sleep entered
+// with 0xd7 never woke on the board. Other bit combinations are not known;
+// they keep waking so that unmodelled sources do not hang a firmware.
+bool Tlsr8258::wake_gate_open() const noexcept {
+    const std::uint8_t gate = analog_registers_[AnalogWakeGate];
+    if (gate == 0)
+        return true; // never written: no vendor sleep sequence ran
+    if (power_state_ == Tlsr8258PowerState::DeepSleep)
+        return (gate & AnalogWakeGateAnalogTimer) != 0;
+    return (gate & (AnalogWakeGateDigitalTimer | AnalogWakeGateAnalogTimer)) != 0;
+}
+
 bool Tlsr8258::advance_sleep_to_wakeup() {
     if (power_state_ == Tlsr8258PowerState::Awake || !wake_timer_armed_ ||
         (analog_registers_[AnalogWakeSource] & AnalogWakeTimerEnable) == 0 ||
-        !selected_32k_clock_running())
+        !selected_32k_clock_running() || !wake_gate_open())
         return false;
 
     const std::uint32_t current = analog_32k_tick();

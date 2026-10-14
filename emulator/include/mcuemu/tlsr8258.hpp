@@ -139,6 +139,9 @@ public:
     static constexpr std::uint32_t System32kTickCompare = 0x800754;
     static constexpr std::uint32_t AnalogWakeSource = 0x26;
     static constexpr std::uint8_t AnalogWakeTimerEnable = 1u << 6;
+    static constexpr std::uint32_t AnalogWakeGate = 0x2c;
+    static constexpr std::uint8_t AnalogWakeGateDigitalTimer = 1u << 0;
+    static constexpr std::uint8_t AnalogWakeGateAnalogTimer = 1u << 3;
     static constexpr std::uint32_t AnalogWakeStatus = 0x44;
     static constexpr std::uint8_t AnalogWakeTimerStatus = 1u << 1;
     static constexpr std::uint32_t SystemTimerClockHz = 16000000;
@@ -172,6 +175,7 @@ public:
     std::uint64_t cycles_until_event() const noexcept;
     bool interrupt_pending() const noexcept override;
     Tlsr8258PowerState power_state() const noexcept { return power_state_; }
+    bool wake_gate_open() const noexcept;
     bool advance_sleep_to_wakeup();
     bool consume_deep_sleep_wakeup() noexcept;
 

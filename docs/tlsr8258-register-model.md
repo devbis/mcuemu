@@ -30,6 +30,7 @@ silently become a hardware fact.
 | Digital `0x800754..0x800757` | 32 kHz wake compare used by the tested firmware. | `SDK`/`TRACE`; compare and wake are modeled. Verify against the applicable SDK/chip revision before treating the address as universal. |
 | Digital `0x80006f` | Firmware writes `0x81` to request sleep. | `TRACE`; the exact sleep-entry delay is not specified by the register write alone. In the tested `count_power_c.bin`, the path reaches the `start_suspend + 0x58` boundary after 40 16-bit delay instructions. The emulator currently approximates this with 120 core cycles, using its estimated three cycles per instruction. |
 | AREG `0x7e`, `0x7f` | Sleep-mode selection and PM wake/cold-boot status used by the SDK path. | `SDK`/`INFERRED`; these meanings and reset/retention details should be checked per wake mode. |
+| AREG `0x2c` (with `0x2b`) | Power-down and wake gate written by the vendor sleep routine: base `0x96` (suspend), `0xd6` (deep), `0x56` (deep retention); bits 7/6 follow the mode. A timer wake is enabled by bit 0 in suspend (`0x97`) and by bit 3 in deep sleep (`0xde`, retention `0x5e`). | `SDK`/`INFERRED`/`TRACE`; from the reconstructed vendor routine and a board result: deep sleep with `0xd7` never woke. `wake_gate_open()` models only that; other bit combinations still wake. |
 
 The datasheet identifies AREG `0x26[6]` as the 32 kHz timer wake enable and
 AREG `0x44[1]` as the timer wake status. An older local register cheatsheet
