@@ -224,6 +224,47 @@ jobs:
           path: out/*.bin
           if-no-files-found: error
 
+  firmware-efr32mg21:
+    name: EFR32MG21 sensor
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: ${{ env.ZIGBEE_RS_REPOSITORY }}
+          ref: ${{ env.ZIGBEE_RS_REF }}
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$ZIGBEE_RS_RUST_TOOLCHAIN" --profile minimal \
+            --target thumbv8m.main-none-eabihf --component rust-src --component llvm-tools
+          rustup default "$ZIGBEE_RS_RUST_TOOLCHAIN"
+      - name: Build
+        working-directory: examples/efr32mg21-sensor
+        run: cargo build --release --locked
+      - name: Make the raw image and find the RTT control block
+        run: |
+          set -euo pipefail
+          ELF=examples/efr32mg21-sensor/target/thumbv8m.main-none-eabihf/release/efr32mg21-sensor
+          SYSROOT="$(rustc --print sysroot)"
+          OBJCOPY="$(find "$SYSROOT" -name llvm-objcopy -print -quit)"
+          NM="$(find "$SYSROOT" -name llvm-nm -print -quit)"
+          mkdir -p out
+          "$OBJCOPY" -O binary "$ELF" out/efr32mg21-sensor.bin
+          # The simulator's RTT endpoint needs the address of _SEGGER_RTT.
+          ADDRESS="$("$NM" "$ELF" | awk '$3 == "_SEGGER_RTT" { print $1 }')"
+          test -n "$ADDRESS"
+          echo "0x$ADDRESS" > out/efr32mg21-sensor.rtt
+          cat out/efr32mg21-sensor.rtt
+          sha256sum out/*.bin
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fw-efr32mg21-sensor
+          path: |
+            out/efr32mg21-sensor.bin
+            out/efr32mg21-sensor.rtt
+          if-no-files-found: error
+
   firmware-thermostat:
     name: Tuya thermostat releases
     needs: prepare
@@ -252,6 +293,7 @@ jobs:
       - firmware-z03mmc
       - firmware-plug
       - firmware-nrf52840
+      - firmware-efr32mg21
       - firmware-thermostat
     # Run even when an unrelated image failed to build: the scenario that needs
     # it fails on its own, the others still report.
@@ -283,6 +325,20 @@ jobs:
               --expect 'Joined PAN 0x[0-9A-F]+ ch 15 as 0x[0-9A-F]+'
               --expect 'NWK key received from TC'
               --expect 'Sending APSME-REQUEST-KEY to TC'
+              --expect 'Confirm-Key SUCCESS from the Trust Center'
+              --expect 'Commissioning security complete.{1,16}network committed'
+          - name: zigbee-efr32mg21
+            command: >-
+              sed -i "s/^\( *rtt_address: \)0x[0-9a-fA-F]*/\1$(cat firmware/efr32mg21-sensor.rtt)/"
+              tests/firmware/scenarios/zigbee_efr32mg21.yaml &&
+              python3 tests/firmware/zigbee_air_check.py "$MCUEMU"
+              tests/firmware/scenarios/zigbee_efr32mg21.yaml --workdir "$LOGS" --for 100s
+              --min-unicast 2 --late-after 75 --min-late 1
+              --expect 'radio initialized in IEEE 802\.15\.4 mode'
+              --expect 'Found 1 network\(s\)'
+              --expect 'Joined network as 0x[0-9A-F]+'
+              --expect 'Sending APSME-REQUEST-KEY to TC'
+              --expect 'Transport-Key: TC Link Key from 0x0000'
               --expect 'Confirm-Key SUCCESS from the Trust Center'
               --expect 'Commissioning security complete.{1,16}network committed'
           - name: thermostat

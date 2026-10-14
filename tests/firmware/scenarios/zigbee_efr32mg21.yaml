@@ -1,0 +1,46 @@
+# CI scenario: the zigbee-rs EFR32MG21 sensor (BRD4181A) joins the sampleGW
+# coordinator, finishes the trust-center link key exchange and sends
+# measurement reports. The log is printed from board.mcu.rtt. Checked by
+# zigbee_air_check.py.
+#
+# rtt_address is the `_SEGGER_RTT` symbol of the image; it moves with every
+# build, so the workflow rewrites the line below from the ELF (the value here
+# belongs to the image the model was developed with).
+version: 1
+
+world:
+  seed: 1
+  duration: 100s
+  radio:
+    - id: air0
+      model: log_distance
+      reference_loss_db: 40
+      path_loss_exponent: 2.5
+
+devices:
+  - id: coordinator
+    mcus:
+      - id: zb
+        model: tlsr8258
+        variant: F1K
+        firmware: ../../../firmware/telink-gw.bin
+        radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+  - include: ../../../examples/devices/efr32mg21_brd4181a.yaml
+    id: board
+    params:
+      position: [4, 0, 1]
+      firmware: ../../firmware/efr32mg21-sensor.bin
+      rtt_address: 0x20004a18
+
+scenario:
+  events:
+    # BTN0 starts a join (the first scan at power-up runs before the coordinator
+    # has formed its network).
+    - { at: 2s, endpoint: board.key.pressed, set: true }
+    - { at: 2200ms, endpoint: board.key.pressed, set: false }
+
+attach:
+  - { endpoint: air0, sink: "pcap:air.pcap" }
+  - { endpoint: board.mcu.rtt, sink: "text" }
+  - { endpoint: board.led0, sink: "file:led.log" }
