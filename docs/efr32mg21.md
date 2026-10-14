@@ -42,7 +42,7 @@ block changed with it. The register map is in the header comment of
 `emulator/src/efr32/radio.cpp`.
 
 Frames go through the shared `mcuemu::VirtualAir` as 802.15.4 MAC frames
-without the FCS (so a frame is 64 us shorter on air than on a real radio). A
+without the FCS (timed with it, so a frame lasts as long on air as on a real radio). A
 40 us ramp precedes TX and RX; the receiver polls the medium every 16 us and can
 lock on a frame whose start-of-frame delimiter has not passed (128 us), as in
 the nRF52840 model. The radio stays in RX after a frame. All of this timing is

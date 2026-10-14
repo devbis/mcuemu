@@ -16,7 +16,7 @@ void test_virtual_air() {
         {0x01, 0x02, 0x03});
     CHECK(id == 1);
     const std::uint64_t frame_end =
-        (std::uint64_t{3} + 6u) * 8u * 1000000000u / 250000u;
+        (std::uint64_t{3} + 8u) * 8u * 1000000000u / 250000u; // + preamble, SFD, PHR, FCS
     CHECK(light_node.receive(mcuemu::RadioProtocol::Zigbee802154, 15,
                              frame_end).size() == 1);
     CHECK(air.receptions().size() == 1);
@@ -93,8 +93,8 @@ void test_tlsr_radio_dma_packet_exchange() {
     sender.write8(mcuemu::Tlsr8258::RfMode, 0x55); // RF TX enable.
     sender.write8(mcuemu::Tlsr8258::DmaTxReady0, 0x08);
 
-    sender.tick(20000);
-    for (unsigned poll = 0; poll != 42; ++poll)
+    sender.tick(30000);
+    for (unsigned poll = 0; poll != 54; ++poll)
         receiver.tick(480); // Poll at 10 us intervals through the full frame.
     CHECK(air.frames().size() == 1);
     CHECK(air.frames()[0].channel == 20);
@@ -103,8 +103,8 @@ void test_tlsr_radio_dma_packet_exchange() {
     sender.write8(mcuemu::Tlsr8258::RfSynthFrequencyLow, 0x95);
     sender.write8(mcuemu::Tlsr8258::RfSynthFrequencyHigh, 0x25);
     sender.write8(mcuemu::Tlsr8258::DmaTxReady0, 0x08);
-    sender.tick(20000);
-    for (unsigned poll = 0; poll != 42; ++poll)
+    sender.tick(30000);
+    for (unsigned poll = 0; poll != 54; ++poll)
         receiver.tick(480);
     CHECK(air.frames().size() == 2);
     CHECK(air.frames()[1].channel == 11);

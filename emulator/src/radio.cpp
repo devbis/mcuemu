@@ -12,8 +12,10 @@ std::uint64_t VirtualAir::airtime_ns(RadioProtocol protocol,
                                      std::uint32_t bit_rate) {
     if (bit_rate == 0)
         bit_rate = protocol == RadioProtocol::Zigbee802154 ? 250000u : 1000000u;
+    // IEEE 802.15.4: preamble (4), SFD (1), PHR (1) and the two FCS bytes the
+    // medium does not carry; BLE: preamble, access address and header.
     const std::uint64_t overhead_bytes =
-        protocol == RadioProtocol::Zigbee802154 ? 6u : 10u;
+        protocol == RadioProtocol::Zigbee802154 ? 8u : 10u;
     constexpr std::uint64_t nanos_per_second = 1000000000u;
     const std::uint64_t max_value = std::numeric_limits<std::uint64_t>::max();
     if (payload_bytes > max_value / 8u - overhead_bytes)

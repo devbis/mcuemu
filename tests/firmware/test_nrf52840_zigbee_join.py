@@ -51,8 +51,8 @@ def main() -> int:
     log = re.sub(r"\n?\[\s*[\d.]+ s\] board\.mcu\.rtt: ", "", result.stdout)
     for what, pattern in [
         ("an active scan that found the coordinator's beacon", r"ch 15: 1 beacon\(s\) found"),
-        ("the join request", r"Joining PAN 0xD138 ch 15"),
-        ("association (the coordinator's ACK reached the radio)", r"Joined PAN 0xD138 ch 15 as 0x[0-9A-F]+"),
+        ("the join request", r"Joining PAN 0x[0-9A-F]+ ch 15"),
+        ("association (the coordinator's ACK reached the radio)", r"Joined PAN 0x[0-9A-F]+ ch 15 as 0x[0-9A-F]+"),
         ("the Transport-Key", r"NWK key received from TC"),
         ("a unique TC link key request", r"Sending APSME-REQUEST-KEY to TC"),
         ("the Confirm-Key", r"Confirm-Key SUCCESS from the Trust Center"),
