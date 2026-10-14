@@ -29,7 +29,7 @@ by the guest rather than reported to `UC_HOOK_INTR`) and a CPU-model fix for
 `UC_MODE_MCLASS`. `cortexm::Core` maps memory with `uc_mem_map_ptr`, forwards the
 peripheral windows with `uc_mmio_map`, hooks every instruction for cycle
 counting and WFI/WFE, and stops the engine with `uc_emu_stop` from the hook.
-See [`nrf52840.md`](nrf52840.md).
+See [`nrf52840.md`](nrf52840.md); the Cortex-M33 additions are in [`efr32mg21.md`](efr32mg21.md).
 
 ## Source checkout
 

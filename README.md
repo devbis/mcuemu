@@ -21,6 +21,7 @@ radio medium in YAML, and mcuemu runs them on one virtual timeline.
 | --- | --- | --- |
 | Telink TLSR8258 (`TLSR8258F512`, `TLSR8258F1K`) | TC32 | GPIO, timers, UART (incl. DMA), ADC, AES, sleep/wake, Zigbee RF; vendor Zigbee and Zephyr firmware tested |
 | Cmsemicron CA51F253L3 | MCS-51 | CPU, Timer0, UART1, PWM; no GPIO, ADC or radio |
+| Silicon Labs EFR32MG21 (BRD4181A) | Cortex-M33 | NVIC, SysTick, FPU, WFE; CMU/HFXO, GPIO/EXTI, MSC; a radio with the interface of the zigbee-rs driver (not the silicon's); the zigbee-rs sensor image joins a TLSR8258 coordinator |
 | Nordic nRF52840 (Pro Micro / nice!nano board) | Cortex-M4F | NVIC, SysTick, FPU, WFE; clocks, GPIO/GPIOTE, UARTE, TWIM, SAADC, TIMER, RTC, RNG, ECB, WDT, NVMC, PPI; 802.15.4 RADIO; the Embassy Zigbee sensor image joins a TLSR8258 coordinator; no BLE yet |
 
 Support is partial and driven by the firmware tested so far. See
@@ -35,7 +36,8 @@ Support is partial and driven by the firmware tested so far. See
 - [`docs/tlsr8258.md`](docs/tlsr8258.md) (usage, firmware tests, status),
   [`docs/tlsr8258-register-model.md`](docs/tlsr8258-register-model.md),
   [`docs/mcs51.md`](docs/mcs51.md),
-  [`docs/nrf52840.md`](docs/nrf52840.md) (Cortex-M core, peripherals, status) —
+  [`docs/nrf52840.md`](docs/nrf52840.md) (Cortex-M core, peripherals, status),
+  [`docs/efr32mg21.md`](docs/efr32mg21.md) (Cortex-M33, what is and is not the silicon) —
   chip models.
 - [`examples/`](examples/) — ready-made systems (`mcuemu sim examples/world.yaml`).
 
@@ -73,9 +75,9 @@ and downloads the images itself (see [`docs/firmware-ci.md`](docs/firmware-ci.md
   Cortex-M NVIC).
 - `emulator/include/` and `emulator/src/` — chip models, CPU adapters, radio,
   C API, and CLI; `mcs51/` holds the CA51F253L3 model, `cortexm/` the generic
-  Cortex-M core, `nrf52/` the nRF52840 and `sim/` the system layer.
+  Cortex-M core, `nrf52/` the nRF52840, `efr32/` the EFR32MG21 and `sim/` the system layer.
 - `tests/` — tests grouped by layer (`tc32`, `machine`, `radio`, `mcs51`,
-  `nrf52`, `sim`, `firmware`).
+  `nrf52`, `efr32`, `sim`, `firmware`).
 - `examples/` — system YAML, device descriptions, and Lua parts.
 - `docs/` — reference documentation.
 - `firmware/` — local-only vendor firmware images.

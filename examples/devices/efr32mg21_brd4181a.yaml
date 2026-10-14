@@ -1,0 +1,43 @@
+# EFR32MG21 on the BRD4181A radio board in a WSTK mainboard (BRD4001A), the
+# target of the zigbee-rs `efr32mg21-sensor` image:
+#
+#   mcu.PB0  -> LED0   (high = lit)
+#   mcu.PD2  <- BTN0   (the WSTK provides the pull-up, low = pressed)
+#
+# The image reads synthetic temperature and humidity and a fixed battery, so no
+# sensor is wired. Short press toggles join/leave, a 3 s hold requests a factory
+# reset.
+#
+# The firmware is not in the repository: pass `firmware` or copy it to the
+# default path (see examples/README.md). `rtt_address` is the `_SEGGER_RTT`
+# control block of that image; it moves with every build (find it by searching
+# RAM for "SEGGER RTT" after a short run, or from the ELF).
+version: 1
+
+params:
+  firmware: ../../firmware/efr32mg21-sensor.bin
+  air: air0                       # radio medium defined in the world
+  position: [0, 0, 0]             # meters
+  tx_power_dbm: 0
+  led_pin: PB0
+  button_pin: PD2
+  rtt_address: 0x20004a18
+
+device:
+  id: brd4181a
+  mcus:
+    - id: mcu
+      model: efr32mg21
+      firmware: "${firmware}"
+      rtt: { address: "${rtt_address}" }
+      radio:
+        air: "${air}"
+        position: "${position}"
+        tx_power_dbm: "${tx_power_dbm}"
+        protocols: [zigbee]
+  nets:
+    - { id: led0, pins: ["mcu.${led_pin}"] }
+    - { id: btn0, pull: up, pins: ["mcu.${button_pin}"] }
+  parts:
+    - { id: status_led, type: led, pins: { in: led0 } }
+    - { id: key, type: button, pins: { out: btn0 } }

@@ -1,0 +1,43 @@
+# An EFR32MG21 (BRD4181A, zigbee-rs sensor image) joining a network run by the
+# TLSR8258 sampleGW coordinator: two chips with different cores on one radio
+# medium.
+#
+#   mkdir -p /tmp/efr && cd /tmp/efr
+#   /path/to/build/mcuemu sim /path/to/examples/efr32mg21_zigbee.yaml --for 40s
+#
+# The images are not in the repository, see examples/README.md. Mind that the
+# EFR32 radio is not the silicon's: see docs/efr32mg21.md.
+version: 1
+
+world:
+  seed: 1
+  duration: 40s
+  radio:
+    - id: air0
+      model: log_distance
+      reference_loss_db: 40
+      path_loss_exponent: 2.5
+
+devices:
+  - id: coordinator
+    mcus:
+      - id: zb
+        model: tlsr8258
+        variant: F1K
+        firmware: ../firmware/samplegw_tb03f.bin
+        radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+  - include: devices/efr32mg21_brd4181a.yaml
+    id: board
+    params:
+      position: [4, 0, 1]
+
+attach:
+  - { endpoint: air0, sink: "pcap:efr-air.pcap" }
+  - { endpoint: board.mcu.rtt, sink: "text" }
+  - { endpoint: board.led0, sink: "file:led.log" }
+
+scenario:
+  events:
+    - { at: 2s, endpoint: board.key.pressed, set: true }
+    - { at: 2200ms, endpoint: board.key.pressed, set: false }

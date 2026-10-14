@@ -6,7 +6,7 @@ the code. Human-facing docs are in `README.md` and `docs/`.
 
 ## What this project is
 
-`mcuemu` is a microcontroller emulator built on a Unicorn fork. It models three
+`mcuemu` is a microcontroller emulator built on a Unicorn fork. It models four
 chips and a declarative system layer on top:
 
 - **TLSR8258** (Telink, TC32 core, 2.4 GHz radio: Zigbee/BLE-style frames): board
@@ -15,6 +15,8 @@ chips and a declarative system layer on top:
 - **nRF52840** (Nordic, Cortex-M4F): generic core glue in `emulator/src/cortexm/`
   (`cortexm::Core`), the chip in `emulator/src/nrf52/` (`nrf52emu::Nrf52840`).
   See `docs/nrf52840.md`.
+- **EFR32MG21** (Silicon Labs, Cortex-M33): the chip in `emulator/src/efr32/`
+  (`efr32emu::Efr32mg21`) on the same `cortexm::Core`. See `docs/efr32mg21.md`.
 - **`sim` layer** (`emulator/src/sim/`, `emulator/include/sim/`): YAML-described
   systems of devices, nets, parts (built-in and Lua), a shared radio medium,
   endpoints and sinks, a scenario runner, and a JSON-RPC 2.0 control API over
@@ -35,9 +37,10 @@ emulator/src/                              TLSR8258 + CPU wrapper, CLI main, C A
 emulator/src/mcs51/                        CA51F253L3 model and its `mcuemu run` runner
 emulator/src/cortexm/                      generic Cortex-M core (NVIC glue, SysTick, WFI/WFE, cycle clock)
 emulator/src/nrf52/                        nRF52840: peripherals, FICR/UICR, `mcuemu run` runner
+emulator/src/efr32/                        EFR32MG21: CMU/HFXO/GPIO/MSC blocks, the radio, `mcuemu run` runner
 emulator/src/sim/                          system layer (config, world, rpc, server, sinks, parts)
 engine/unicorn/                            Unicorn fork: SEPARATE git repo, git-ignored here
-tests/{tc32,machine,radio,mcs51,nrf52,sim,firmware}/
+tests/{tc32,machine,radio,mcs51,nrf52,efr32,sim,firmware}/
 examples/                                  world.yaml, thermostat_only.yaml, devices/, parts/
 docs/                                      architecture, config reference, control API, mcs51, scripting
 firmware/                                  local images only (ignored by git except .gitkeep)
@@ -61,8 +64,9 @@ ctest --test-dir build --output-on-failure
 - The build type defaults to `Release`; an unoptimised build is about 5x
   slower (the firmware tests take minutes). Pass `-DCMAKE_BUILD_TYPE=Debug` to debug.
 - Test binaries: `mcuemu-tests` (TC32 core, machine, radio), `mcs51emu-tests`,
-  `nrf52emu-tests` (Cortex-M core and the nRF52840 peripherals), `simcore-tests`
-  (the whole system layer, about 9 s). `ctest -E firmware` runs just those four.
+  `nrf52emu-tests` (Cortex-M core and the nRF52840 peripherals), `efr32emu-tests`
+  (the EFR32MG21), `simcore-tests` (the whole system layer, about 9 s).
+  `ctest -E firmware` runs just those five.
   The nrf52 test programs are assembly in `tests/nrf52/programs/*.s`; after
   editing one, run `tests/nrf52/programs/build.py` (needs `arm-none-eabi-as`) and
   commit the regenerated `tests/nrf52/programs.hpp`.
@@ -71,7 +75,10 @@ ctest --test-dir build --output-on-failure
   images are in `firmware/` at configure time (`samplegw_tb03f.bin`,
   `samplelight_tb03f.bin`, `zephyr-pmtest.bin`, `vendor_sleep_1s.bin`) and
   Python 3 is available. They take about 80 s together. `firmware_nrf52840_boot`
-  (image `nrf52840-sensor.bin`) takes under a second. **Run them after any
+  (image `nrf52840-sensor.bin`) takes under a second;
+  `firmware_nrf52840_zigbee_join` and `firmware_efr32mg21_zigbee_join` (images
+  `nrf52840-sensor-sht31.bin` / `efr32mg21-sensor.bin`, plus `samplegw_tb03f.bin`)
+  run the two-chip networks in about 15 s each. **Run them after any
   change to CPU execution, timing or peripherals**: they are the only check that
   catches subtle timing regressions across nodes.
 - **CI firmware tests** (`.github/workflows/firmware-tests.yml`, runs after
@@ -131,6 +138,11 @@ Facts about the fork that bit us:
   `UC_MODE_MCLASS` used to force Cortex-M33; an explicit M-profile model is now
   honoured. Without `uc->guest_exception` every M-profile exception (even SVC)
   would stop the engine with `UC_ERR_EXCEPTION`.
+- The Cortex-M33 (EFR32MG21) is the stock model run without its Security
+  Extension: `uc_arm_nvic(UC_ARM_NVIC_NO_SECURITY)` clears the feature and sets
+  `NSACR`, and `v7m_exception_taken` sets `EXC_RETURN.ES` only for secure targets.
+  Without these, FP stacking and the first exception return fault (HardFault with
+  `CFSR` zero or `UFSR.INVPC`). The nvic models one (non-secure bank) state.
 - On Cortex-M the code hook sees every instruction; WFI/WFE are decoded there
   and must never reach the engine (it would raise EXCP_YIELD, which the fork
   treats as an invalid instruction).

@@ -11,6 +11,8 @@
 | `devices/lywsd03mmc_v15.yaml` | LYWSD03MMC with the UART display (38400 baud, TX PD7) and an SHT4x sensor; the display frames are logged, not decoded. |
 | `devices/nrf52840_promicro.yaml` | An nRF52840 on a Pro Micro-style board (nice!nano v2 pins): status LED P0.15, button P0.11; everything else on the header is free to wire. |
 | `nrf52840_promicro.yaml` | The board running the Embassy Zigbee sensor image on its own, with a button press from the scenario (it scans and finds nothing). |
+| `devices/efr32mg21_brd4181a.yaml` | An EFR32MG21 on the BRD4181A radio board: LED0 on PB0, BTN0 on PD2, RTT. |
+| `efr32mg21_zigbee.yaml` | The board with the zigbee-rs sensor image on one medium with the TLSR8258 sampleGW coordinator: the EFR32 joins, completes the TCLK exchange and reports. The radio is not the silicon's (`docs/efr32mg21.md`). |
 | `nrf52840_zigbee.yaml` | The same board with the SHT31 image on one radio medium with the TLSR8258 sampleGW coordinator: the nRF52840 joins the network, completes the TCLK exchange and reports temperature and humidity read from a simulated SHT31 on P0.26/P0.27. Different chips and cores in one world. |
 | `parts/shtc3.lua`, `parts/sht4x.lua`, `parts/lcd_lywsd03mmc.lua` | The two sensors and the I2C segment display of the LYWSD03MMC. |
 | `parts/bl0937.lua` | The BL0937 as a scripted part (CF / CF1 pulse outputs, SEL input). |
@@ -53,6 +55,7 @@ No firmware image is stored in the repository. Put the images where the
 | LYWSD03MMC | `z03mmc.bin` from the z03mmc project | `firmware/z03mmc.bin` |
 | plug | `tlsr8258-plug.bin` from `zigbee-rs-plugs` (`build-tuya.sh`, 512 KiB board) | `firmware/tlsr8258-plug.bin` |
 | nRF52840 board | `nrf52840-sensor.bin`, the Embassy Zigbee sensor image of `zigbee-rs` (built for the nRF52840-DK; the CI artifact `nrf52840-sensor-firmware`) | `firmware/nrf52840-sensor.bin` |
+| EFR32MG21 board | `efr32mg21-sensor.bin` of `zigbee-rs` (BRD4181A; the CI artifact `efr32mg21-sensor-firmware`) | `firmware/efr32mg21-sensor.bin` (used by `efr32mg21_zigbee.yaml`) |
 | nRF52840 board with SHT31 | the `sensor-sht31` variant of the same image (CI artifact `nrf52840-sensor-sht31-firmware`) | `firmware/nrf52840-sensor-sht31.bin` (used by `nrf52840_zigbee.yaml`) |
 
 The plug's pins and BL0937 ratios default to the Zbeacon TS011F board (relay
@@ -75,5 +78,8 @@ board pass `relay_pin`, `cf_pin`, `variant`, ... as params.
 * **nRF52840**: the CPU, interrupts, clocks, pads, timers, RTC, SAADC, TWIM,
   UARTE, the crypto/random blocks and the 802.15.4 RADIO are modelled (see
   `docs/nrf52840.md`); BLE is not. Pins are `P0.xx`/`P1.xx`.
+* **EFR32MG21**: the CPU, interrupts, clocks, pads, EXTI and flash writes are
+  modelled; the radio has the register interface of the zigbee-rs driver, not the
+  silicon's (see `docs/efr32mg21.md`). Pins are `PA0`..`PD15`.
 * **Radio**: log-distance path loss with shadowing; BLE is not connected to
   the TLSR8258 registers, so only Zigbee devices are shown.
