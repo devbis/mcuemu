@@ -75,7 +75,10 @@ void PowerClock::task(std::uint32_t offset) {
         break;
     case 0x008: // LFCLKSTART
         lf_requested_ = true;
-        if (!lf_running_ && lf_ready_at_ == Never) {
+        // Starting again with another source while running switches over (Zephyr
+        // boots on the RC and moves to the crystal this way); LFCLKSTAT keeps
+        // reporting the old source until the new one is ready.
+        if ((!lf_running_ || lf_source_ != lf_source_running_) && lf_ready_at_ == Never) {
             lf_ready_at_ = now() + (lf_source_ == 0 ? LfclkRcStartUs : LfclkXtalStartUs) * cycles_per_us;
             request_service(lf_ready_at_);
         }

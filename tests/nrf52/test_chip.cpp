@@ -292,4 +292,23 @@ void test_nrf52_clock_start_events() {
     CHECK((c.read(Power + 0x40c) >> 16 & 1u) == 1); // HFCLKSTAT.STATE
 }
 
+// Zephyr starts the LFCLK on the RC, then selects the crystal and starts it
+// again without stopping; LFCLKSTAT must follow, or its spin-wait never ends.
+void test_nrf52_lfclk_restart_switches_source() {
+    Chip c;
+    c.write(Power + 0x518, 0);                 // LFCLKSRC = RC
+    c.write(Power + 0x008, 1);                 // LFCLKSTART
+    c.run_to_us(200);
+    CHECK(c.read(Power + 0x104) == 1);
+    CHECK(c.read(Power + 0x418) == (1u << 16)); // running on the RC
+
+    c.write(Power + 0x104, 0);
+    c.write(Power + 0x518, 1);                 // LFCLKSRC = XTAL
+    c.write(Power + 0x008, 1);
+    CHECK(c.read(Power + 0x418) == (1u << 16)); // still the RC until the crystal is up
+    c.run_to_us(2000);
+    CHECK(c.read(Power + 0x104) == 1);
+    CHECK(c.read(Power + 0x418) == ((1u << 16) | 1u));
+}
+
 } // namespace mcuemu_tests

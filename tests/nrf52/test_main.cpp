@@ -23,6 +23,7 @@ void test_nrf52_watchdog_resets_unless_fed();
 void test_nrf52_uarte_transmit_and_receive();
 void test_nrf52_saadc_reads_vdd();
 void test_nrf52_clock_start_events();
+void test_nrf52_lfclk_restart_switches_source();
 void test_nrf52_radio_frame_exchange();
 void test_nrf52_radio_cca_sees_a_frame_on_air();
 void test_nrf52_radio_ramp_and_state();
@@ -57,6 +58,7 @@ int main() {
     RUN(test_nrf52_uarte_transmit_and_receive);
     RUN(test_nrf52_saadc_reads_vdd);
     RUN(test_nrf52_clock_start_events);
+    RUN(test_nrf52_lfclk_restart_switches_source);
     RUN(test_nrf52_radio_frame_exchange);
     RUN(test_nrf52_radio_cca_sees_a_frame_on_air);
     RUN(test_nrf52_radio_ramp_and_state);
