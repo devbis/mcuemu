@@ -566,7 +566,7 @@ void Cpu::refresh_slack() {
             slack = 0;
         } else {
             const std::uint64_t diff = std::min<std::uint64_t>(batch_deadline_ns_ - now - 1, 4000000000ull);
-            slack = std::min(slack, diff * device_.clock_hz() / 1000000000ull);
+            slack = std::min<std::uint64_t>(slack, diff * device_.clock_hz() / 1000000000ull);
         }
     }
     slack_cycles_ = slack;
