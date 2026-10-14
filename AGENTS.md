@@ -71,7 +71,8 @@ ctest --test-dir build --output-on-failure
   editing one, run `tests/nrf52/programs/build.py` (needs `arm-none-eabi-as`) and
   commit the regenerated `tests/nrf52/programs.hpp`.
 - Firmware tests (`firmware_zigbee_join`, `firmware_zigbee_button_light`,
-  `firmware_zephyr_pm_wake`, `firmware_vendor_sleep_1s`) exist only when the
+  `firmware_zephyr_pm_wake`, `firmware_zephyr_stimer_wake` (images
+  `zephyr-ed-stimer-before.bin` / `-after.bin`), `firmware_vendor_sleep_1s`) exist only when the
   images are in `firmware/` at configure time (`samplegw_tb03f.bin`,
   `samplelight_tb03f.bin`, `zephyr-pmtest.bin`, `vendor_sleep_1s.bin`) and
   Python 3 is available. They take about 80 s together. `firmware_nrf52840_boot`
@@ -231,6 +232,11 @@ paths equivalent. Details in `docs/mcs51.md`.
   `nrf52/` so other Cortex-M chips can reuse `cortexm/`.
 
 ### TLSR8258 model notes
+
+The 16 MHz system timer (0x800740) advances only while started (0x74f START/STOP
+strobes; it runs after reset) and with its clock selected (0x74c bit 4). A
+firmware that starts it with 0x74c = 0 gets a frozen counter, as on the board
+(`firmware_zephyr_stimer_wake`). Do not make the counter run unconditionally.
 
 Peripheral behaviour is documented in `docs/tlsr8258-register-model.md`; check
 it before changing registers. Facts that mattered: UART DMA (rx/tx channels,

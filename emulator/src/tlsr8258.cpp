@@ -357,8 +357,9 @@ bool Tlsr8258::advance_sleep_to_wakeup() {
     if (calibration == 0)
         calibration = use_32k_xtal ? 7812u : rc32k_system_timer_calibration_;
     const std::uint32_t previous_system_timer = system_timer_count_;
-    system_timer_count_ += static_cast<std::uint32_t>(
-        (static_cast<std::uint64_t>(delta) * calibration) / 16u);
+    if (system_timer_running())
+        system_timer_count_ += static_cast<std::uint32_t>(
+            (static_cast<std::uint64_t>(delta) * calibration) / 16u);
     update_system_timer_irq(previous_system_timer);
     const std::uint64_t whole_seconds = delta / source_hz;
     const std::uint64_t remaining_ticks = delta % source_hz;
@@ -409,6 +410,7 @@ void Tlsr8258::reset_volatile_state_after_deep_sleep() {
     registers_[0x9b] = 0x01;
     registers_[0x9e] = uart_tx_done_bit;
     system_timer_count_ = 0;
+    system_timer_started_ = true;
     system_timer_fraction_ = 0;
     system_timer_calibration_target_tick_ = 0;
     system_timer_calibration_pending_ = false;
@@ -500,13 +502,23 @@ void Tlsr8258::write8(std::uint32_t address, std::uint8_t value) {
 void Tlsr8258::tick(std::uint32_t cycles) {
     constexpr std::uint64_t nanos_per_second = 1000000000u;
     const std::uint32_t previous_system_timer = system_timer_count_;
-    const std::uint64_t system_timer_numerator =
-        static_cast<std::uint64_t>(cycles) * SystemTimerClockHz +
-        system_timer_fraction_;
-    system_timer_count_ += static_cast<std::uint32_t>(
-        system_timer_numerator / clock_hz_);
-    system_timer_fraction_ = system_timer_numerator % clock_hz_;
-    update_system_timer_irq(previous_system_timer);
+    // The 16 MHz counter runs while it is started and its clock is selected.
+    // Evidence from a TB03F running Zephyr: the driver stops it (0x74f = STOP)
+    // and waits for 0x74f bit 1 (RUNNING) to clear, clears 0x74c, sets bit 4
+    // (16 MHz) and starts it. A later handler that wrote 0x74c = 0 and
+    // 0x74f = START left the counter at a constant 0x800740 with the CPU
+    // running and the IRQ gate (0x643) open, and 0x74f read 0xf4: START with
+    // the clock deselected does not run the counter. The 32 kHz counter is
+    // independent of all this.
+    if (system_timer_running()) {
+        const std::uint64_t system_timer_numerator =
+            static_cast<std::uint64_t>(cycles) * SystemTimerClockHz +
+            system_timer_fraction_;
+        system_timer_count_ += static_cast<std::uint32_t>(
+            system_timer_numerator / clock_hz_);
+        system_timer_fraction_ = system_timer_numerator % clock_hz_;
+        update_system_timer_irq(previous_system_timer);
+    }
 
     const bool use_32k_xtal =
         (registers_[0x073] & Clock32kSelectXtal) != 0;
@@ -652,7 +664,8 @@ std::uint64_t Tlsr8258::cycles_until_event() const noexcept {
     };
 
     // System timer compare interrupt.
-    if ((registers_[SystemTimerMode - RegisterBase] & SystemTimerIrqEnable) != 0) {
+    if (system_timer_running() &&
+        (registers_[SystemTimerMode - RegisterBase] & SystemTimerIrqEnable) != 0) {
         const std::uint32_t compare =
             static_cast<std::uint32_t>(registers_[0x744]) |
             (static_cast<std::uint32_t>(registers_[0x745]) << 8) |
@@ -1206,6 +1219,12 @@ std::uint8_t Tlsr8258::read_register(std::uint32_t offset) {
         return static_cast<std::uint8_t>(dfifo2_write_pointer_ >> 8);
     if (offset == 0x00c && mspi_active_ && mspi_command_seen_)
         return mspi_read_byte();
+    if (offset == 0x74f) {
+        // Bit 1 is the RUNNING status (datasheet: timer_en, "System Timer
+        // busy"), set while the counter advances; the stopped TB03F read 0xf4.
+        return static_cast<std::uint8_t>((registers_[offset] & ~2u) |
+                                         (system_timer_running() ? 2u : 0u));
+    }
     if (offset >= 0x740 && offset <= 0x743) {
         const std::uint32_t count = system_timer_count_ & ~std::uint32_t{7};
         return static_cast<std::uint8_t>(count >> ((offset - 0x740) * 8u));
@@ -1315,6 +1334,11 @@ void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
         // timer setup, and compare programming. Hardware clears them after
         // accepting each command; retain the wake timer arm separately.
         wake_timer_armed_ = (value & 0x08u) != 0;
+        // Bit 1 STOP, bit 0 START (SDK: FLD_SYSTEM_TICK_STOP/START).
+        if ((value & 0x02u) != 0)
+            system_timer_started_ = false;
+        if ((value & 0x01u) != 0)
+            system_timer_started_ = true;
         registers_[offset] = value &
             static_cast<std::uint8_t>(~SystemTimerControlStrobeMask);
         if ((value & 0x01u) != 0 &&

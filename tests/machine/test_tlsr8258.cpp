@@ -205,6 +205,34 @@ void test_tlsr_deep_sleep_sram_retention() {
     CHECK(device.read32(mcuemu::Tlsr8258::NonRetainedSramBase) == 0);
 }
 
+// Zephyr's stimer driver (TB03F): STOP, wait for RUNNING to clear, select the
+// 16 MHz clock, START. A late handler that wrote 0x74c = 0 and 0x74f = START
+// left the counter at a constant value while the CPU ran, reading 0xf4.
+void test_tlsr_system_timer_start_stop_and_clock_select() {
+    mcuemu::Tlsr8258 device;
+    device.tick(48);
+    CHECK(device.read32(mcuemu::Tlsr8258::SystemTimer) == 16);
+    CHECK((device.read8(mcuemu::Tlsr8258::SystemTimerControl) & 2) != 0); // running
+
+    device.write8(mcuemu::Tlsr8258::SystemTimerControl, 2);               // STOP
+    CHECK((device.read8(mcuemu::Tlsr8258::SystemTimerControl) & 2) == 0);
+    device.tick(48 * 1000);
+    CHECK(device.read32(mcuemu::Tlsr8258::SystemTimer) == 16);
+    CHECK(device.cycles_until_event() > 1000000);
+
+    device.write32(mcuemu::Tlsr8258::SystemTimer, 0);
+    device.write8(mcuemu::Tlsr8258::SystemTimerMode, 0);
+    device.write8(mcuemu::Tlsr8258::SystemTimerControl, 1);               // START, no clock
+    device.tick(48 * 1000);
+    CHECK(device.read32(mcuemu::Tlsr8258::SystemTimer) == 0);
+    CHECK((device.read8(mcuemu::Tlsr8258::SystemTimerControl) & 2) == 0); // not running
+
+    device.write8(mcuemu::Tlsr8258::SystemTimerMode, mcuemu::Tlsr8258::SystemTimerEnable);
+    device.tick(48);
+    CHECK(device.read32(mcuemu::Tlsr8258::SystemTimer) == 16);
+    CHECK((device.read8(mcuemu::Tlsr8258::SystemTimerControl) & 2) != 0);
+}
+
 void test_tlsr_system_timer() {
     mcuemu::Tlsr8258 device;
     CHECK(device.read32(mcuemu::Tlsr8258::SystemTimer) == 0);
@@ -223,11 +251,14 @@ void test_tlsr_system_timer() {
     device.write8(mcuemu::Tlsr8258::SystemTimerControl, 0x01);
     CHECK(device.read16(0x800750) == 0);
     device.write8(mcuemu::Tlsr8258::SystemTimerControl, 0x02);
-    CHECK(device.read8(mcuemu::Tlsr8258::SystemTimerControl) == 0);
+    CHECK(device.read8(mcuemu::Tlsr8258::SystemTimerControl) == 0); // STOP: strobes clear, not running
+    device.write8(mcuemu::Tlsr8258::SystemTimerControl, 0x01);       // START
+    CHECK(device.read8(mcuemu::Tlsr8258::SystemTimerControl) == 0x02);
 
     device.write32(mcuemu::Tlsr8258::SystemTimerCompare, 0x150);
     device.write8(mcuemu::Tlsr8258::SystemTimerMode,
-                  mcuemu::Tlsr8258::SystemTimerIrqEnable);
+                  mcuemu::Tlsr8258::SystemTimerEnable |
+                      mcuemu::Tlsr8258::SystemTimerIrqEnable);
     device.write8(mcuemu::Tlsr8258::IrqMask + 2, 1u << 4); // IRQ 20.
     device.write8(mcuemu::Tlsr8258::IrqGlobalEnable, 1);
     device.tick(48); // 0x140; compare has not fired yet.

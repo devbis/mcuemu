@@ -104,6 +104,9 @@ public:
     static constexpr std::uint32_t SystemTimerMode = 0x80074c;
     static constexpr std::uint8_t SystemTimerIrqEnable = 1u << 1;
     static constexpr std::uint8_t SystemTimer32kCalibrationEnable = 1u << 7;
+    // SYS_TIMER_CTRL0 bit 4 (reset value 1) selects the 16 MHz clock of the
+    // counter; with it clear the counter stands still even after START.
+    static constexpr std::uint8_t SystemTimerEnable = 1u << 4;
     static constexpr std::uint32_t SystemTimerControl = 0x80074f;
     static constexpr std::uint8_t SystemTimerControlStrobeMask = 0x0b;
     static constexpr std::uint32_t IrqMask = 0x800640;
@@ -268,6 +271,7 @@ private:
     std::uint32_t sleep_entry_cycles_remaining_{0};
     Tlsr8258PowerState pending_sleep_state_{Tlsr8258PowerState::Awake};
     std::uint32_t system_timer_count_{0};
+    bool system_timer_started_{true};
     std::uint64_t system_timer_fraction_{0};
     std::uint8_t mspi_command_{0};
     std::uint8_t mspi_response_index_{0};
@@ -367,6 +371,12 @@ private:
 
     std::uint8_t read_register(std::uint32_t offset);
     void write_register(std::uint32_t offset, std::uint8_t value);
+    // The counter advances while it has been started (reset state; STOP and
+    // START strobes in 0x74f) and its 16 MHz clock is selected in 0x74c.
+    bool system_timer_running() const noexcept {
+        return system_timer_started_ &&
+               (registers_[SystemTimerMode - RegisterBase] & SystemTimerEnable) != 0;
+    }
     void update_system_timer_irq(std::uint32_t previous_count) noexcept;
     void update_system_timer_calibration() noexcept;
     void update_analog_calibration() noexcept;

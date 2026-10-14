@@ -288,6 +288,24 @@ if(MCUEMU_BUILD_TESTS)
         endif()
     endif()
 
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/firmware/zephyr-ed-stimer-before.bin" AND
+       EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/firmware/zephyr-ed-stimer-after.bin")
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            add_test(
+                NAME firmware_zephyr_stimer_wake
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_zephyr_stimer_wake.py"
+                        "$<TARGET_FILE:mcuemu>"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/firmware/zephyr-ed-stimer-before.bin"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/firmware/zephyr-ed-stimer-after.bin")
+            set_tests_properties(firmware_zephyr_stimer_wake PROPERTIES
+                TIMEOUT 120
+                LABELS "firmware;power"
+            )
+        endif()
+    endif()
+
     set(MCUEMU_NRF52840_SENSOR_FIRMWARE
         "${CMAKE_CURRENT_SOURCE_DIR}/firmware/nrf52840-sensor.bin")
     if(EXISTS "${MCUEMU_NRF52840_SENSOR_FIRMWARE}")

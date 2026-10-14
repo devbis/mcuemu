@@ -44,6 +44,7 @@ void usage(std::ostream &out) {
            "       [--trace-analog]\n"
            "       [--trace-stack] [--trace-after-step N]\n"
            "       [--trace-limit N] [--fault-trace N]\n"
+           "       [--areg ADDRESS=VALUE]... [--print-mmio START:END]...\n"
            "       mcuemu network --node NAME=IMAGE --node NAME=IMAGE\n"
            "       --model MODEL [--channel 11..26] [--steps N]\n"
            "       [--rc32k-hz HZ] [--rc32k-calibration VALUE]\n"
@@ -315,6 +316,8 @@ int run_command(int argc, char **argv) {
     bool trace_analog = false;
     std::optional<mcuemu::AddressRange> pc_range;
     std::optional<mcuemu::AddressRange> mmio_range;
+    std::vector<std::pair<std::uint8_t, std::uint8_t>> analog_presets;
+    std::vector<mcuemu::AddressRange> print_ranges;
     for (int i = 2; i < argc; ++i) {
         const std::string arg = argv[i];
         if (arg == "--firmware" && i + 1 < argc)
@@ -342,6 +345,16 @@ int run_command(int argc, char **argv) {
         else if (arg == "--trace-mmio-range" && i + 1 < argc) {
             mmio_range = parse_range(argv[++i]);
             trace_mmio = true;
+        } else if (arg == "--areg" && i + 1 < argc) {
+            const std::string spec = argv[++i];
+            const std::size_t eq = spec.find('=');
+            if (eq == std::string::npos)
+                throw std::invalid_argument("--areg expects ADDRESS=VALUE: " + spec);
+            analog_presets.emplace_back(
+                static_cast<std::uint8_t>(std::stoul(spec.substr(0, eq), nullptr, 0)),
+                static_cast<std::uint8_t>(std::stoul(spec.substr(eq + 1), nullptr, 0)));
+        } else if (arg == "--print-mmio" && i + 1 < argc) {
+            print_ranges.push_back(parse_range(argv[++i]));
         } else if (arg == "--trace-limit" && i + 1 < argc)
             trace_limit = parse_count(argv[++i]);
         else if (arg == "--trace-after-step" && i + 1 < argc)
@@ -369,6 +382,13 @@ int run_command(int argc, char **argv) {
         (std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
     device.load_firmware(image);
 
+    // Analog registers survive a deep-sleep wake: presetting AREG 0x3a to the
+    // marker the firmware leaves makes the start a timed deep wake.
+    for (const auto &[address, value] : analog_presets) {
+        device.write8(0x8000b8, address);
+        device.write8(0x8000b9, value);
+        device.write8(0x8000ba, 0x60); // CYC0 | write
+    }
     mcuemu::Cpu cpu(device);
     cpu.set_trace_limit(trace_limit);
     cpu.set_trace_after_step(trace_after_step);
@@ -392,6 +412,13 @@ int run_command(int argc, char **argv) {
     for (unsigned reg = 0; reg != 16; ++reg) {
         std::cout << "r" << reg << "=0x" << std::hex << cpu.reg(reg)
                   << ((reg & 3u) == 3u ? '\n' : ' ');
+    }
+    for (const mcuemu::AddressRange &range : print_ranges) {
+        std::cout << "mmio 0x" << std::hex << range.first << ":";
+        for (std::uint32_t address = range.first; address <= range.last; ++address)
+            std::cout << ' ' << std::setw(2) << std::setfill('0')
+                      << static_cast<unsigned>(device.read8(address));
+        std::cout << std::dec << std::setfill(' ') << '\n';
     }
     if (result.reason == mcuemu::StopReason::Fault) {
         std::cerr << "CPU fault: " << result.message << '\n';
