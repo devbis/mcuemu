@@ -126,6 +126,31 @@ void test_nrf52_timer_compare_clear_and_ppi_count() {
     CHECK(count == 9 || count == 10);
 }
 
+// A channel whose fork task disables its own group fires once; this is how the
+// Nordic 802.15.4 driver keeps the radio from ramping up again after a frame.
+void test_nrf52_ppi_fork_disables_a_channel_group() {
+    Chip c;
+    c.write(Timer0 + 0x508, 3);             // BITMODE 32
+    c.write(Timer0 + 0x510, 0);
+    c.write(Timer0 + 0x540, 1600);
+    c.write(Timer0 + 0x200, 1);             // COMPARE0_CLEAR: an event every 100 us
+    c.write(Timer1 + 0x504, 1);             // counter mode
+    c.write(Timer1 + 0x000, 1);
+    c.write(Ppi + 0x510, Timer0 + 0x140);   // CH0.EEP
+    c.write(Ppi + 0x514, Timer1 + 0x008);   // CH0.TEP = COUNT
+    c.write(Ppi + 0x910, Ppi + 0x004);      // CH0 fork: TASKS_CHG[0].DIS
+    c.write(Ppi + 0x800, 1);                // group 0 = channel 0
+    c.write(Ppi + 0x504, 1);                // CHENSET
+    c.write(Timer0 + 0x000, 1);
+    c.run_to_us(1000);
+    c.write(Timer1 + 0x040, 1);             // CAPTURE0
+    CHECK(c.read(Timer1 + 0x540) == 1);     // counted once, then the channel was off
+    c.write(Ppi + 0x000, 1);                // TASKS_CHG[0].EN
+    c.run_to_us(1200);
+    c.write(Timer1 + 0x040, 1);
+    CHECK(c.read(Timer1 + 0x540) == 2);     // enabled again: one more, then off again
+}
+
 void test_nrf52_gpio_pads_and_sense() {
     Chip c;
     unsigned seen = 99;

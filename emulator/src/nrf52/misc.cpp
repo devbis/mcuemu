@@ -331,6 +331,13 @@ void Ppi::route(std::uint32_t address) {
     --depth_;
 }
 
+// The nRF 802.15.4 radio driver relies on this: its ramp-up channel forks to
+// TASKS_CHG[n].DIS of its own group, so only the first trigger ramps the radio up.
+void Ppi::task(std::uint32_t offset) {
+    if (offset < 0x30 && (offset & 3) == 0)
+        set_group(offset / 8, (offset & 4) == 0);
+}
+
 void Ppi::set_group(unsigned group, bool enable) {
     if (group >= 6)
         return;

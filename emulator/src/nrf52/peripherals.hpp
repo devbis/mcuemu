@@ -230,6 +230,8 @@ public:
     std::uint32_t read(std::uint32_t offset) override;
     void write(std::uint32_t offset, std::uint32_t value) override;
     void reset() override;
+    // PPI tasks (TASKS_CHG[n].EN/DIS) can be the target of a channel or its fork.
+    void task(std::uint32_t offset) override;
     // An event register at `address` was raised: trigger the connected tasks.
     void route(std::uint32_t address);
 

@@ -17,6 +17,7 @@ void test_nrf52_rtc_compare_timing_and_counter();
 void test_nrf52_rtc_interrupt_and_overflow();
 void test_nrf52_timer_compare_clear_and_ppi_count();
 void test_nrf52_gpio_pads_and_sense();
+void test_nrf52_ppi_fork_disables_a_channel_group();
 void test_nrf52_gpiote_edge_event_and_output_task();
 void test_nrf52_ecb_encrypts_a_block();
 void test_nrf52_rng_is_deterministic_per_device();
@@ -53,6 +54,7 @@ int main() {
     RUN(test_nrf52_rtc_interrupt_and_overflow);
     RUN(test_nrf52_timer_compare_clear_and_ppi_count);
     RUN(test_nrf52_gpio_pads_and_sense);
+    RUN(test_nrf52_ppi_fork_disables_a_channel_group);
     RUN(test_nrf52_gpiote_edge_event_and_output_task);
     RUN(test_nrf52_ecb_encrypts_a_block);
     RUN(test_nrf52_rng_is_deterministic_per_device);
