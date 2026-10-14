@@ -18,6 +18,7 @@ void test_nrf52_rtc_interrupt_and_overflow();
 void test_nrf52_timer_compare_clear_and_ppi_count();
 void test_nrf52_gpio_pads_and_sense();
 void test_nrf52_ppi_fork_disables_a_channel_group();
+void test_nrf52_ppi_task_from_a_service_pass_arms_the_radio();
 void test_nrf52_gpiote_edge_event_and_output_task();
 void test_nrf52_ecb_encrypts_a_block();
 void test_nrf52_rng_is_deterministic_per_device();
@@ -27,6 +28,7 @@ void test_nrf52_saadc_reads_vdd();
 void test_nrf52_clock_start_events();
 void test_nrf52_lfclk_restart_switches_source();
 void test_nrf52_radio_frame_exchange();
+void test_nrf52_radio_address_event_comes_before_the_frame_ends();
 void test_nrf52_radio_cca_sees_a_frame_on_air();
 void test_nrf52_radio_ramp_and_state();
 } // namespace mcuemu_tests
@@ -55,6 +57,7 @@ int main() {
     RUN(test_nrf52_timer_compare_clear_and_ppi_count);
     RUN(test_nrf52_gpio_pads_and_sense);
     RUN(test_nrf52_ppi_fork_disables_a_channel_group);
+    RUN(test_nrf52_ppi_task_from_a_service_pass_arms_the_radio);
     RUN(test_nrf52_gpiote_edge_event_and_output_task);
     RUN(test_nrf52_ecb_encrypts_a_block);
     RUN(test_nrf52_rng_is_deterministic_per_device);
@@ -64,6 +67,7 @@ int main() {
     RUN(test_nrf52_clock_start_events);
     RUN(test_nrf52_lfclk_restart_switches_source);
     RUN(test_nrf52_radio_frame_exchange);
+    RUN(test_nrf52_radio_address_event_comes_before_the_frame_ends);
     RUN(test_nrf52_radio_cca_sees_a_frame_on_air);
     RUN(test_nrf52_radio_ramp_and_state);
     if (failures != 0) {
