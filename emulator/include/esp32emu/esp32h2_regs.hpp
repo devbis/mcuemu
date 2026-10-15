@@ -4,6 +4,11 @@
 
 #include <cstdint>
 
+// <windows.h> defines IN and OUT as empty macros; register names (GPIO IN/OUT) must survive it; the
+// project never needs the SAL meaning, so they stay undefined.
+#undef IN
+#undef OUT
+
 namespace esp32h2_regs {
 
 namespace ieee802154 {
