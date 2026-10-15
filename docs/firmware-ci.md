@@ -41,7 +41,7 @@ locally too when you put the images there.
 | `zigbee-efr32mg21` | as `zigbee-nrf52840`, on the EFR32MG21 model (its radio has the zigbee-rs driver's register interface, see `docs/efr32mg21.md`); a BTN0 press at 2 s starts the join |
 | `zigbee-esp32h2` | the sensor joins the sampleGW coordinator through the real ESP-IDF bootloader on ROM stand-ins (it scans all channels, backs off and reboots once); the console shows the AES self-test, `JoinedOrResumed`, Confirm-Key SUCCESS and `CommissioningComplete` |
 | `zigbee-esp32c6` | the same for the C6 sensor image, which also scans every channel (the log must show channel 26) |
-| `thermostat` | the ZT3L joins the coordinator and both UARTs of the two-chip board carry framed traffic |
+| `tlsr8258 + ca51 thermostat r02` | the ZT3L joins the coordinator and both UARTs of the two-chip board carry framed traffic |
 | `nrf52840-boot`, `zephyr-pm-wake`, `vendor-sleep-1s` | the existing scripts in `tests/firmware/` |
 
 `tests/firmware/zigbee_air_check.py` runs the system file and reads the pcap

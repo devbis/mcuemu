@@ -76,7 +76,7 @@ jobs:
   # ------------------------------------------------------------------ images
 
   firmware-telink:
-    name: Telink ${{ matrix.app }}
+    name: "Prepare: Telink ${{ matrix.app }}"
     needs: prepare
     runs-on: ubuntu-latest
     strategy:
@@ -111,7 +111,7 @@ jobs:
           if-no-files-found: error
 
   firmware-z03mmc:
-    name: z03mmc
+    name: "Prepare: z03mmc"
     needs: prepare
     runs-on: ubuntu-latest
     steps:
@@ -139,7 +139,7 @@ jobs:
           if-no-files-found: error
 
   firmware-plug:
-    name: tlsr8258 plug
+    name: "Prepare: tlsr8258 plug"
     needs: prepare
     runs-on: ubuntu-latest
     steps:
@@ -183,7 +183,7 @@ jobs:
           if-no-files-found: error
 
   firmware-nrf52840:
-    name: nRF52840 sensor (${{ matrix.variant }})
+    name: "Prepare: nRF52840 sensor (${{ matrix.variant }})"
     needs: prepare
     runs-on: ubuntu-latest
     strategy:
@@ -227,7 +227,7 @@ jobs:
           if-no-files-found: error
 
   firmware-esp32:
-    name: ${{ matrix.chip }} sensor
+    name: "Prepare: ${{ matrix.chip }} sensor"
     needs: prepare
     runs-on: ubuntu-latest
     strategy:
@@ -277,7 +277,7 @@ jobs:
           if-no-files-found: error
 
   firmware-efr32mg21:
-    name: EFR32MG21 sensor
+    name: "Prepare: EFR32MG21 sensor"
     needs: prepare
     runs-on: ubuntu-latest
     steps:
@@ -317,8 +317,8 @@ jobs:
             out/efr32mg21-sensor.rtt
           if-no-files-found: error
 
-  firmware-thermostat:
-    name: Tuya thermostat releases
+  firmware-tlsr8258_ca51_thermostat_r02:
+    name: "Prepare: tlsr8258 + ca51 thermostat r02"
     needs: prepare
     runs-on: ubuntu-latest
     steps:
@@ -331,14 +331,14 @@ jobs:
           sha256sum out/*.bin
       - uses: actions/upload-artifact@v7
         with:
-          name: fw-thermostat
+          name: fw-tlsr8258_ca51_thermostat_r02
           path: out/*.bin
           if-no-files-found: error
 
   # ------------------------------------------------------------------- tests
 
   test:
-    name: ${{ matrix.name }}
+    name: "Emu: ${{ matrix.name }}"
     needs:
       - prepare
       - firmware-telink
@@ -347,7 +347,7 @@ jobs:
       - firmware-nrf52840
       - firmware-efr32mg21
       - firmware-esp32
-      - firmware-thermostat
+      - firmware-tlsr8258_ca51_thermostat_r02
     # Run even when an unrelated image failed to build: the scenario that needs
     # it fails on its own, the others still report.
     if: ${{ !cancelled() && needs.prepare.result == 'success' }}
@@ -413,7 +413,7 @@ jobs:
               --expect 'JoinedOrResumed'
               --expect 'Confirm-Key SUCCESS'
               --expect 'CommissioningComplete \{ success: true \}'
-          - name: thermostat
+          - name: tlsr8258 + ca51 thermostat r02
             command: >-
               python3 tests/firmware/zigbee_air_check.py "$MCUEMU"
               tests/firmware/scenarios/thermostat.yaml --workdir "$LOGS" --for 30s --min-unicast 1
