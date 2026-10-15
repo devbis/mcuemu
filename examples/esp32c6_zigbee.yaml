@@ -1,0 +1,36 @@
+# An ESP32-C6 (Zephyr 802.15.4 end device) next to the TLSR8258 sampleGW
+# coordinator on one radio medium. Work in progress: the end device scans and
+# sends beacon requests; see docs/esp32-riscv.md for how far the join gets.
+#
+#   mkdir -p /tmp/esp && cd /tmp/esp
+#   /path/to/build/mcuemu sim /path/to/examples/esp32c6_zigbee.yaml --for 30s
+version: 1
+
+world:
+  seed: 1
+  duration: 30s
+  radio:
+    - id: air0
+      model: log_distance
+      reference_loss_db: 40
+      path_loss_exponent: 2.5
+
+devices:
+  - id: coordinator
+    mcus:
+      - id: zb
+        model: tlsr8258
+        variant: F1K
+        firmware: ../firmware/samplegw_tb03f.bin
+        radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+  - id: esp
+    mcus:
+      - id: mcu
+        model: esp32c6
+        firmware: ../firmware/esp32c6-end-device.bin
+        radio: { air: air0, position: [4, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+attach:
+  - { endpoint: air0, sink: "pcap:esp-air.pcap" }
+  - { endpoint: esp.mcu.uart0, sink: "text" }

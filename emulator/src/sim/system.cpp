@@ -2,9 +2,11 @@
 
 #include "sim/ca51f253l3_mcu.hpp"
 #include "sim/efr32mg21_mcu.hpp"
+#include "sim/esp32_mcu.hpp"
 #include "sim/nrf52840_mcu.hpp"
 #include "sim/tlsr8258_mcu.hpp"
 
+#include <tuple>
 #include <algorithm>
 #include <deque>
 #include <iostream>
@@ -88,6 +90,21 @@ const McuRegistry &McuRegistry::builtin() {
                 throw std::invalid_argument("flash_timing is only modelled for tlsr8258");
             return std::make_unique<Efr32mg21Mcu>(name);
         });
+        for (const auto &[model, variant, mhz] :
+             {std::tuple{"esp32c6", esp32emu::Variant::C6, "160"}, std::tuple{"esp32h2", esp32emu::Variant::H2, "96"}}) {
+            r.add(model, [model = std::string(model), variant, mhz = std::string(mhz)](const McuConfig &config,
+                                                                                         const std::string &name) {
+                if (config.variant)
+                    throw std::invalid_argument(model + " has no variants; remove 'variant'");
+                if (config.clock_hz)
+                    throw std::invalid_argument(model + " runs at a fixed " + mhz + " MHz; remove 'clock_hz'");
+                if (config.supply_mv)
+                    throw std::invalid_argument(model + " does not model its supply; remove 'supply_mv'");
+                if (config.flash_timing)
+                    throw std::invalid_argument("flash_timing is only modelled for tlsr8258");
+                return std::make_unique<Esp32Mcu>(name, variant);
+            });
+        }
         return r;
     }();
     return registry;

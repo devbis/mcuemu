@@ -21,7 +21,7 @@ devices:
   - id: node               # letters, digits, '_' and '-'
     mcus:
       - id: main
-        model: tlsr8258    # tlsr8258 | ca51f253l3 | nrf52840 | efr32mg21
+        model: tlsr8258    # tlsr8258 | ca51f253l3 | nrf52840 | efr32mg21 | esp32c6
         variant: F1K       # tlsr8258 only: F512 (default) | F1K
         firmware: fw/a.bin # relative to this file; or a list of flash pieces, see below
         clock_hz: 48MHz    # 48000000 | 48MHz | 32kHz
@@ -246,7 +246,7 @@ TX power comes from the node's `tx_power_dbm`, not from the chip's registers.
 `protocols` lists what the node uses. The TLSR8258 model connects only the
 Zigbee RF path; `ble` on it is rejected (its BLE registers are not modeled),
 so BLE traffic comes from scripted parts, which can use the `radio` API in
-[scripting.md](scripting.md). `nrf52840` and `efr32mg21` connect an 802.15.4 radio (`zigbee`)
+[scripting.md](scripting.md). `nrf52840`, `efr32mg21` and `esp32c6` connect an 802.15.4 radio (`zigbee`)
 and reject `ble`. `ca51f253l3` has no radio.
 
 ## Naming
@@ -255,9 +255,9 @@ and reject `ble`. `ca51f253l3` has no radio.
 - Net: `device.net` for device-scope nets, the plain id for world-scope nets.
   Every net is also an endpoint with the same name.
 - Pads: `tlsr8258` has `PA0`..`PE7`. `nrf52840` has `P0.00`..`P0.31` and
-  `P1.00`..`P1.15`. `efr32mg21` has `PA0`..`PD15`. `ca51f253l3` has no GPIO model yet, so no pad can be wired.
+  `P1.00`..`P1.15`. `efr32mg21` has `PA0`..`PD15`. `ca51f253l3` and `esp32c6` have no GPIO model yet, so no pad can be wired.
 - UART: `uartN`. `tlsr8258` has `uart0`; `nrf52840` has `uart0`/`uart1` (UARTE0
-  and UARTE1); `efr32mg21` has none yet; `ca51f253l3` has `uart0`/`uart1` (transmit only), so a link to
+  and UARTE1); `efr32mg21` has none yet; `esp32c6` has `uart0` (transmit only: the console); `ca51f253l3` has `uart0`/`uart1` (transmit only), so a link to
   it is one-way and reports a warning.
 
 ## Semantics

@@ -1,0 +1,39 @@
+# An ESP32-H2 (zigbee-rs sensor, ESP-IDF 2nd stage bootloader + esp-hal app)
+# joining the network of the TLSR8258 sampleGW coordinator on one radio medium.
+# The image is the whole flash (bootloader at 0, partition table, app at 0x10000):
+# the model runs the real bootloader on ROM stand-ins.
+#
+#   mkdir -p /tmp/esp && cd /tmp/esp
+#   /path/to/build/mcuemu sim /path/to/examples/esp32h2_zigbee.yaml --for 60s
+#
+# `esp-air.pcap` opens in Wireshark (802.15.4 without FCS); the console is on esp.mcu.uart0.
+version: 1
+
+world:
+  seed: 1
+  duration: 60s
+  radio:
+    - id: air0
+      model: log_distance
+      reference_loss_db: 40
+      path_loss_exponent: 2.5
+
+devices:
+  - id: coordinator
+    mcus:
+      - id: zb
+        model: tlsr8258
+        variant: F1K
+        firmware: ../firmware/telink-gw.bin
+        radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+  - id: esp
+    mcus:
+      - id: mcu
+        model: esp32h2
+        firmware: ../firmware/esp32h2-sensor.bin
+        radio: { air: air0, position: [4, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+attach:
+  - { endpoint: air0, sink: "pcap:esp-air.pcap" }
+  - { endpoint: esp.mcu.uart0, sink: "text" }
