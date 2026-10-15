@@ -4,6 +4,7 @@
 #include "mcuemu/tlsr8258.hpp"
 #include "mcs51emu/run_command.hpp"
 #include "efr32emu/run_command.hpp"
+#include "esp32emu/run_command.hpp"
 #include "nrf52emu/run_command.hpp"
 
 #include <algorithm>
@@ -62,7 +63,8 @@ void usage(std::ostream &out) {
            "       [--trace-nets]\n"
            "       mcuemu serve --root DIR [--port N] [--bind ADDR] [--token T]\n"
            "       [--allow-origin ORIGIN]... [--max-sessions N] [--idle-timeout SEC]\n\n"
-           "Models: TLSR8258F512, TLSR8258F1K, CA51F253L3 (MCS-51), NRF52840 (Cortex-M4), EFR32MG21 (Cortex-M33)\n"
+           "Models: TLSR8258F512, TLSR8258F1K, CA51F253L3 (MCS-51), NRF52840 (Cortex-M4), EFR32MG21 (Cortex-M33),\n"
+           "        ESP32C6, ESP32H2 (RISC-V, work in progress; `run`; esp32c6/esp32h2 in `sim`)\n"
            "Firmware is loaded as a raw image at flash address 0.\n"
            "Trace ranges are inclusive; addresses accept decimal or 0x hex.\n";
 }
@@ -291,6 +293,7 @@ void require_model(const std::string &model) {
 bool is_mcs51_model(const std::string &model) { return model.rfind("CA51", 0) == 0; }
 bool is_nrf52_model(const std::string &model) { return model.rfind("NRF52", 0) == 0; }
 bool is_efr32_model(const std::string &model) { return model.rfind("EFR32", 0) == 0; }
+bool is_esp32_model(const std::string &model) { return model.rfind("ESP32", 0) == 0; }
 
 int run_command(int argc, char **argv) {
     for (int i = 2; i + 1 < argc; ++i)
@@ -300,6 +303,8 @@ int run_command(int argc, char **argv) {
             return nrf52emu::run_command(argc, argv);
         else if (std::string(argv[i]) == "--model" && is_efr32_model(argv[i + 1]))
             return efr32emu::run_command(argc, argv);
+        else if (std::string(argv[i]) == "--model" && is_esp32_model(argv[i + 1]))
+            return esp32emu::run_command(argc, argv);
 
     std::string firmware;
     std::string model;
@@ -889,7 +894,8 @@ int main(int argc, char **argv) {
                          "TLSR8258F1K (1 MiB flash, 64 KiB SRAM)\n"
                          "CA51F253L3 (32 KiB code flash, MCS-51; `run` and `sim`)\n"
                          "NRF52840 (1 MiB flash, 256 KiB RAM, Cortex-M4F; `run`)\n"
-                         "EFR32MG21 (512 KiB flash, 64 KiB RAM, Cortex-M33; `run` and `sim`)\n";
+                         "EFR32MG21 (512 KiB flash, 64 KiB RAM, Cortex-M33; `run` and `sim`)\n"
+                         "ESP32C6 (4 MiB flash, 512 KiB SRAM) and ESP32H2 (320 KiB SRAM), RISC-V RV32IMAC; work in progress\n";
             return 0;
         }
         if (std::string(argv[1]) == "network")

@@ -16,7 +16,7 @@ endif()
 
 # The board wrapper depends on the TC32 architecture implemented in this local
 # Unicorn checkout. Keep the engine as a separate Git repository under ./engine.
-set(UNICORN_ARCH "tc32;mcs51;arm" CACHE STRING "Architectures built for device emulators" FORCE)
+set(UNICORN_ARCH "tc32;mcs51;arm;riscv" CACHE STRING "Architectures built for device emulators" FORCE)
 set(UNICORN_BUILD_TESTS OFF CACHE BOOL "Build Unicorn tests through the wrapper" FORCE)
 set(UNICORN_INSTALL OFF CACHE BOOL "Install Unicorn through the wrapper" FORCE)
 add_subdirectory(engine/unicorn EXCLUDE_FROM_ALL)
@@ -49,7 +49,7 @@ target_compile_options(mcuemu-core PRIVATE ${MCUEMU_WARNING_FLAGS})
 target_link_libraries(mcuemu-core PUBLIC unicorn)
 
 add_executable(mcuemu emulator/src/main.cpp)
-target_link_libraries(mcuemu PRIVATE mcuemu-core mcs51emu nrf52emu efr32emu simcore)
+target_link_libraries(mcuemu PRIVATE mcuemu-core mcs51emu nrf52emu efr32emu esp32emu simcore)
 
 add_library(mcs51emu
     emulator/src/mcs51/ca51f253l3.cpp
@@ -64,6 +64,29 @@ add_library(cortexm emulator/src/cortexm/core.cpp)
 target_include_directories(cortexm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(cortexm PRIVATE ${MCUEMU_WARNING_FLAGS})
 target_link_libraries(cortexm PUBLIC unicorn)
+
+# Generic RV32 hart on the fork's RISC-V backend (traps, host interrupt line, WFI, cycle clock).
+add_library(riscvcore emulator/src/riscv/core.cpp)
+target_include_directories(riscvcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
+target_compile_options(riscvcore PRIVATE ${MCUEMU_WARNING_FLAGS})
+target_link_libraries(riscvcore PUBLIC unicorn)
+
+add_library(esp32emu
+    emulator/src/esp32/esp32.cpp
+    emulator/src/esp32/spi_mem.cpp
+    emulator/src/esp32/rom.cpp
+    emulator/src/esp32/timg.cpp
+    emulator/src/esp32/timers.cpp
+    emulator/src/esp32/intc.cpp
+    emulator/src/esp32/ieee802154.cpp
+    emulator/src/esp32/aes.cpp
+    emulator/src/esp32/elf_symbols.cpp
+    emulator/src/esp32/run_command.cpp
+)
+target_include_directories(esp32emu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/emulator/src/esp32)
+target_include_directories(esp32emu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
+target_compile_options(esp32emu PRIVATE ${MCUEMU_WARNING_FLAGS})
+target_link_libraries(esp32emu PUBLIC riscvcore mcuemu-core)
 
 add_library(nrf52emu
     emulator/src/nrf52/nrf52840.cpp
@@ -167,10 +190,11 @@ add_library(simcore
     emulator/src/sim/ca51f253l3_mcu.cpp
     emulator/src/sim/nrf52840_mcu.cpp
     emulator/src/sim/efr32mg21_mcu.cpp
+    emulator/src/sim/esp32_mcu.cpp
 )
 target_include_directories(simcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(simcore PRIVATE ${MCUEMU_WARNING_FLAGS})
-target_link_libraries(simcore PUBLIC mcuemu-core mcs51emu nrf52emu efr32emu ${MCUEMU_YAML_TARGET} lua54
+target_link_libraries(simcore PUBLIC mcuemu-core mcs51emu nrf52emu efr32emu esp32emu ${MCUEMU_YAML_TARGET} lua54
     nlohmann_json::nlohmann_json)
 if(WIN32)
     target_link_libraries(simcore PUBLIC ws2_32)
@@ -203,6 +227,24 @@ if(MCUEMU_BUILD_TESTS)
     target_include_directories(nrf52emu-tests PRIVATE tests/nrf52)
     target_link_libraries(nrf52emu-tests PRIVATE nrf52emu)
     add_test(NAME nrf52emu-tests COMMAND nrf52emu-tests)
+
+    add_executable(riscvemu-tests
+        tests/riscv/test_main.cpp
+        tests/riscv/test_riscv.cpp
+        tests/riscv/test_core.cpp
+    )
+    target_include_directories(riscvemu-tests PRIVATE tests/riscv)
+    target_link_libraries(riscvemu-tests PRIVATE riscvcore)
+    add_test(NAME riscvemu-tests COMMAND riscvemu-tests)
+
+    add_executable(esp32emu-tests
+        tests/esp32/test_main.cpp
+        tests/esp32/test_esp32.cpp
+        tests/esp32/test_mac.cpp
+    )
+    target_include_directories(esp32emu-tests PRIVATE tests/esp32 emulator/src/esp32)
+    target_link_libraries(esp32emu-tests PRIVATE esp32emu)
+    add_test(NAME esp32emu-tests COMMAND esp32emu-tests)
 
     add_executable(efr32emu-tests
         tests/efr32/test_main.cpp
@@ -378,6 +420,23 @@ if(MCUEMU_BUILD_TESTS)
                         "$<TARGET_FILE:mcuemu>"
                         "${CMAKE_CURRENT_SOURCE_DIR}/examples/efr32mg21_zigbee.yaml")
             set_tests_properties(firmware_efr32mg21_zigbee_join PROPERTIES
+                TIMEOUT 300
+                LABELS "firmware;zigbee"
+            )
+        endif()
+    endif()
+
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/firmware/esp32h2-sensor.bin" AND
+       EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/firmware/telink-gw.bin")
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            add_test(
+                NAME firmware_esp32h2_zigbee_join
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_esp32h2_zigbee_join.py"
+                        "$<TARGET_FILE:mcuemu>"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/examples/esp32h2_zigbee.yaml")
+            set_tests_properties(firmware_esp32h2_zigbee_join PROPERTIES
                 TIMEOUT 300
                 LABELS "firmware;zigbee"
             )
