@@ -199,8 +199,12 @@ and the released `esp32c6-end-device.bin` behave the same:
   `z_main_stack` (frames of `txdc_cal_pwdet` alone fill it exactly), into the top of the idle thread's
   stack, where Zephyr keeps that thread's initial exception frame (and its TLS). The first run of the
   idle thread then `mret`s to a stack address and faults. This is the firmware's own call depth, so real
-  hardware should overrun the same way; why it survives there is not understood (a different path through
-  `libphy` with real eFuse calibration data, which the model leaves blank, is the open guess). Two model
+  hardware should overrun the same way; why it survives there is not understood. Verified facts: the idle
+  thread's initial frame is written at 8.095 ms (mepc slot 0x408133d0, entry/arg slots 0x408133b0..d4), the
+  PHY frames overwrite those slots at 11.3 ms and 12.4 ms, and the crash `mepc` (0x408134b2) is the
+  overwritten slot plus 2. Restoring that frame from a snapshot (a throw-away host hack at 12.95 ms) makes
+  the unstubbed image boot Zephyr and send its beacon requests, so the idle frame is the only blocker. The
+  eFuse theory was tested and is wrong: with BLK_VERSION and OCODE set the path is the same. Two model
   fixes shortened the init without removing the overflow: `wait_i2c_sdm_stable` finds the value it polls
   for (block 0x63, register 0 reads 0x5b) instead of timing out after 10 ms, and `get_tone_sar_dout` returns a
   rising ramp so the DC-offset scans stop after a few steps instead of 50 per phase (23 ms of
@@ -212,9 +216,9 @@ and the released `esp32c6-end-device.bin` behave the same:
 ## Next steps
 
 1. A PHY that needs no stubs on the C6 (the H2 blob runs with forced bits only): find out why the stack overrun
-   is harmless on hardware (eFuse calibration data is the first thing to try).
+   is harmless on hardware (not the eFuse calibration, see above; a shallower path through `libphy`
+   or a stack guard are the remaining guesses).
 2. The C6 Zephyr image against a coordinator on its channel.
-3. TIMG watchdogs, the C6's eFuse (the chip revision reads as v0.0; `o_code calibration
-   fail` is logged) and the H2's real temperature sensor (the model returns what the
+3. TIMG watchdogs, the C6's eFuse revision fields (the chip revision reads as v0.0) and the H2's real temperature sensor (the model returns what the
    app writes to the analog registers).
 4. Speed: the H2 sensor runs about 3.4x faster than real time while idle.
