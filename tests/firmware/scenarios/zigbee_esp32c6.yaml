@@ -1,0 +1,33 @@
+# CI scenario: the zigbee-rs ESP32-C6 sensor (the whole flash image: ESP-IDF
+# 2nd stage bootloader + esp-hal app) joins the sampleGW coordinator. The app
+# scans every channel. The console is traced from board.mcu.uart0 by
+# zigbee_air_check.py (--trace-uart). Checked by zigbee_air_check.py.
+version: 1
+
+world:
+  seed: 1
+  duration: 60s
+  radio:
+    - id: air0
+      model: log_distance
+      reference_loss_db: 40
+      path_loss_exponent: 2.5
+
+devices:
+  - id: coordinator
+    mcus:
+      - id: zb
+        model: tlsr8258
+        variant: F1K
+        firmware: ../../../firmware/telink-gw.bin
+        radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+  - id: board
+    mcus:
+      - id: mcu
+        model: esp32c6
+        firmware: ../../../firmware/esp32c6-sensor.bin
+        radio: { air: air0, position: [4, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+attach:
+  - { endpoint: air0, sink: "pcap:air.pcap" }

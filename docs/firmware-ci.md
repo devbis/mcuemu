@@ -18,6 +18,7 @@ the scenarios that need it.
 | `tlsr8258-plug.bin` | `faronov/zigbee-rs-plugs`, feature `zbeacon-ts011f-512k` | `scripts/tlsr8258-firmware.sh` with the pinned tc32 Rust toolchain (SHA-256 checked) |
 | `nrf52840-sensor.bin`, `nrf52840-sensor-sht31.bin` | `devbis/zigbee-rs`, branch `nrf-experiment` (`ZIGBEE_RS_REF`) | `cargo build --release` in `examples/nrf52840-sensor` |
 | `efr32mg21-sensor.bin` (+ `.rtt`) | `devbis/zigbee-rs`, same ref, `examples/efr32mg21-sensor` | `cargo build --release`; the address of `_SEGGER_RTT` is read from the ELF into `efr32mg21-sensor.rtt` and written into the scenario by the test job |
+| `esp32h2-sensor.bin`, `esp32c6-sensor.bin` | `devbis/zigbee-rs`, same ref, `examples/esp32h2-sensor` and `examples/esp32c6-sensor` | `cargo build --release -Z build-std=core,alloc`, then `espflash 4.5.0 save-image --merge` (pinned release, SHA-256 checked) with the product's 4 MB OTA partition table: the whole flash (bootloader at 0, app in `ota_0`) |
 | `thermostat-ca51.bin`, `thermostat-zt3l.bin` | releases in `slacky1965/tuya_thermostat_full_custom_r02_zrd` (`bin/`, default branch) | downloaded |
 | `zephyr-pmtest.bin`, `vendor_sleep_1s.bin` | no source available | committed in `tests/firmware-images/` |
 
@@ -38,6 +39,8 @@ locally too when you put the images there.
 | `zigbee-light`, `zigbee-z03mmc`, `zigbee-plug` | the device gets an Association Response with status 0, then sends NWK data frames to the coordinator and the coordinator sends some back |
 | `zigbee-nrf52840` | as above plus, in the defmt log, the scan, join, Transport-Key, Request Key, Confirm-Key SUCCESS and "network committed"; reports keep arriving after 75 s |
 | `zigbee-efr32mg21` | as `zigbee-nrf52840`, on the EFR32MG21 model (its radio has the zigbee-rs driver's register interface, see `docs/efr32mg21.md`); a BTN0 press at 2 s starts the join |
+| `zigbee-esp32h2` | the sensor joins the sampleGW coordinator through the real ESP-IDF bootloader on ROM stand-ins (it scans all channels, backs off and reboots once); the console shows the AES self-test, `JoinedOrResumed`, Confirm-Key SUCCESS and `CommissioningComplete` |
+| `zigbee-esp32c6` | the same for the C6 sensor image; added to find out how far the C6 model gets with an esp-hal application, so it may fail until the model catches up |
 | `thermostat` | the ZT3L joins the coordinator and both UARTs of the two-chip board carry framed traffic |
 | `nrf52840-boot`, `zephyr-pm-wake`, `vendor-sleep-1s` | the existing scripts in `tests/firmware/` |
 
