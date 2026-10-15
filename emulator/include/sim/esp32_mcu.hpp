@@ -3,13 +3,14 @@
 #include "esp32emu/esp32.hpp"
 #include "sim/mcu.hpp"
 
+#include <array>
 #include <string>
 #include <vector>
 
 namespace sim {
 
-// ESP32-C6 / ESP32-H2 adapter: the radio (802.15.4 only) and UART0. The chip has no GPIO
-// model yet, so no pad can be wired.
+// ESP32-C6 / ESP32-H2 adapter: the radio (802.15.4 only), UART0 and the GPIO pads used as plain
+// GPIO (named GPIO0.. : 31 pads on the C6, 28 on the H2).
 class Esp32Mcu final : public Mcu {
 public:
     Esp32Mcu(std::string name, esp32emu::Variant variant);
@@ -24,6 +25,7 @@ public:
     McuState state() const noexcept override { return state_; }
     const std::string &fault_message() const noexcept override { return fault_; }
 
+    std::vector<std::string> pin_names() const override;
     void connect_pin(std::string_view pad, Pin &pin) override;
     void attach_radio(mcuemu::VirtualAir &air, const std::string &node,
                       const std::vector<std::string> &protocols) override;
@@ -31,11 +33,16 @@ public:
     void write_memory(std::uint32_t address, const std::uint8_t *data, std::size_t length) override;
 
     unsigned uart_count() const override { return 1; }
+    bool uart_can_receive(unsigned index) const override { return index == 0 && chip_.uart_can_receive(); }
+    bool uart_rx(unsigned index, std::uint8_t byte) override { return index == 0 && chip_.uart_rx(byte); }
     std::vector<std::uint8_t> uart_take_tx(unsigned index) override;
 
     esp32emu::Esp32 &chip() noexcept { return chip_; }
 
 private:
+    void drive_pad(unsigned pad);
+
+    std::array<Pin *, 32> pins_{};
     esp32emu::Variant variant_;
     esp32emu::Esp32 chip_;
     McuState state_{McuState::Running};

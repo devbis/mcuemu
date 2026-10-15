@@ -1,0 +1,36 @@
+# ESP32-H2 on a dev board, the target of the zigbee-rs `esp32h2-sensor` image:
+#
+#   mcu.GPIO8  -> LED  (high = lit)
+#   mcu.GPIO9  <- BOOT button (pull-up, low = pressed)
+#
+# The image reads synthetic temperature and humidity and a fixed battery, so no sensor is
+# wired. Pad numbers were read off the firmware's GPIO accesses (GPIO9 is read once at
+# start-up: held low for 3 s it requests a factory reset). The firmware is the whole flash
+# image (bootloader at 0): pass `firmware` or use the default path.
+version: 1
+
+params:
+  firmware: ../../firmware/esp32h2-sensor.bin
+  air: air0
+  position: [0, 0, 0]
+  tx_power_dbm: 0
+  led_pin: GPIO8
+  button_pin: GPIO9
+
+device:
+  id: devkit
+  mcus:
+    - id: mcu
+      model: esp32h2
+      firmware: "${firmware}"
+      radio:
+        air: "${air}"
+        position: "${position}"
+        tx_power_dbm: "${tx_power_dbm}"
+        protocols: [zigbee]
+  nets:
+    - { id: led, pins: ["mcu.${led_pin}"] }
+    - { id: btn, pull: up, pins: ["mcu.${button_pin}"] }
+  parts:
+    - { id: status_led, type: led, pins: { in: led } }
+    - { id: key, type: button, pins: { out: btn } }

@@ -3,7 +3,10 @@
 
 #include "../test_support.hpp"
 #include "esp32emu/esp32c6_regs.hpp"
+#include "esp32emu/esp32h2_regs.hpp"
 #include "aes.hpp"
+#include "gpio.hpp"
+#include "esp32emu/esp32.hpp"
 #include "ieee802154.hpp"
 
 #include <cstring>
@@ -156,6 +159,54 @@ void test_esp32_aes_block_and_register_interface() {
         std::memcpy(result + 4 * i, &word, 4);
     }
     CHECK(std::memcmp(result, expect128, 16) == 0);
+}
+
+void test_esp32_gpio_drive_input_and_interrupts() {
+    namespace g = esp32h2_regs::gpio::reg;
+    esp32emu::IoMux mux(0x60090000, 28);
+    bool line = false;
+    esp32emu::Gpio gpio(0x60091000, 28, 22, mux, [&](unsigned, bool level) { line = level; });
+    int drive_events = 0;
+    gpio.on_drive_changed = [&](unsigned) { ++drive_events; };
+
+    CHECK(gpio.drive(9) == esp32emu::PadDrive::HiZ);
+    CHECK((gpio.read(g::IN, 4) >> 9 & 1u) == 1u); // an idle input reads high
+    // A pull-up from IO_MUX shows as a pull; GPIO9 output needs the simple-GPIO selection and the enable.
+    mux.write(4 + 4 * 9, 1u << esp32h2_regs::io_mux::field::GPIO0_FUN_WPU_shift, 4);
+    CHECK(gpio.drive(9) == esp32emu::PadDrive::PullUp);
+    gpio.write(g::FUNC0_OUT_SEL_CFG + 4 * 9, 0x80, 4);
+    gpio.write(g::ENABLE_W1TS, 1u << 9, 4);
+    gpio.write(g::OUT_W1TC, 1u << 9, 4);
+    CHECK(gpio.drive(9) == esp32emu::PadDrive::Low);
+    gpio.write(g::OUT_W1TS, 1u << 9, 4);
+    CHECK(gpio.drive(9) == esp32emu::PadDrive::High);
+    CHECK(drive_events > 0);
+
+    // A falling-edge interrupt on GPIO5, enabled for the CPU: status latches until W1TC.
+    gpio.write(g::PIN0 + 4 * 5, (2u << esp32h2_regs::gpio::field::PIN0_INT_TYPE_shift) |
+                                    (1u << esp32h2_regs::gpio::field::PIN0_INT_ENA_shift), 4);
+    gpio.set_input(5, false);
+    CHECK(line);
+    CHECK((gpio.read(g::STATUS, 4) >> 5 & 1u) == 1u);
+    gpio.set_input(5, true);
+    CHECK(line); // still latched
+    gpio.write(g::STATUS_W1TC, 1u << 5, 4);
+    CHECK(!line);
+}
+
+void test_esp32_uart_receive_fifo_and_interrupt() {
+    namespace u = esp32c6_regs::uart0;
+    esp32emu::Esp32 chip;
+    CHECK(chip.uart_can_receive());
+    chip.write(esp32c6_regs::uart0::base + u::reg::INT_ENA, 1u << 8, 4); // RXFIFO_TOUT
+    CHECK(chip.read(esp32c6_regs::uart0::base + u::reg::STATUS, 4) == 0);
+    CHECK(chip.uart_rx('a'));
+    CHECK(chip.uart_rx('b'));
+    CHECK((chip.read(esp32c6_regs::uart0::base + u::reg::STATUS, 4) & 0xff) == 2);
+    CHECK((chip.read(esp32c6_regs::uart0::base + u::reg::INT_ST, 4) >> 8 & 1u) == 1u);
+    CHECK(chip.read(esp32c6_regs::uart0::base + u::reg::FIFO, 4) == 'a');
+    CHECK(chip.read(esp32c6_regs::uart0::base + u::reg::FIFO, 4) == 'b');
+    CHECK((chip.read(esp32c6_regs::uart0::base + u::reg::INT_ST, 4) >> 8 & 1u) == 0u); // drained
 }
 
 } // namespace mcuemu_tests

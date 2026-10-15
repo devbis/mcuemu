@@ -80,6 +80,7 @@ add_library(esp32emu
     emulator/src/esp32/intc.cpp
     emulator/src/esp32/ieee802154.cpp
     emulator/src/esp32/aes.cpp
+    emulator/src/esp32/gpio.cpp
     emulator/src/esp32/elf_symbols.cpp
     emulator/src/esp32/run_command.cpp
 )

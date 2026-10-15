@@ -16,8 +16,14 @@ class Block;
 class Rom;
 class Intc;
 class Ieee802154;
+class Uart0;
+class Gpio;
+class IoMux;
 
 enum class Variant { C6, H2 };
+
+// What a chip pad drives (GPIO).
+enum class PadDrive { HiZ, Low, High, PullUp, PullDown };
 
 struct RomSymbol {
     std::uint32_t address;
@@ -34,6 +40,8 @@ struct Layout {
     std::uint32_t clock_hz, xtal_hz;
     std::uint32_t uart0, systimer, timg0, timg1, spi0, spi1, ieee802154, lp_timer, int_matrix;
     unsigned zb_mac_source, systimer_source;
+    std::uint32_t gpio, io_mux;
+    unsigned gpio_pins, gpio_source, uart0_source;
     std::uint32_t int_status;   // INT_STATUS_REG_0 in the interrupt matrix
     std::uint32_t modem_analog; // the analog I2C master of the modem block
     bool phy_rom; // the ROM carries PHY helpers (phy_get_romfuncs, rom_i2c_*): C6 only
@@ -86,6 +94,15 @@ public:
     void stub_function(std::uint32_t address, std::uint32_t value);
     // Puts the 802.15.4 MAC on the shared medium as `node`.
     void connect_radio(mcuemu::VirtualAir &air, const std::string &node);
+    // UART0 receive (a byte is refused when the FIFO is full).
+    bool uart_rx(std::uint8_t byte);
+    bool uart_can_receive() const;
+    // GPIO pads, for a board model: the level the pad sees, what the chip drives on it (HiZ,
+    // Low, High, or a pull), and a callback when that changes.
+    unsigned gpio_pins() const;
+    void set_pad_input(unsigned pad, bool high);
+    PadDrive pad_drive(unsigned pad) const;
+    void set_pad_observer(std::function<void(unsigned pad)> observer);
     // Starts the way the ROM loader does: reads the image header at flash
     // offset 0, copies its RAM segments and jumps to the entry point.
     void reset();
@@ -112,6 +129,7 @@ public:
 
     // For the blocks.
     void uart_tx(std::uint8_t byte);
+    void raise_source(unsigned source, bool level); // an interrupt matrix source line
     std::uint64_t cycles() const { return core_.cycles(); }
     std::vector<std::uint8_t> &flash() { return flash_; }
     std::uint8_t *cache_window() { return cache_; }
@@ -139,6 +157,8 @@ private:
     std::unique_ptr<Intc> intc_;
     Ieee802154 *mac_{nullptr};
     class SpiMem0 *spi0_{nullptr};
+    Uart0 *uart_{nullptr};
+    Gpio *gpio_{nullptr};
     std::vector<std::unique_ptr<Block>> blocks_;
     std::map<std::uint32_t, Block *> by_base_;
     // Registers no block claims read back what was written (zero before).

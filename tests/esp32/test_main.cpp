@@ -13,6 +13,8 @@ void test_esp32c6_flash_controller_reports_jedec_id();
 void test_esp32_mac_delivers_a_unicast_frame_and_gets_the_hardware_ack();
 void test_esp32_mac_filters_foreign_frames_and_times_the_ack_out();
 void test_esp32_aes_block_and_register_interface();
+void test_esp32_gpio_drive_input_and_interrupts();
+void test_esp32_uart_receive_fifo_and_interrupt();
 } // namespace mcuemu_tests
 
 #define RUN(test)                                                                \
@@ -33,6 +35,8 @@ int main() {
     RUN(test_esp32_mac_delivers_a_unicast_frame_and_gets_the_hardware_ack);
     RUN(test_esp32_mac_filters_foreign_frames_and_times_the_ack_out);
     RUN(test_esp32_aes_block_and_register_interface);
+    RUN(test_esp32_gpio_drive_input_and_interrupts);
+    RUN(test_esp32_uart_receive_fifo_and_interrupt);
     if (failures != 0) {
         std::cerr << failures << " check(s) failed\n";
         return 1;

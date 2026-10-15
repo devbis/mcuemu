@@ -6,7 +6,7 @@
 #   mkdir -p /tmp/esp && cd /tmp/esp
 #   /path/to/build/mcuemu sim /path/to/examples/esp32h2_zigbee.yaml --for 60s
 #
-# `esp-air.pcap` opens in Wireshark (802.15.4 without FCS); the console is on esp.mcu.uart0.
+# `esp-air.pcap` opens in Wireshark (802.15.4 without FCS); the console is on esp.mcu.uart0, the LED level in esp-led.log.
 version: 1
 
 world:
@@ -27,13 +27,14 @@ devices:
         firmware: ../firmware/telink-gw.bin
         radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
 
-  - id: esp
-    mcus:
-      - id: mcu
-        model: esp32h2
-        firmware: ../firmware/esp32h2-sensor.bin
-        radio: { air: air0, position: [4, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+  - include: devices/esp32h2_devkit.yaml
+    id: esp
+    params:
+      position: [4, 0, 1]
+      firmware: ../../firmware/esp32h2-sensor.bin
+      tx_power_dbm: 10
 
 attach:
   - { endpoint: air0, sink: "pcap:esp-air.pcap" }
   - { endpoint: esp.mcu.uart0, sink: "text" }
+  - { endpoint: esp.led, sink: "file:esp-led.log" }

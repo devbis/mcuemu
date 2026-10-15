@@ -4,6 +4,7 @@
 
 #include "aes.hpp"
 #include "blocks.hpp"
+#include "gpio.hpp"
 #include "intc.hpp"
 #include "ieee802154.hpp"
 #include "rom.hpp"
@@ -16,6 +17,7 @@
 #include "esp32emu/esp32h2_rom.hpp"
 
 #include <algorithm>
+#include <deque>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -28,34 +30,103 @@ namespace {
 
 constexpr std::uint32_t Ebreak = 0x00100073;
 
-// UART0: only the transmit FIFO so far. The status register reads as an idle
-// transmitter with nothing received.
+} // namespace
+
+// UART0: the transmit FIFO (bytes go out through Esp32::uart_tx, instantly) and a receive FIFO fed by
+// receive(). Interrupts (one line, `source`): RXFIFO_FULL while the FIFO holds at least
+// CONF1.RXFIFO_FULL_THRHD bytes, RXFIFO_TOUT while it holds any (the model has no idle-timeout timing), and the
+// transmit ones (TXFIFO_EMPTY, TX_DONE) after each byte written; the others never fire. INT_ST is
+// INT_RAW & INT_ENA; INT_CLR drops the latched bits and the receive conditions return while they hold.
+// The register layout is identical on the C6 and the H2.
 class Uart0 final : public Block {
 public:
-    Uart0(Esp32 &chip) : Block(chip.layout().uart0, 0x1000), chip_(chip) {}
+    static constexpr std::size_t RxFifoSize = 128;
+    Uart0(Esp32 &chip, unsigned source, IrqSink irq)
+        : Block(chip.layout().uart0, 0x1000), chip_(chip), source_(source), irq_(std::move(irq)) {}
+
+    bool can_receive() const { return rx_.size() < RxFifoSize; }
+    bool receive(std::uint8_t byte) {
+        if (!can_receive())
+            return false;
+        rx_.push_back(byte);
+        update_irq();
+        return true;
+    }
+    void reset() override {
+        scratch_.clear();
+        rx_.clear();
+        latched_ = 0;
+        update_irq();
+    }
+
     std::uint32_t read(std::uint32_t offset, unsigned) override {
-        auto it = scratch_.find(offset & ~3u);
-        const std::uint32_t value = it == scratch_.end() ? 0 : it->second;
+        namespace u = esp32c6_regs::uart0;
+        switch (offset & ~3u) {
+        case u::reg::FIFO: {
+            if (rx_.empty())
+                return 0;
+            const std::uint8_t byte = rx_.front();
+            rx_.pop_front();
+            update_irq();
+            return byte;
+        }
+        case u::reg::STATUS: return static_cast<std::uint32_t>(rx_.size()) << u::field::STATUS_RXFIFO_CNT_shift;
+        case u::reg::INT_RAW: return raw();
+        case u::reg::INT_ST: return raw() & stored(u::reg::INT_ENA);
         // REG_UPDATE.UPDATE self-clears once the new configuration has been
         // synchronised to the UART core clock domain (the driver polls for it).
-        return (offset & ~3u) == esp32c6_regs::uart0::reg::REG_UPDATE
-                   ? value & ~(1u << esp32c6_regs::uart0::field::REG_UPDATE_REG_UPDATE_shift)
-                   : value;
+        case u::reg::REG_UPDATE: return stored(u::reg::REG_UPDATE) & ~(1u << u::field::REG_UPDATE_REG_UPDATE_shift);
+        default: return stored(offset & ~3u);
+        }
     }
     void write(std::uint32_t offset, std::uint32_t value, unsigned) override {
-        if (offset == esp32c6_regs::uart0::reg::FIFO) {
+        namespace u = esp32c6_regs::uart0;
+        switch (offset & ~3u) {
+        case u::reg::FIFO:
             chip_.uart_tx(static_cast<std::uint8_t>(value));
+            latched_ |= TxBits;
+            update_irq();
             return;
+        case u::reg::INT_CLR:
+            latched_ &= ~value;
+            update_irq();
+            return;
+        case u::reg::INT_RAW: // write one to set (software trigger)
+            latched_ |= value;
+            update_irq();
+            return;
+        default: scratch_[offset & ~3u] = value;
         }
-        scratch_[offset & ~3u] = value;
+        if ((offset & ~3u) == u::reg::INT_ENA || (offset & ~3u) == u::reg::CONF1)
+            update_irq();
     }
 
 private:
+    static constexpr std::uint32_t TxBits = 1u << 1 | 1u << 14; // TXFIFO_EMPTY, TX_DONE
+    std::uint32_t stored(std::uint32_t offset) const {
+        auto it = scratch_.find(offset);
+        return it == scratch_.end() ? 0 : it->second;
+    }
+    std::uint32_t raw() const {
+        namespace u = esp32c6_regs::uart0;
+        std::uint32_t bits = latched_;
+        const std::uint32_t threshold = stored(u::reg::CONF1) >> u::field::CONF1_RXFIFO_FULL_THRHD_shift & 0xff;
+        if (!rx_.empty()) {
+            bits |= 1u << 8; // RXFIFO_TOUT
+            if (rx_.size() >= std::max<std::uint32_t>(threshold, 1))
+                bits |= 1u << 0; // RXFIFO_FULL
+        }
+        return bits;
+    }
+    void update_irq() { irq_(source_, (raw() & stored(esp32c6_regs::uart0::reg::INT_ENA)) != 0); }
+
     Esp32 &chip_;
+    unsigned source_;
+    IrqSink irq_;
+    std::deque<std::uint8_t> rx_;
+    std::uint32_t latched_{0};
     std::map<std::uint32_t, std::uint32_t> scratch_;
 };
-
-} // namespace
 
 namespace {
 template <typename Symbols> std::vector<RomSymbol> symbols_of(const Symbols &table) {
@@ -72,7 +143,8 @@ const Layout &layout_of(Variant variant) {
                               esp32c6_regs::timg1::base, esp32c6_regs::spi0::base, esp32c6_regs::spi1::base,
                               esp32c6_regs::ieee802154::base, esp32c6_regs::lp_timer::base,
                               esp32c6_regs::interrupt_core0::base,
-                              12, esp32c6_regs::systimer::irq::SYSTIMER_TARGET0, 0x134, 0x600af800, true,
+                              12, esp32c6_regs::systimer::irq::SYSTIMER_TARGET0, esp32c6_regs::gpio::base, esp32c6_regs::io_mux::base, 31,
+                              esp32c6_regs::gpio::irq::GPIO, esp32c6_regs::uart0::irq::UART0, 0x134, 0x600af800, true,
                               symbols_of(esp32c6_rom::symbols)};
     static const Layout h2 = {"ESP32-H2", 16, 0x20000, 0x50000, 0x1000, 96000000, 32000000,
                               esp32h2_regs::uart0::base, esp32h2_regs::systimer::base, esp32h2_regs::timg0::base,
@@ -80,7 +152,8 @@ const Layout &layout_of(Variant variant) {
                               0x600A3000 /* IEEE802154_REG_BASE in ESP-IDF's soc/esp32h2/register/soc/reg_base.h; the esp-pacs SVD says 0x60047000 */,
                               esp32h2_regs::lp_timer::base,
                               esp32h2_regs::interrupt_core0::base,
-                              21, esp32h2_regs::systimer::irq::SYSTIMER_TARGET0, 0x104, 0x600ad800, false,
+                              21, esp32h2_regs::systimer::irq::SYSTIMER_TARGET0, esp32h2_regs::gpio::base, esp32h2_regs::io_mux::base, 28,
+                              esp32h2_regs::gpio::irq::GPIO, esp32h2_regs::uart0::irq::UART0, 0x104, 0x600ad800, false,
                               symbols_of(esp32h2_rom::symbols)};
     return variant == Variant::C6 ? c6 : h2;
 }
@@ -202,7 +275,14 @@ Esp32::Esp32(const Config &config)
         blocks_.push_back(std::move(block));
     };
     rom_ = std::make_unique<Rom>(*this);
-    add(std::make_unique<Uart0>(*this));
+    {
+        auto uart = std::make_unique<Uart0>(*this, layout_.uart0_source, [this](unsigned source, bool level) {
+            if (intc_)
+                intc_->set_source(source, level);
+        });
+        uart_ = uart.get();
+        add(std::move(uart));
+    }
     intc_ = std::make_unique<Intc>([this](int cause) {
         if (trace_irq) {
             char buffer[80];
@@ -258,14 +338,17 @@ Esp32::Esp32(const Config &config)
     spi0_ = spi0.get();
     add(std::move(spi0));
     add(std::make_unique<SpiMem1>(layout_.spi1, config.flash_size));
+    {
+        auto mux = std::make_unique<IoMux>(layout_.io_mux, layout_.gpio_pins);
+        auto gpio = std::make_unique<Gpio>(layout_.gpio, layout_.gpio_pins, layout_.gpio_source, *mux,
+                                           [this](unsigned source, bool level) { intc_->set_source(source, level); });
+        gpio_ = gpio.get();
+        add(std::move(mux));
+        add(std::move(gpio));
+    }
     if (config.variant == Variant::H2) {
         add(std::make_unique<Pcr>(esp32h2_regs::pcr::base));
         add(std::make_unique<Aes>(0x60088000));
-        // GPIO: no pad is wired to anything, so every input reads high (what an idle pad with its pull-up, like an
-        // active-low button that is not pressed, shows). Without it the zigbee-rs sensor sees its button held down
-        // and factory-resets after 3 s. The outputs are not modelled yet.
-        add(std::make_unique<StatusBlock>(esp32h2_regs::gpio::base, 0x200,
-                                          std::vector<StatusBlock::Forced>{{esp32h2_regs::gpio::reg::IN, 0xffffffffu, 0}}));
         // eFuse: the factory MAC (RD_MAC_SYS_0/1, little-endian: byte 0 first). Everything else reads as
         // blank (0). The address is made up (an Espressif OUI), the same (H2 only for now; the C6's register names differ).
         auto efuse = std::make_unique<StatusBlock>(esp32h2_regs::efuse::base, 0x200);
@@ -282,6 +365,14 @@ Esp32::Esp32(const Config &config)
 }
 
 Esp32::~Esp32() = default;
+
+bool Esp32::uart_rx(std::uint8_t byte) { return uart_->receive(byte); }
+bool Esp32::uart_can_receive() const { return uart_->can_receive(); }
+unsigned Esp32::gpio_pins() const { return layout_.gpio_pins; }
+void Esp32::set_pad_input(unsigned pad, bool high) { gpio_->set_input(pad, high); }
+PadDrive Esp32::pad_drive(unsigned pad) const { return gpio_->drive(pad); }
+void Esp32::set_pad_observer(std::function<void(unsigned pad)> observer) { gpio_->on_drive_changed = std::move(observer); }
+void Esp32::raise_source(unsigned source, bool level) { intc_->set_source(source, level); }
 
 void Esp32::flash_modified() { spi0_->refresh(); }
 

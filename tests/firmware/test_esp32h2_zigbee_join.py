@@ -5,10 +5,11 @@ and a TC32 core on one radio medium.
 
 The model runs the real bootloader on ROM stand-ins. The sensor scans,
 associates, gets the NWK key and completes the trust-center link key exchange.
-It first scans before the coordinator has formed its network, backs off and
+The status LED (GPIO8) must blink. It first scans before the coordinator has formed its network, backs off and
 reboots (a software reset the model restarts), then joins at the next scan.
 """
 
+import os
 import re
 import subprocess
 import sys
@@ -33,6 +34,8 @@ def main() -> int:
                 [sys.argv[1], "sim", sys.argv[2], "--for", "30s"],
                 cwd=scratch, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, timeout=300, check=False)
+            led = os.path.join(scratch, "esp-led.log")
+            led_lines = len(open(led).read().splitlines()) if os.path.exists(led) else 0
         except subprocess.TimeoutExpired as error:
             output = error.stdout or ""
             if isinstance(output, bytes):
@@ -49,6 +52,8 @@ def main() -> int:
     ]:
         if not re.search(pattern, log):
             return fail(f"missing {what} ({pattern})", log)
+    if led_lines < 4:
+        return fail(f"the LED on GPIO8 barely changed ({led_lines} edges)", log)
     if re.search(r"PANIC", log):
         return fail("the firmware panicked", log)
     return 0

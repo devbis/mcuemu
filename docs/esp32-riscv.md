@@ -151,6 +151,15 @@ the SVD says 28: both enable), a repeated RxStart while listening being a no-op,
 ACK frames reaching software when `HW_AUTO_ACK_RX_EN` is off (zigbee-rs relies on it).
 Not modelled: enhanced ACKs, security, coexistence, ED results from the air.
 
+### GPIO and UART0 (`gpio.cpp`, `esp32.cpp`)
+
+GPIO/IO_MUX model pads used as plain GPIO: OUT/ENABLE with W1TS/W1TC aliases, IN (the level the board gives the pad,
+high until told otherwise), per-pin interrupt type/enable with a latched status, and `FUNCn_OUT_SEL_CFG` = 0x80 for
+a pad that follows OUT; IO_MUX pull-ups/downs decide the pull the board sees. Peripheral signals through the GPIO
+matrix are not modelled. In `sim` the pads are `GPIO0`.. nets (`examples/devices/esp32h2_devkit.yaml`: LED on GPIO8,
+BOOT button on GPIO9, read off the zigbee-rs image). UART0 has a receive FIFO (128 bytes) with RXFIFO_FULL/TOUT
+interrupts and the transmit ones; no baud-rate timing.
+
 ### ESP32-H2 (`--model ESP32H2`, `esp32h2` in `sim`)
 
 `esp32emu::Layout` holds what differs between the chips (sizes, 96 MHz CPU and 32 MHz
@@ -162,7 +171,7 @@ application. What it needed beyond the C6 model: the PCR `BUS_CLK_UPDATE` strobe
 PMA/trigger CSRs as storage (a widened host CSR range; the fork lets the host decline a
 number), the regi2c master's two host control words, forced "done" bits in the PHY
 digital window (0x814 state, 0x4a0), a hardware AES block (ECB, known-answer tested), a
-factory MAC in the eFuse, GPIO inputs reading high, `mstatus.MIE` set at entry (esp-hal
+factory MAC in the eFuse, GPIO (idle inputs read high), `mstatus.MIE` set at entry (esp-hal
 only saves and restores it) and the PLIC threshold meaning "priority >= threshold".
 `mcuemu sim examples/esp32h2_zigbee.yaml` joins the TLSR8258 sampleGW network, completes
 the trust-center link key exchange and commits (`firmware_esp32h2_zigbee_join`). After a
@@ -191,8 +200,7 @@ and the released `esp32c6-end-device.bin` behave the same:
 
 1. A PHY that needs no stubs on the C6 (the H2 blob ran with forced bits only).
 2. The C6 Zephyr image against a coordinator on its channel.
-3. UART receive and its interrupt, a GPIO/IO_MUX model with pads wired to nets, TIMG
-   watchdogs, the C6's eFuse (the chip revision reads as v0.0; `o_code calibration
+3. TIMG watchdogs, the C6's eFuse (the chip revision reads as v0.0; `o_code calibration
    fail` is logged) and the H2's real temperature sensor (the model returns what the
    app writes to the analog registers).
 4. Speed: the H2 sensor runs about 3.4x faster than real time while idle.
