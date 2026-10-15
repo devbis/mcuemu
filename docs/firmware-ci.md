@@ -40,7 +40,7 @@ locally too when you put the images there.
 | `zigbee-nrf52840` | as above plus, in the defmt log, the scan, join, Transport-Key, Request Key, Confirm-Key SUCCESS and "network committed"; reports keep arriving after 75 s |
 | `zigbee-efr32mg21` | as `zigbee-nrf52840`, on the EFR32MG21 model (its radio has the zigbee-rs driver's register interface, see `docs/efr32mg21.md`); a BTN0 press at 2 s starts the join |
 | `zigbee-esp32h2` | the sensor joins the sampleGW coordinator through the real ESP-IDF bootloader on ROM stand-ins (it scans all channels, backs off and reboots once); the console shows the AES self-test, `JoinedOrResumed`, Confirm-Key SUCCESS and `CommissioningComplete` |
-| `zigbee-esp32c6` | the same for the C6 sensor image; added to find out how far the C6 model gets with an esp-hal application, so it may fail until the model catches up |
+| `zigbee-esp32c6` | the same for the C6 sensor image, which also scans every channel (the log must show channel 26) |
 | `thermostat` | the ZT3L joins the coordinator and both UARTs of the two-chip board carry framed traffic |
 | `nrf52840-boot`, `zephyr-pm-wake`, `vendor-sleep-1s` | the existing scripts in `tests/firmware/` |
 

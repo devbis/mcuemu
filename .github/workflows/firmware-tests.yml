@@ -408,6 +408,11 @@ jobs:
               python3 tests/firmware/zigbee_air_check.py "$MCUEMU"
               tests/firmware/scenarios/zigbee_esp32c6.yaml --workdir "$LOGS" --for 60s
               --min-unicast 2
+              --expect 'Hardware AES KAT passed'
+              --expect '\[SCAN\] ch 26'
+              --expect 'JoinedOrResumed'
+              --expect 'Confirm-Key SUCCESS'
+              --expect 'CommissioningComplete \{ success: true \}'
           - name: thermostat
             command: >-
               python3 tests/firmware/zigbee_air_check.py "$MCUEMU"
