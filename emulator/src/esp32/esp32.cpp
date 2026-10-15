@@ -347,9 +347,9 @@ Esp32::Esp32(const Config &config)
         add(std::move(mux));
         add(std::move(gpio));
     }
+    add(std::make_unique<Aes>(0x60088000)); // the same base on the C6 and the H2
     if (config.variant == Variant::H2) {
         add(std::make_unique<Pcr>(esp32h2_regs::pcr::base));
-        add(std::make_unique<Aes>(0x60088000));
         // eFuse: the factory MAC (RD_MAC_SYS_0/1, little-endian: byte 0 first). Everything else reads as
         // blank (0). The address is made up (an Espressif OUI), the same (H2 only for now; the C6's register names differ).
         auto efuse = std::make_unique<StatusBlock>(esp32h2_regs::efuse::base, 0x200);

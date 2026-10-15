@@ -7,7 +7,7 @@
 
 namespace esp32emu {
 
-// The AES accelerator (0x60088000 on the H2), CPU-driven ECB mode only, which is
+// The AES accelerator (0x60088000 on the C6 and the H2), CPU-driven ECB mode only, which is
 // what esp-hal's `Aes` does for single blocks (and what the zigbee-rs known-answer
 // test and CCM* build on): the driver writes the key (KEY_0..7), the mode (MODE:
 // bits 1:0 select 128/192/256-bit key, bit 2 decrypt), the block (TEXT_IN_0..3),
