@@ -399,6 +399,11 @@ Rom::Rom(Esp32 &chip) : chip_(chip) {
     add("rom_i2c_writeReg", analog_write);
     add("rom_i2c_readReg_Mask", analog_read_mask);
     add("rom_i2c_writeReg_Mask", analog_write_mask);
+    // The tone detector's SAR reading (txdc_cal_pwdet and friends scan a DC offset until the reading
+    // turns upwards). The model has no analog front end, so it returns a rising ramp: the scans see their
+    // minimum at once and stop after a few steps instead of running every iteration (50 per phase, with
+    // 10 us delays), which keeps the PHY init short. The values mean nothing.
+    add("get_tone_sar_dout", [this] { result_ = (sar_ramp_++ * 8u) & 0xffu; });
     add("phy_param_addr", [this] { result_ = chip_.phy_params(); });
 
     // ---- resets: the run stops with StopReason::Reset and the caller restarts ----
@@ -446,7 +451,12 @@ void Rom::add(const char *name, Handler handler) {
 // Analog registers whose bits the hardware sets by itself, read by the PHY as
 // "done": the PLL charge pump calibration (block 0x62, register 0xe, bit 7).
 std::uint32_t Rom::analog_forced(std::uint32_t block, std::uint32_t reg) const {
-    return block == 0x62 && (reg & 0xff) == 0xe ? 0x80u : 0u;
+    if (block == 0x62 && (reg & 0xff) == 0xe)
+        return 0x80u;
+    // wait_i2c_sdm_stable (libphy) reads block 0x63, register 0 until it returns 0x5b, giving up after 10 ms.
+    if (block == 0x63 && (reg & 0xff) == 0x0)
+        return 0x5bu;
+    return 0u;
 }
 
 const char *Rom::name_at(std::uint32_t address) const {

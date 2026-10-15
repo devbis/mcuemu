@@ -186,6 +186,8 @@ struct Core::Impl {
             return;
         }
         skip_breakpoint = false;
+        if (core.trace_hook_)
+            core.trace_hook_(address);
         // Decoded from the host copy of the code (flash or RAM).
         if (const std::uint8_t *code = core.host_pointer(address, size)) {
             std::uint32_t word = code[0] | (code[1] << 8);

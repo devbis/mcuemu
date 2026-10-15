@@ -61,7 +61,8 @@ std::uint64_t parse_duration_ns(const std::string &text) {
 int run_command(int argc, char **argv) {
     std::string firmware;
     Variant variant = Variant::C6;
-    bool restart_on_reset = false;
+    bool restart_on_reset = false, stub_phy = true;
+    std::uint64_t trace_calls_after_ns = ~std::uint64_t{0};
     std::uint64_t steps = 0, duration_ns = 0;
     bool trace_mmio = false, last_pcs = false, trace_irq = false, trace_rom = false;
     std::uint64_t trace_limit = 200000;
@@ -100,6 +101,10 @@ int run_command(int argc, char **argv) {
             trace_limit = parse_number(argv[++i], "trace limit");
         else if (option == "--break" && i + 1 < argc)
             breakpoint_specs.push_back(argv[++i]);
+        else if (option == "--trace-calls" && i + 1 < argc)
+            trace_calls_after_ns = parse_duration_ns(argv[++i]);
+        else if (option == "--no-phy-stubs")
+            stub_phy = false;
         else if (option == "--restart")
             restart_on_reset = true;
         else if (option == "--trace-rom")
@@ -146,6 +151,7 @@ int run_command(int argc, char **argv) {
 
     Esp32::Config config;
     config.variant = variant;
+    config.stub_phy = stub_phy;
     Esp32 chip(config);
     chip.load_flash(image);
     chip.trace_mmio = trace_mmio;
@@ -218,6 +224,30 @@ int run_command(int argc, char **argv) {
         chip.core().add_breakpoint(address);
     for (std::uint32_t address : logpoints)
         chip.core().add_breakpoint(address);
+    std::uint32_t min_sp = ~0u, min_sp_pc = 0;
+    std::map<std::uint32_t, std::uint64_t> pc_histogram;
+    if (trace_calls_after_ns != ~std::uint64_t{0}) {
+        if (!elf)
+            throw std::invalid_argument("--trace-calls needs --elf");
+        // Every entry of a function the ELF names after the given virtual time, with the stack pointer
+        // (a deep call chain that overruns a thread's stack shows as a falling sp).
+        std::uint64_t left = trace_limit;
+        chip.core().set_trace_hook([&, left](std::uint32_t pc) mutable {
+            if (chip.time_ns() >= trace_calls_after_ns) {
+                ++pc_histogram[pc & ~0x3fu];
+                const std::uint32_t sp = chip.core().reg(2);
+                if (sp >= 0x40800000 && sp < min_sp && (pc >= 0x42000000 || pc < 0x40100000)) { // flash code or ROM: not an ISR
+                    min_sp = sp;
+                    min_sp_pc = pc;
+                }
+            }
+            if (left == 0 || !elf->starts_symbol(pc) || chip.time_ns() < trace_calls_after_ns)
+                return;
+            --left;
+            std::cerr << "[call] " << elf->describe(pc) << " sp=0x" << std::hex << chip.core().reg(2) << std::dec << " t="
+                      << chip.time_ns() << "\n";
+        });
+    }
     if (steps != 0)
         chip.core().set_instruction_limit(steps);
     riscv::RunResult result;
@@ -266,6 +296,16 @@ int run_command(int argc, char **argv) {
             break;
     }
 
+    if (trace_calls_after_ns != ~std::uint64_t{0}) {
+        std::cerr << "[calls] lowest sp 0x" << std::hex << min_sp << " at pc 0x" << min_sp_pc << std::dec << "\n";
+        std::vector<std::pair<std::uint64_t, std::uint32_t>> top;
+        for (const auto &[block, count] : pc_histogram)
+            top.emplace_back(count, block);
+        std::sort(top.rbegin(), top.rend());
+        for (std::size_t i = 0; i < top.size() && i < 14; ++i)
+            std::cerr << "[hot] " << top[i].first << " instructions in 64 bytes at 0x" << std::hex << top[i].second << std::dec
+                      << " " << (elf ? elf->describe(top[i].second) : "") << "\n";
+    }
     riscv::Core &core = chip.core();
     std::cout << "\nmodel: " << chip.layout().name << "\n"
               << "flash image: " << image.size() << " bytes\n"

@@ -180,7 +180,8 @@ public:
 class AnalogMaster final : public StatusBlock {
 public:
     explicit AnalogMaster(std::uint32_t base)
-        : StatusBlock(base, 0x400, std::vector<StatusBlock::Forced>{{0x18, 1u << 24, 0}}) {}
+        : StatusBlock(base, 0x400, std::vector<StatusBlock::Forced>{{0x18, 1u << 24, 0}}) {
+    }
     void reset() override {
         StatusBlock::reset(); // the analog registers keep their values across a CPU reset
     }

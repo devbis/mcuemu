@@ -25,6 +25,7 @@ public:
     const char *name_at(std::uint32_t address) const;
 
 private:
+    std::uint32_t sar_ramp_{0};
     std::map<std::uint32_t, std::vector<std::uint8_t>> sha_data_; // by context address
     using Handler = std::function<void()>;
     void add(const char *name, Handler handler);

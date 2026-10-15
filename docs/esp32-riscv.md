@@ -126,7 +126,8 @@ loop writes gigabytes).
 ### Debugging aids of `mcuemu run --model ESP32C6`
 
 `--elf FILE` names addresses from the build's ELF; `--stub NAME|0xADDR[=VALUE]`
-makes a firmware function return at once; `--break`, `--log-at` (registers and
+makes a firmware function return at once; `--no-phy-stubs`, `--trace-calls TIME` (every named function entry with sp after TIME, a histogram of hot code
+and the lowest sp), `--break`, `--log-at` (registers and
 the stack at an address, then go on), `--watch`, `--dump ADDR[:LEN]`, `--trace-irq`,
 `--trace-rom`, `--last-pcs` (the last instructions, named with `--elf`), the CSR/PMP
 state and, when the firmware's own fatal handler prints through the UART, its
@@ -192,13 +193,26 @@ and the released `esp32c6-end-device.bin` behave the same:
   image by their first instructions when the cache MMU maps the page (`Config::stub_phy`,
   on by default; `--stub` still stubs any function by name or address). The blob is the
   same in every build, so this works on the released image without its ELF.
+- Why it needs the stubs (investigated with `--no-phy-stubs`, `--trace-calls TIME` and `--elf`): the call chain
+  `bg_thread_main -> z_sys_init_run_level -> esp32_init -> ... -> register_chipv7_phy -> bb_init ->
+  chip_v7_set_chan -> ... -> wifi_get_tx_tab -> ram_set_chan_cal_interp` reaches 0x80 bytes below the 896-byte
+  `z_main_stack` (frames of `txdc_cal_pwdet` alone fill it exactly), into the top of the idle thread's
+  stack, where Zephyr keeps that thread's initial exception frame (and its TLS). The first run of the
+  idle thread then `mret`s to a stack address and faults. This is the firmware's own call depth, so real
+  hardware should overrun the same way; why it survives there is not understood (a different path through
+  `libphy` with real eFuse calibration data, which the model leaves blank, is the open guess). Two model
+  fixes shortened the init without removing the overflow: `wait_i2c_sdm_stable` finds the value it polls
+  for (block 0x63, register 0 reads 0x5b) instead of timing out after 10 ms, and `get_tone_sar_dout` returns a
+  rising ramp so the DC-offset scans stop after a few steps instead of 50 per phase (23 ms of
+  virtual time down to about 5 ms).
 - The image's Zigbee stack scans channel 11 only (its channel mask), sending beacon
   requests; the sampleGW coordinator forms its network on channel 15, so it does not
   join that network (a coordinator on channel 11 would, untested).
 
 ## Next steps
 
-1. A PHY that needs no stubs on the C6 (the H2 blob ran with forced bits only).
+1. A PHY that needs no stubs on the C6 (the H2 blob runs with forced bits only): find out why the stack overrun
+   is harmless on hardware (eFuse calibration data is the first thing to try).
 2. The C6 Zephyr image against a coordinator on its channel.
 3. TIMG watchdogs, the C6's eFuse (the chip revision reads as v0.0; `o_code calibration
    fail` is logged) and the H2's real temperature sensor (the model returns what the

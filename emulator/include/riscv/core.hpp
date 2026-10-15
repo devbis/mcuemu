@@ -76,6 +76,8 @@ public:
 
     // Stops the run (StopReason::Halted, "breakpoint") before the instruction at `address` executes.
     void add_breakpoint(std::uint32_t address) { breakpoints_.push_back(address); }
+    // Called with the pc before every instruction (debugging: slows the run down). Empty disables it.
+    void set_trace_hook(std::function<void(std::uint32_t pc)> hook) { trace_hook_ = std::move(hook); }
 
     // Calls `callback(pc, address, size, value)` for every store to [begin, end),
     // from inside the running block (debugging aid; it slows the hart down).
@@ -156,6 +158,7 @@ private:
     bool sleeping_{false};
     int interrupt_{-1};
     std::vector<std::uint32_t> breakpoints_;
+    std::function<void(std::uint32_t)> trace_hook_;
 };
 
 } // namespace riscv

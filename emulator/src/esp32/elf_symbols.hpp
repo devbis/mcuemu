@@ -18,6 +18,7 @@ public:
     std::uint32_t address_of(const std::string &name) const;
     // "name+0xoff" for the symbol at or below `address`, empty when none within 1 MiB.
     std::string describe(std::uint32_t address) const;
+    bool starts_symbol(std::uint32_t address) const { return by_address_.count(address) != 0; }
     std::size_t size() const { return by_address_.size(); }
 
 private:
