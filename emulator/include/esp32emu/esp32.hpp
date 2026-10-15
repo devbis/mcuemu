@@ -67,9 +67,10 @@ public:
         Variant variant{Variant::C6};
         std::uint32_t flash_size{4u << 20};
         // Makes the two PHY functions that need the real RF front end return at once
-        // (found in the image by their first instructions). Without them the PHY's
-        // calibration overruns Zephyr's main stack; see docs/esp32-riscv.md.
-        bool stub_phy{true};
+        // (found in the image by their first instructions). Off by default: images with the stock
+        // 896-byte Zephyr main stack crash in the PHY calibration on real hardware too, and
+        // this only lets them run in the model; see docs/esp32-riscv.md.
+        bool stub_phy{false};
     };
 
     Esp32() : Esp32(Config{}) {}

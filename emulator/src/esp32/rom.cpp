@@ -230,6 +230,10 @@ Rom::Rom(Esp32 &chip) : chip_(chip) {
         add(name, erase(0x10000));
     add("esp_rom_spiflash_unlock", [] {});
     add("ets_get_printf_channel", [] {});
+    // The ROM's UART device table lives in ROM data. esp_rom_output_switch_buffer() stores into the
+    // returned struct (byte +24) and nothing reads it back, so a block at the top of SRAM, above the
+    // boot ROM's initial stack, is enough.
+    add("GetUartDevice", [this] { result_ = 0x4087ff00; });
 
     // CRC32 (reflected, polynomial 0xedb88320) the way the ROM's crc32_le takes it: the running
     // value is passed in and out in its final (inverted) form.

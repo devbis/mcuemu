@@ -126,7 +126,7 @@ loop writes gigabytes).
 ### Debugging aids of `mcuemu run --model ESP32C6`
 
 `--elf FILE` names addresses from the build's ELF; `--stub NAME|0xADDR[=VALUE]`
-makes a firmware function return at once; `--no-phy-stubs`, `--trace-calls TIME` (every named function entry with sp after TIME, a histogram of hot code
+makes a firmware function return at once; `--phy-stubs`, `--trace-calls TIME` (every named function entry with sp after TIME, a histogram of hot code
 and the lowest sp), `--break`, `--log-at` (registers and
 the stack at an address, then go on), `--watch`, `--dump ADDR[:LEN]`, `--trace-irq`,
 `--trace-rom`, `--last-pcs` (the last instructions, named with `--elf`), the CSR/PMP
@@ -181,44 +181,41 @@ restarts the SYSTIMER counters and clears registers no block models.
 
 ### State of the Zephyr 802.15.4 images
 
-Both the local `esp32c6_devkitc` Zephyr build (`ESP_SIMPLE_BOOT`, flash offset 0)
-and the released `esp32c6-end-device.bin` behave the same:
+Validated against a real ESP32-C6FH4 (rev v0.2, 4 MB flash, USB Serial/JTAG) on 2026-10-15:
 
-- Boot, MMU, kernel start, timer interrupts, threads and the Zephyr banner work.
-- `register_chipv7_phy` (the PHY blob's init) cannot run: with only the forced bits
-  above the calibration walks a call chain deeper than the main thread's 896-byte
-  stack, which overruns the idle thread's initial frame, and a tick interrupt
-  corrupts the interrupt stack. The model stands in for it by stubbing the PHY
-  functions `register_chipv7_phy` and `phy_track_pll_internal`, found in the flash
-  image by their first instructions when the cache MMU maps the page (`Config::stub_phy`,
-  on by default; `--stub` still stubs any function by name or address). The blob is the
-  same in every build, so this works on the released image without its ELF.
-- Why it needs the stubs (investigated with `--no-phy-stubs`, `--trace-calls TIME` and `--elf`): the call chain
-  `bg_thread_main -> z_sys_init_run_level -> esp32_init -> ... -> register_chipv7_phy -> bb_init ->
-  chip_v7_set_chan -> ... -> wifi_get_tx_tab -> ram_set_chan_cal_interp` reaches 0x80 bytes below the 896-byte
-  `z_main_stack` (frames of `txdc_cal_pwdet` alone fill it exactly), into the top of the idle thread's
-  stack, where Zephyr keeps that thread's initial exception frame (and its TLS). The first run of the
-  idle thread then `mret`s to a stack address and faults. This is the firmware's own call depth, so real
-  hardware should overrun the same way; why it survives there is not understood. Verified facts: the idle
-  thread's initial frame is written at 8.095 ms (mepc slot 0x408133d0, entry/arg slots 0x408133b0..d4), the
-  PHY frames overwrite those slots at 11.3 ms and 12.4 ms, and the crash `mepc` (0x408134b2) is the
-  overwritten slot plus 2. Restoring that frame from a snapshot (a throw-away host hack at 12.95 ms) makes
-  the unstubbed image boot Zephyr and send its beacon requests, so the idle frame is the only blocker. The
-  eFuse theory was tested and is wrong: with BLK_VERSION and OCODE set the path is the same. Two model
-  fixes shortened the init without removing the overflow: `wait_i2c_sdm_stable` finds the value it polls
-  for (block 0x63, register 0 reads 0x5b) instead of timing out after 10 ms, and `get_tone_sar_dout` returns a
-  rising ramp so the DC-offset scans stop after a few steps instead of 50 per phase (23 ms of
-  virtual time down to about 5 ms).
+- **An image built with the stock 896-byte `CONFIG_MAIN_STACK_SIZE` crashes on the board too.** The
+  released `esp32c6-end-device.bin` and a local `zigbee_shell` build with the stock stack print the same
+  `mcause: 2, Illegal instruction`, `mepc` inside `z_main_stack`, even the same `a4`, and restart in a
+  loop. The PHY calibration (`register_chipv7_phy` with `cal_mode` FULL, no stored calibration data)
+  walks a call chain about 1440 bytes deep, which overruns the stack into the idle thread's initial
+  exception frame (its `mepc` slot at the top of the idle stack). The model reproduces this exactly, so
+  the fault is the firmware's, not the model's.
+- **The same build with `CONFIG_MAIN_STACK_SIZE=3072` works on the board and unstubbed in the model**
+  (PHY init, Zephyr banner, beacon requests on channel 11). The 4 MB build also needs the flash size set
+  (`CONFIG_FLASH_SIZE=4096`, `&flash0` of 4 MB; the devkit's 8 MB header fails the board's flash probe).
+  Console over USB Serial/JTAG: `zephyr,console` and `zephyr,shell-uart` pointing at `&usb_serial`
+  (status okay). The model does not care about the console choice.
+- The PHY blob runs unstubbed with the forced bits and register models described above, with the real
+  eFuse calibration values (BLK_VERSION 0.3, OCODE 70, TEMP_CALIB 0x19a, read from the board).
+- `--phy-stubs` (`Config::stub_phy`, off by default) stubs `register_chipv7_phy` and
+  `phy_track_pll_internal`, found in the image by their first instructions when the cache MMU maps the
+  page. It exists only to let a stock-stack image get past the crash; fix the image instead.
+- The model's `GetUartDevice` ROM stand-in returns a scratch block at the top of SRAM
+  (`esp_rom_output_switch_buffer` stores into it when the console is the USB serial).
+- Investigation notes (with `--trace-calls`, `--elf`, `--watch`): the idle thread's frame is created at
+  8.095 ms and overwritten by PHY frames at 11.3 ms and 12.4 ms; the crash `mepc` is the overwritten
+  slot plus 2; restoring the frame from a snapshot makes a stock-stack image boot. Two model fixes
+  shortened the init without affecting the overflow: `wait_i2c_sdm_stable` finds the value it polls for
+  (block 0x63, register 0 reads 0x5b) and `get_tone_sar_dout` returns a rising ramp (23 ms of virtual
+  time down to about 5 ms).
 - The image's Zigbee stack scans channel 11 only (its channel mask), sending beacon
   requests; the sampleGW coordinator forms its network on channel 15, so it does not
   join that network (a coordinator on channel 11 would, untested).
 
 ## Next steps
 
-1. A PHY that needs no stubs on the C6 (the H2 blob runs with forced bits only): find out why the stack overrun
-   is harmless on hardware (not the eFuse calibration, see above; a shallower path through `libphy`
-   or a stack guard are the remaining guesses).
-2. The C6 Zephyr image against a coordinator on its channel.
-3. TIMG watchdogs, the C6's eFuse revision fields (the chip revision reads as v0.0) and the H2's real temperature sensor (the model returns what the
+1. Run the C6 Zephyr image against a coordinator on its channel (a channel 11 coordinator, or the
+   scan-all-channels build).
+2. TIMG watchdogs and the H2's real temperature sensor (the model returns what the
    app writes to the analog registers).
-4. Speed: the H2 sensor runs about 3.4x faster than real time while idle.
+3. Speed: the H2 sensor runs about 3.4x faster than real time while idle.

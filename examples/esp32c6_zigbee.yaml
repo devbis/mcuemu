@@ -28,7 +28,7 @@ devices:
     mcus:
       - id: mcu
         model: esp32c6
-        firmware: ../firmware/esp32c6-end-device.bin
+        firmware: ../firmware/esp32c6-zigbee-shell.bin
         radio: { air: air0, position: [4, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
 
 attach:

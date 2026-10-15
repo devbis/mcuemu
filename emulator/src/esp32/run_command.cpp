@@ -23,7 +23,7 @@ namespace {
 
 void usage(std::ostream &out) {
     out << "Usage: mcuemu run --model ESP32C6|ESP32H2 --firmware IMAGE [--steps N] [--for DURATION]\n"
-           "       [--restart] [--trace-mmio [--trace-limit N]] [--trace-block BEGIN:END]... [--last-pcs] [--break ADDR]... [--watch BEGIN:END]... [--dump ADDR[:LEN]]... [--log-at ADDR]... [--elf FILE] [--stub NAME|0xADDR[=VALUE]]...\n"
+           "       [--restart] [--phy-stubs] [--trace-mmio [--trace-limit N]] [--trace-block BEGIN:END]... [--last-pcs] [--break ADDR]... [--watch BEGIN:END]... [--dump ADDR[:LEN]]... [--log-at ADDR]... [--elf FILE] [--stub NAME|0xADDR[=VALUE]]...\n"
            "\n"
            "IMAGE is the flash contents from offset 0 (an ESP image with the 0xE9 header, as\n"
            "the ROM loader finds it). Without --steps and --for the run lasts 1 s of virtual\n"
@@ -61,7 +61,7 @@ std::uint64_t parse_duration_ns(const std::string &text) {
 int run_command(int argc, char **argv) {
     std::string firmware;
     Variant variant = Variant::C6;
-    bool restart_on_reset = false, stub_phy = true;
+    bool restart_on_reset = false, stub_phy = false;
     std::uint64_t trace_calls_after_ns = ~std::uint64_t{0};
     std::uint64_t steps = 0, duration_ns = 0;
     bool trace_mmio = false, last_pcs = false, trace_irq = false, trace_rom = false;
@@ -103,8 +103,8 @@ int run_command(int argc, char **argv) {
             breakpoint_specs.push_back(argv[++i]);
         else if (option == "--trace-calls" && i + 1 < argc)
             trace_calls_after_ns = parse_duration_ns(argv[++i]);
-        else if (option == "--no-phy-stubs")
-            stub_phy = false;
+        else if (option == "--phy-stubs")
+            stub_phy = true;
         else if (option == "--restart")
             restart_on_reset = true;
         else if (option == "--trace-rom")
