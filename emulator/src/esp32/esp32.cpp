@@ -357,6 +357,19 @@ Esp32::Esp32(const Config &config)
         efuse->write(esp32h2_regs::efuse::reg::RD_MAC_SYS_1, 0x0000'6055u, 4);
         efuse->keep_as_power_on_state();
         add(std::move(efuse));
+    } else {
+        // C6 eFuse: BLOCK1 holds the MAC (words 0/1) and BLK_VERSION (word 3 bits 27..31), BLOCK2 the ADC
+        // OCODE (RD_SYS_PART1_DATA4 bits 16:9) and TEMP_CALIB (bits 8:0). Field positions are from ESP-IDF's
+        // esp_efuse_table.csv; the values are made up. BLK_VERSION >= 0.1 makes ocode_init() take OCODE from
+        // here instead of waiting 10 ms for an analog calibration that never completes.
+        namespace ef = esp32c6_regs::efuse::reg;
+        auto efuse = std::make_unique<StatusBlock>(esp32c6_regs::efuse::base, 0x200);
+        efuse->write(ef::RD_MAC_SPI_SYS_0, 0xf912'2233u, 4);
+        efuse->write(ef::RD_MAC_SPI_SYS_1, 0x0000'6055u, 4);
+        efuse->write(ef::RD_MAC_SPI_SYS_3, 1u << 27, 4);
+        efuse->write(ef::RD_SYS_PART1_DATA4, (100u << 9) | 0x40u, 4);
+        efuse->keep_as_power_on_state();
+        add(std::move(efuse));
     }
 
     // Analog I2C master of the modem block: bootloader_clock_configure() waits
