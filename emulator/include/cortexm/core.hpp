@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <iosfwd>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -90,6 +91,15 @@ public:
 
     // Stops a run once this many instructions have executed in total (0: no limit).
     void set_instruction_limit(std::uint64_t limit) noexcept { instruction_limit_ = limit; }
+    // Writes one line per executed instruction whose address is in [first, last] to
+    // `out` (cycle count and address). Null turns it off. Costs one branch per
+    // instruction when off.
+    void set_pc_trace(std::ostream *out, std::uint32_t first, std::uint32_t last, bool registers = false) noexcept {
+        pc_trace_ = out;
+        pc_first_ = first;
+        pc_last_ = last;
+        pc_trace_regs_ = registers;
+    }
 
     std::uint64_t cycles() const noexcept { return cycles_; }
     std::uint64_t instructions() const noexcept { return instructions_; }
@@ -142,6 +152,9 @@ private:
     std::uint64_t cycles_{0};
     std::uint64_t instructions_{0};
     std::uint64_t instruction_limit_{0};
+    std::ostream *pc_trace_{nullptr};
+    std::uint32_t pc_first_{0}, pc_last_{0};
+    bool pc_trace_regs_{false};
     std::uint32_t cpi_{1};
     bool sleeping_{false};
 };

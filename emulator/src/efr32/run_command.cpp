@@ -6,10 +6,12 @@
 #include <charconv>
 #include <cstdint>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace efr32emu {
 
@@ -22,7 +24,9 @@ void usage(std::ostream &out) {
            "IMAGE is a raw binary. An application image (reset vector at or above 0x4000) is\n"
            "placed at 0x4000 and started directly; any other image is placed at 0. Without\n"
            "--steps and --for the run lasts 1 s of virtual time. DURATION is a number with\n"
-           "ns, us, ms or s. --trace-mmio logs every peripheral register access to stderr.\n";
+           "ns, us, ms or s. --trace-mmio logs every peripheral register access to stderr.\n"
+           "--dump-memory ADDRESS:COUNT prints COUNT bytes from the end of the run.\n"
+           "--trace-pc-range START:END prints each instruction executed in that address range.\n";
 }
 
 std::uint64_t parse_number(const std::string &text, const char *what) {
@@ -56,6 +60,9 @@ int run_command(int argc, char **argv) {
     std::string firmware;
     std::uint64_t steps = 0, duration_ns = 0;
     bool trace_mmio = false;
+    std::vector<std::string> dumps;
+    std::uint32_t pc_first = 0, pc_last = 0;
+    bool trace_pc = false, trace_pc_regs = false;
     for (int i = 2; i < argc; ++i) {
         const std::string option = argv[i];
         if (option == "--firmware" && i + 1 < argc)
@@ -68,6 +75,19 @@ int run_command(int argc, char **argv) {
             duration_ns = parse_duration_ns(argv[++i]);
         else if (option == "--trace-mmio")
             trace_mmio = true;
+        else if (option == "--dump-memory" && i + 1 < argc)
+            dumps.push_back(argv[++i]);
+        else if (option == "--trace-pc-regs")
+            trace_pc_regs = true;
+        else if (option == "--trace-pc-range" && i + 1 < argc) {
+            const std::string range = argv[++i];
+            const std::size_t colon = range.find(':');
+            if (colon == std::string::npos)
+                throw std::invalid_argument("--trace-pc-range expects START:END: " + range);
+            pc_first = static_cast<std::uint32_t>(std::stoul(range.substr(0, colon), nullptr, 0));
+            pc_last = static_cast<std::uint32_t>(std::stoul(range.substr(colon + 1), nullptr, 0));
+            trace_pc = true;
+        }
         else if (option == "--help" || option == "-h") {
             usage(std::cout);
             return 0;
@@ -90,6 +110,8 @@ int run_command(int argc, char **argv) {
     chip.load_firmware(image);
     if (trace_mmio)
         chip.set_trace(&std::cerr);
+    if (trace_pc)
+        chip.core().set_pc_trace(&std::cerr, pc_first, pc_last, trace_pc_regs);
     chip.reset();
     if (steps != 0)
         chip.core().set_instruction_limit(steps);
@@ -106,6 +128,27 @@ int run_command(int argc, char **argv) {
     for (unsigned reg = 0; reg != 16; ++reg)
         std::cout << (reg == 13 ? "sp" : reg == 14 ? "lr" : reg == 15 ? "pc" : "r" + std::to_string(reg))
                   << "=0x" << std::hex << core.reg(reg) << std::dec << ((reg & 3u) == 3u ? '\n' : ' ');
+    if (!chip.uart0_output().empty()) {
+        std::cout << "UART0 output (" << chip.uart0_output().size() << " bytes):\n";
+        std::cout.write(chip.uart0_output().data(), static_cast<std::streamsize>(chip.uart0_output().size()));
+        std::cout << '\n';
+    }
+    for (const std::string &dump : dumps) {
+        const std::size_t colon = dump.find(':');
+        if (colon == std::string::npos)
+            throw std::invalid_argument("--dump-memory expects ADDRESS:COUNT: " + dump);
+        const auto address = static_cast<std::uint32_t>(std::stoul(dump.substr(0, colon), nullptr, 0));
+        const std::size_t count = std::stoul(dump.substr(colon + 1), nullptr, 0);
+        std::vector<std::uint8_t> bytes(count);
+        const bool ok = core.read_memory(address, bytes.data(), bytes.size());
+        std::cout << "memory 0x" << std::hex << address << std::dec << ':';
+        if (!ok)
+            std::cout << " unreadable";
+        for (std::uint8_t byte : bytes)
+            std::cout << ' ' << std::hex << std::setw(2) << std::setfill('0') << static_cast<unsigned>(byte)
+                      << std::setfill(' ') << std::dec;
+        std::cout << std::dec << '\n';
+    }
     switch (result.reason) {
     case cortexm::StopReason::Fault:
         std::cerr << "CPU fault: " << result.message << '\n';

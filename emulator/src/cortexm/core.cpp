@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <ostream>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -195,6 +196,14 @@ struct Core::Impl final : Bus {
             cause = Cause::Deadline;
             uc_emu_stop(core.uc_);
             return;
+        }
+        if (core.pc_trace_ != nullptr && address >= core.pc_first_ && address <= core.pc_last_) {
+            *core.pc_trace_ << "PC 0x" << std::hex << address << std::dec << " cycles=" << core.cycles_;
+            if (core.pc_trace_regs_) {
+                for (unsigned reg = 0; reg != 13; ++reg)
+                    *core.pc_trace_ << " r" << reg << "=0x" << std::hex << core.reg(reg) << std::dec;
+            }
+            *core.pc_trace_ << '\n';
         }
         if (core.instruction_limit_ != 0 && core.instructions_ >= core.instruction_limit_) {
             cause = Cause::StepLimit;
