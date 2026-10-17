@@ -4,6 +4,7 @@
 // settle is marked "inferred".
 
 #include "efr32/blocks.hpp"
+#include "efr32/rail_map.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -64,6 +65,7 @@ std::uint32_t Dpll::read(std::uint32_t reg) {
 
 namespace {
 constexpr std::uint32_t UsartStatus = 0x018, UsartTxdataX = 0x038, UsartTxdata = 0x03c;
+constexpr std::size_t UartOutputLimit = 1u << 20;
 constexpr std::uint32_t UsartStatusTxc = 1u << 5, UsartStatusTxbl = 1u << 6, UsartStatusTxidle = 1u << 13;
 } // namespace
 
@@ -75,7 +77,9 @@ std::uint32_t Usart::read(std::uint32_t reg) {
 
 void Usart::write(std::uint32_t reg, std::uint32_t value) {
     if (reg == UsartTxdata || reg == UsartTxdataX) {
-        chip().uart0_output().push_back(static_cast<char>(value & 0xffu));
+        // A run that nobody drains stops recording instead of growing without bound.
+        if (chip().uart0_output().size() < UartOutputLimit)
+            chip().uart0_output().push_back(static_cast<char>(value & 0xffu));
         return;
     }
     RegBlock::write(reg, value);
@@ -123,7 +127,7 @@ namespace {
 // RAC + 0x0C, state code in [27:24]. Inferred: 0 is idle (the loop after the RAC
 // enable waits for it to be 0), and 7..9 and 12 are the active states that
 // rfhal_rac accepts. No hook yet: the state follows what is stored.
-constexpr std::uint32_t RacStatus = 0xA802000C;
+using rail::RacStatus;
 // SEQRAM + 0x1EA0, polled with masks 0x800, 0x20000 and 0x40000. Inferred: these
 // are "operation done" bits the sequencer would set. Forced set on every read
 // for now, to see which waits they release.
@@ -165,11 +169,11 @@ void RailRegs::write(std::uint32_t address, std::uint32_t value, unsigned) {
     // PROTIMER CMD (image layout: header +0x1C moved to +0x0C): START (bit 0) and
     // RTCSYNCSTART (bit 1) set STATUS.RUNNING (+0x14 bit 0), STOP (bit 2) clears it.
     // The transmit path refuses to start while RUNNING is clear (sli_rail_3d0930...).
-    if (register_base(address) == 0xA801C00Cu) {
+    if (register_base(address) == rail::ProtimerCmd) {
         if (value & 0x3u)
-            words_[0xA801C014u] |= 1u;
+            words_[rail::ProtimerStatus] |= 1u;
         if (value & 0x4u)
-            words_[0xA801C014u] &= ~1u;
+            words_[rail::ProtimerStatus] &= ~1u;
     }
     std::uint32_t &word = words_[register_base(address)];
     switch ((address >> 12) & 3u) {
@@ -181,16 +185,16 @@ void RailRegs::write(std::uint32_t address, std::uint32_t value, unsigned) {
     // Inferred: RAC+0x008 bit 5 is a request that the hardware clears when the
     // operation is done. RAIL sets it and polls it to zero (rfhal_rac), so the
     // operation is treated as completing at once.
-    if (register_base(address) == 0xA8020008u)
+    if (register_base(address) == rail::RacRxEnable)
         word &= ~(1u << 5);
     // RAC CMD.TXEN starts the transmitter. The frame then ends on air after its
     // duration (the chip models that end, see Efr32mg21::service).
-    if (register_base(address) == 0xA8020010u && (value & 1u))
+    if (register_base(address) == rail::RacCmd && (value & 1u))
         tx_started_ = true;
 }
 
 bool RailRegs::rx_enabled() const {
-    const auto it = words_.find(0xA8020008u);
+    const auto it = words_.find(rail::RacRxEnable);
     return it != words_.end() && (it->second & 2u) != 0;
 }
 

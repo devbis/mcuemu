@@ -1,6 +1,7 @@
 #include "efr32emu/efr32mg21.hpp"
 
 #include "efr32/blocks.hpp"
+#include "efr32/rail_map.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -17,12 +18,11 @@ constexpr unsigned CmuSlot = 2, HfxoSlot = 3, DpllSlot = 7, UsartSlot = 22, MscS
 constexpr std::uint32_t RtccBase = 0x48000000, RtccSize = 0x4000;
 constexpr unsigned ProtimerIrq = 36; // PROTIMER_IRQn
 constexpr unsigned FrcIrq = 34, RacSeqIrq = 38; // FRC_IRQn, RAC_SEQ_IRQn
-constexpr std::uint32_t FrcIf = 0xA8004068u, FrcIen = 0xA800406Cu; // FRC IF/IEN (bit 15: TX_PACKET_SENT)
-constexpr std::uint32_t RacIf = 0xA802001Cu, RacIen = 0xA8020020u; // RAC IF/IEN (bit 22: RX_ACK_TIMEOUT)
+// FRC IF bit 15: TX_PACKET_SENT; RAC IF bit 22: RX_ACK_TIMEOUT.
 constexpr std::uint32_t FrcTxPacketSent = 1u << 15, RacRxAckTimeout = 1u << 22;
 // BUFC IF/IEN: IRQ 32 (BUFC_IRQn) follows IF & IEN; the BUF2 threshold is bit 18.
 constexpr unsigned BufcIrq = 32;
-constexpr std::uint32_t BufcIf = 0x440040E0u, BufcIen = 0x440040ECu;
+using namespace rail;
 // The RX poll rate: 100 us at 38.4 MHz, like the PROTIMER compare check.
 constexpr std::uint64_t RailRxPollCycles = 3840;
 // Inferred: the 802.15.4 ACK wait of 54 symbols (864 us).
@@ -186,7 +186,7 @@ cortexm::RunResult Efr32mg21::run(std::uint64_t until_cycle) {
 // up to PHR + 1 bytes. The firmware's FIFO writer stores the first bytes through
 // WRITEDATA and copies the rest into the same RAM (see tx_store).
 std::vector<std::uint8_t> Efr32mg21::tx_frame() {
-    const std::uint32_t buffer = rail_regs_->peek(0x4400400Cu);
+    const std::uint32_t buffer = rail_regs_->peek(Buf0Addr);
     std::uint8_t phr = 0;
     if (!core_->read_memory(buffer, &phr, 1) || phr == 0)
         return {};
@@ -199,14 +199,14 @@ std::vector<std::uint8_t> Efr32mg21::tx_frame() {
 // A WRITEDATA store writes one byte at ADDR + WRITEOFFSET and advances WRITEOFFSET
 // (inferred from the FIFO writer, which reads WRITEOFFSET after its four stores).
 void Efr32mg21::tx_store(std::uint8_t byte) {
-    const std::uint32_t offset = rail_regs_->peek(0x44004010u);
-    core_->write_memory(rail_regs_->peek(0x4400400Cu) + offset, &byte, 1);
-    rail_regs_->write(0x44004010u, offset + 1);
+    const std::uint32_t offset = rail_regs_->peek(Buf0WriteOffset);
+    core_->write_memory(rail_regs_->peek(Buf0Addr) + offset, &byte, 1);
+    rail_regs_->write(Buf0WriteOffset, offset + 1);
 }
 
 // The RF channel is the SYNTH channel field (0xB8018044), 11..26 for 802.15.4.
 std::uint8_t Efr32mg21::rail_channel() const {
-    const std::uint32_t synth_channel = rail_regs_->peek(0xA8018044u);
+    const std::uint32_t synth_channel = rail_regs_->peek(SynthChannel);
     return static_cast<std::uint8_t>(synth_channel >= 11 && synth_channel <= 26 ? synth_channel : 11);
 }
 
@@ -220,12 +220,12 @@ void Efr32mg21::deliver_rail_rx(const std::vector<std::uint8_t> &fifo) {
     stored.insert(stored.end(), 8, 0x00);
     // Each frame goes after the previous one (BUF1 WRITEOFFSET), so a frame that is still
     // unread is not overwritten. The read offset is set to the frame start.
-    const std::uint32_t frame_at = rail_regs_->peek(0x44004040u);
-    const std::uint32_t buf1 = rail_regs_->peek(0x4400403Cu) + frame_at;
+    const std::uint32_t frame_at = rail_regs_->peek(Buf1WriteOffset);
+    const std::uint32_t buf1 = rail_regs_->peek(Buf1Addr) + frame_at;
     if (!core_->write_memory(buf1, stored.data(), stored.size()))
         return;
-    rail_regs_->write(0x44004040u, frame_at + static_cast<std::uint32_t>(stored.size()));
-    rail_regs_->write(0x44004044u, frame_at);
+    rail_regs_->write(Buf1WriteOffset, frame_at + static_cast<std::uint32_t>(stored.size()));
+    rail_regs_->write(Buf1ReadOffset, frame_at);
     // The descriptor is written in the BUF2 ring where the threshold handler reads it: base
     // at context +0x18, size at +0x3A, write and read indexes at +0x3C and +0x3E (see
     // the RX section above). Word 0 is the end offset in BUF1; byte 2 low bits are the
@@ -233,7 +233,7 @@ void Efr32mg21::deliver_rail_rx(const std::vector<std::uint8_t> &fifo) {
     std::uint32_t context = 0, base = 0;
     std::uint16_t size = 0, write = 0, read = 0;
     std::uint8_t raw[4] = {}, ring[0x42] = {};
-    if (!core_->read_memory(0x20004048u, raw, 4))
+    if (!core_->read_memory(RxContextPointer, raw, 4))
         return;
     context = raw[0] | (raw[1] << 8) | (raw[2] << 16) | (static_cast<std::uint32_t>(raw[3]) << 24);
     if (!core_->read_memory(context, ring, sizeof(ring)))
@@ -256,8 +256,8 @@ void Efr32mg21::deliver_rail_rx(const std::vector<std::uint8_t> &fifo) {
                                   static_cast<std::uint8_t>(7u | (ack ? 0x10u : 0u)), 0, 0, 0, 0, 0};
     if (!core_->write_memory(base + position, descriptor, sizeof(descriptor)))
         return;
-    rail_regs_->write(0x44004088u, 8);
-    rail_regs_->set_bits(BufcIf, 1u << 18);
+    rail_regs_->write(Buf2Status, 8);
+    rail_regs_->set_bits(BufcIf, Buf2Threshold);
     rail_regs_->set_rx_frame(true);
 }
 
@@ -272,7 +272,10 @@ void Efr32mg21::acknowledge(const std::vector<std::uint8_t> &fifo) {
     const std::uint8_t fc0 = fifo[1], fc1 = fifo[2];
     if ((fc0 & 7u) == 2u)
         return; // an ACK is never acknowledged
-    const std::uint8_t dst_mode = (fc1 >> 2) & 3u;
+    const std::uint8_t dst_mode = (fc1 >> 2) & 3u, src_mode = (fc1 >> 6) & 3u;
+    // Only PAN-compressed frames are handled: the offsets below assume a single PAN ID.
+    if ((fc0 & 0x40u) == 0)
+        return;
     bool mine = false;
     if (dst_mode == 3u)
         mine = std::memcmp(fifo.data() + 6, devinfo_ + 0x48, 8) == 0;
@@ -281,7 +284,7 @@ void Efr32mg21::acknowledge(const std::vector<std::uint8_t> &fifo) {
                fifo[7] == short_address_[1];
     // A command frame in the association response (command 0x02): it carries the short
     // address the coordinator assigns, after the 8-byte source address.
-    if (mine && (fc0 & 7u) == 3u && dst_mode == 3u && fifo.size() >= 26 && fifo[22] == 0x02u) {
+    if (mine && (fc0 & 7u) == 3u && dst_mode == 3u && src_mode == 3u && fifo.size() >= 26 && fifo[22] == 0x02u) {
         pan_id_[0] = fifo[4];
         pan_id_[1] = fifo[5];
         short_address_[0] = fifo[23];
@@ -305,12 +308,11 @@ void Efr32mg21::acknowledge(const std::vector<std::uint8_t> &fifo) {
 // at +0x64 (IF_SET/IF_CLR through the aliases), IEN at +0x70, and the line is
 // IF & IEN.
 std::uint64_t Efr32mg21::service(std::uint64_t now) {
-    static constexpr std::uint32_t ProtimerBase = 0xA801C000u;
     static constexpr std::uint64_t ProtimerPeriod = 3840; // 100 us at 38.4 MHz; the compare check rate
     if (now >= next_protimer_) {
-        const std::uint64_t divisor = static_cast<std::uint64_t>(rail_regs_->peek(ProtimerBase + 0x30)) + 0x100u;
+        const std::uint64_t divisor = static_cast<std::uint64_t>(rail_regs_->peek(ProtimerPrecntTop)) + 0x100u;
         const std::uint64_t wrap_now = divisor != 0 ? now / divisor : 0;
-        const std::uint32_t enabled = rail_regs_->peek(ProtimerBase + 0x70);
+        const std::uint32_t enabled = rail_regs_->peek(ProtimerIen);
         for (unsigned channel = 0; channel < 8; ++channel) {
             const std::uint32_t cc = ProtimerBase + 0x100u + 16u * channel;
             const std::uint32_t bit = 1u << (8 + channel);
@@ -320,9 +322,9 @@ std::uint64_t Efr32mg21::service(std::uint64_t now) {
                 continue;
             const std::uint64_t compare = rail_regs_->peek(cc + 0x0Cu);
             if (previous < compare && compare <= wrap_now)
-                rail_regs_->set_bits(ProtimerBase + 0x64, bit);
+                rail_regs_->set_bits(ProtimerIf, bit);
         }
-        core_->set_irq_line(ProtimerIrq, (rail_regs_->peek(ProtimerBase + 0x64) & enabled) != 0);
+        core_->set_irq_line(ProtimerIrq, (rail_regs_->peek(ProtimerIf) & enabled) != 0);
         next_protimer_ = now + ProtimerPeriod;
     }
     // The end of the frame sets FRC TX_PACKET_SENT; the ACK wait then runs out
@@ -332,7 +334,7 @@ std::uint64_t Efr32mg21::service(std::uint64_t now) {
         rail_regs_->set_bits(FrcIf, FrcTxPacketSent);
         // The driver sets tx_transitions.success = RX: a successful transmit leaves the radio
         // receiving (RXENSRCEN bit 1, the RX request this model tracks).
-        rail_regs_->set_bits(0xA8020008u, 2u);
+        rail_regs_->set_bits(RacRxEnable, RacRxenRequest);
         ack_timeout_at_ = now + AckWaitCycles;
     }
     if (now >= ack_timeout_at_) {
@@ -405,10 +407,10 @@ std::uint32_t Efr32mg21::read(std::uint32_t address, unsigned size) {
         value = rtcc_->read((address - RtccBase) & 0xffc);
     } else if (address - SeBase < SeSize) {
         value = se_mailbox_->read((address - SeBase) & 0xffc);
-    } else if (address == 0xA801C020u && rail_regs_->peek(0xA801C014u) != 0) {
+    } else if (address == ProtimerWrapCount && rail_regs_->peek(ProtimerStatus) != 0) {
         // PROTIMER WRAPCNT (image layout +0x20): counts pre-counter overflows, one per
         // PRECNTTOP+0x100 core cycles while RUNNING (+0x14 bit 0).
-        const std::uint64_t divisor = static_cast<std::uint64_t>(rail_regs_->peek(0xA801C030u)) + 0x100u;
+        const std::uint64_t divisor = static_cast<std::uint64_t>(rail_regs_->peek(ProtimerPrecntTop)) + 0x100u;
         value = static_cast<std::uint32_t>(core_->cycles() / divisor);
     } else if (is_rail_register(address)) {
         value = rail_regs_->read(address);
@@ -444,16 +446,16 @@ void Efr32mg21::write(std::uint32_t address, std::uint32_t value, unsigned size)
         return;
     }
     if (is_rail_register(address)) {
-        if (address == 0x44004020u) {
+        if (address == Buf0WriteData) {
             tx_store(static_cast<std::uint8_t>(value));
             return;
         }
         // The firmware acknowledges the BUF2 threshold by clearing BUFC IF bit 18: the
         // frame is consumed and RAC leaves RXFRAME.
-        if (address == 0x440060E0u && (value & (1u << 18)))
+        if (address == BufcIfClear && (value & Buf2Threshold))
             rail_regs_->set_rx_frame(false);
-        if (address == 0x44004030u && (value & 1u))
-            rail_regs_->write(0x44004010u, 0); // CMD.CLEAR empties the buffer
+        if (address == Buf0Cmd && (value & 1u))
+            rail_regs_->write(Buf0WriteOffset, 0); // CMD.CLEAR empties the buffer
         rail_regs_->write(address, value, size);
         if (rail_regs_->take_tx_start()) {
             const std::uint64_t airtime_ns = radio_->transmit_fifo(tx_frame(), rail_channel());

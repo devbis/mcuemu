@@ -126,9 +126,9 @@ void Efr32mg21Mcu::read_memory(std::uint32_t address, std::uint8_t *out, std::si
 std::vector<std::uint8_t> Efr32mg21Mcu::uart_take_tx(unsigned index) {
     if (index != 0)
         return {};
-    const std::string &all = chip_.uart0_output();
-    std::vector<std::uint8_t> bytes(all.begin() + uart_taken_, all.end());
-    uart_taken_ = all.size();
+    std::string &all = chip_.uart0_output();
+    std::vector<std::uint8_t> bytes(all.begin(), all.end());
+    all.clear();
     return bytes;
 }
 
