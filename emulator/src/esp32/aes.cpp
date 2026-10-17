@@ -135,7 +135,7 @@ void words_to_bytes(const std::uint32_t *words, unsigned count, bool word_swap, 
     for (unsigned i = 0; i < count; ++i) {
         std::uint32_t w = words[word_swap ? count - 1 - i : i];
         if (byte_swap)
-            w = __builtin_bswap32(w);
+            w = ((w >> 24) | ((w >> 8) & 0xff00u) | ((w << 8) & 0xff0000u) | (w << 24));
         std::memcpy(out + 4 * i, &w, 4);
     }
 }
@@ -172,7 +172,7 @@ void Aes::run() {
     for (unsigned i = 0; i < 4; ++i) {
         std::uint32_t w = out_words[i];
         if (endian >> 4 & 1)
-            w = __builtin_bswap32(w);
+            w = ((w >> 24) | ((w >> 8) & 0xff00u) | ((w << 8) & 0xff0000u) | (w << 24));
         result[endian >> 5 & 1 ? 3 - i : i] = w;
     }
     for (unsigned i = 0; i < 4; ++i)

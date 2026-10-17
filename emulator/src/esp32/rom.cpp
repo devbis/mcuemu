@@ -4,9 +4,20 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstdio>
 #include <cstring>
 #include <vector>
+
+namespace {
+// std::byteswap is C++23; MSVC has no __builtin_bswap.
+constexpr std::uint32_t bswap32(std::uint32_t v) {
+    return (v >> 24) | ((v >> 8) & 0xff00u) | ((v << 8) & 0xff0000u) | (v << 24);
+}
+constexpr std::uint64_t bswap64(std::uint64_t v) {
+    return (static_cast<std::uint64_t>(bswap32(static_cast<std::uint32_t>(v))) << 32) | bswap32(static_cast<std::uint32_t>(v >> 32));
+}
+} // namespace
 
 namespace esp32emu {
 
@@ -246,13 +257,13 @@ Rom::Rom(Esp32 &chip) : chip_(chip) {
             for (int bit = 0; bit < 8; ++bit)
                 crc = crc >> 1 ^ (crc & 1 ? 0xedb88320u : 0);
         }
-        result_ = ~crc;
+        result_ = static_cast<std::uint32_t>(~crc);
     });
 
     // C strings: the ROM's newlib subset
     auto cstr = [&core](std::uint32_t address, std::size_t limit = ~std::size_t{0}) {
         std::string text;
-        for (char c; text.size() < limit && core.read_memory(address + text.size(), &c, 1) && c != 0;)
+        for (char c; text.size() < limit && core.read_memory(static_cast<std::uint32_t>(address + text.size()), &c, 1) && c != 0;)
             text.push_back(c);
         return text;
     };
@@ -303,17 +314,17 @@ Rom::Rom(Esp32 &chip) : chip_(chip) {
     });
 
     // 32-bit builtins (clz of 0 is undefined in libgcc; 32/64 like the ROM's table)
-    add("__clzsi2", [this, reg] { result_ = reg(10) ? __builtin_clz(reg(10)) : 32; });
-    add("__ctzsi2", [this, reg] { result_ = reg(10) ? __builtin_ctz(reg(10)) : 32; });
-    add("__ffssi2", [this, reg] { result_ = reg(10) ? __builtin_ctz(reg(10)) + 1 : 0; });
-    add("__popcountsi2", [this, reg] { result_ = __builtin_popcount(reg(10)); });
-    add("__paritysi2", [this, reg] { result_ = __builtin_parity(reg(10)); });
-    add("__bswapsi2", [this, reg] { result_ = __builtin_bswap32(reg(10)); });
-    add("__clzdi2", [this, arg64] { result_ = arg64(0) ? __builtin_clzll(arg64(0)) : 64; });
-    add("__ctzdi2", [this, arg64] { result_ = arg64(0) ? __builtin_ctzll(arg64(0)) : 64; });
-    add("__ffsdi2", [this, arg64] { result_ = arg64(0) ? __builtin_ctzll(arg64(0)) + 1 : 0; });
-    add("__popcountdi2", [this, arg64] { result_ = __builtin_popcountll(arg64(0)); });
-    add("__bswapdi2", [this, arg64] { result_ = __builtin_bswap64(arg64(0)); });
+    add("__clzsi2", [this, reg] { result_ = reg(10) ? std::countl_zero(static_cast<std::uint32_t>(reg(10))) : 32; });
+    add("__ctzsi2", [this, reg] { result_ = reg(10) ? std::countr_zero(static_cast<std::uint32_t>(reg(10))) : 32; });
+    add("__ffssi2", [this, reg] { result_ = reg(10) ? std::countr_zero(static_cast<std::uint32_t>(reg(10))) + 1 : 0; });
+    add("__popcountsi2", [this, reg] { result_ = std::popcount(static_cast<std::uint32_t>(reg(10))); });
+    add("__paritysi2", [this, reg] { result_ = (std::popcount(static_cast<std::uint32_t>(reg(10))) & 1); });
+    add("__bswapsi2", [this, reg] { result_ = bswap32(static_cast<std::uint32_t>(reg(10))); });
+    add("__clzdi2", [this, arg64] { result_ = arg64(0) ? std::countl_zero(arg64(0)) : 64; });
+    add("__ctzdi2", [this, arg64] { result_ = arg64(0) ? std::countr_zero(arg64(0)) : 64; });
+    add("__ffsdi2", [this, arg64] { result_ = arg64(0) ? std::countr_zero(arg64(0)) + 1 : 0; });
+    add("__popcountdi2", [this, arg64] { result_ = std::popcount(arg64(0)); });
+    add("__bswapdi2", [this, arg64] { result_ = bswap64(arg64(0)); });
     add("__ashldi3", [this, arg64, reg] { result_ = arg64(0) << (reg(12) & 63); });
     add("__lshrdi3", [this, arg64, reg] { result_ = arg64(0) >> (reg(12) & 63); });
     add("__ashrdi3", [this, arg64, reg] {

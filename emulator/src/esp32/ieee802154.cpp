@@ -39,11 +39,12 @@ void Ieee802154::connect(mcuemu::VirtualAir &air, const std::string &node) {
     node_ = node;
 }
 
+// Split into whole seconds and a remainder so the product stays in 64 bits (no __int128 on MSVC).
 std::uint64_t Ieee802154::to_ns(std::uint64_t cycles) const {
-    return static_cast<std::uint64_t>(static_cast<unsigned __int128>(cycles) * 1000000000ull / cpu_hz_);
+    return cycles / cpu_hz_ * 1000000000ull + cycles % cpu_hz_ * 1000000000ull / cpu_hz_;
 }
 std::uint64_t Ieee802154::to_cycles(std::uint64_t ns) const {
-    return static_cast<std::uint64_t>(static_cast<unsigned __int128>(ns) * cpu_hz_ / 1000000000ull);
+    return ns / 1000000000ull * cpu_hz_ + ns % 1000000000ull * cpu_hz_ / 1000000000ull;
 }
 
 std::uint8_t Ieee802154::channel() const {
