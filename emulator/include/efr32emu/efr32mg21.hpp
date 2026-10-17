@@ -17,12 +17,15 @@ class Block;
 class Cmu;
 class Gpio;
 class Radio;
+class Rtcc;
+class SeMailbox;
 
 // What a pad does to its net, as seen from outside the chip.
 enum class PadDrive { HiZ, Low, High, PullUp, PullDown };
 
 // Silicon Labs EFR32MG21A020F512 (Series 2): Cortex-M33 (no TrustZone state
-// is modelled), 512 KiB flash, 64 KiB RAM.
+// is modelled), 1 MiB flash, 96 KiB RAM (the A020F1024 the Zephyr images for
+// the slwrb4180a board are built for; the BRD4181A images fit in it too).
 //
 // Peripherals sit at 0x40000000 in 16 KiB blocks. Each block has the Series 2
 // register aliases: +0x1000 sets, +0x2000 clears and +0x3000 toggles the bits
@@ -34,8 +37,8 @@ enum class PadDrive { HiZ, Low, High, PullUp, PullDown };
 // chip starts on is not modelled).
 class Efr32mg21 final : public cortexm::Bus {
 public:
-    static constexpr std::uint32_t FlashSize = 0x80000;
-    static constexpr std::uint32_t RamSize = 0x10000;
+    static constexpr std::uint32_t FlashSize = 0x100000;
+    static constexpr std::uint32_t RamSize = 0x18000;
     static constexpr std::uint32_t RamBase = 0x20000000;
     static constexpr std::uint32_t UserDataBase = 0x0FE00000;
     static constexpr std::uint32_t DevInfoBase = 0x0FE08000;
@@ -98,6 +101,8 @@ public:
     // ---- used by the peripherals ----------------------------------------
     Cmu &cmu() noexcept { return *cmu_; }
     Gpio &gpio() noexcept { return *gpio_; }
+    // Bytes the firmware sent through USART0 (the console), in order.
+    std::string &uart0_output() noexcept { return uart0_output_; }
     void notify_pad(unsigned pad);
     // Flash words programmed through the MSC; flushes translated code only
     // when the program image itself is touched.
@@ -122,6 +127,9 @@ private:
     Cmu *cmu_{nullptr};
     Gpio *gpio_{nullptr};
     std::unique_ptr<Radio> radio_;
+    std::string uart0_output_;
+    std::unique_ptr<Rtcc> rtcc_;
+    std::unique_ptr<SeMailbox> se_mailbox_;
 };
 
 } // namespace efr32emu

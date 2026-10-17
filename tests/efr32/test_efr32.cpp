@@ -178,7 +178,7 @@ void test_efr32_msc_erase_and_program() {
     c.w(Msc + 0x010, 2);
     CHECK(c.chip.flash()[page] == 0xff && c.chip.flash()[page + 4] == 0xff);
     // An address beyond the flash is invalid.
-    c.w(Msc + 0x014, 0x80000);
+    c.w(Msc + 0x014, 0x100000);
     CHECK((c.r(Msc + 0x01c) & 4) != 0);
     c.w(Msc + 0x03c, 0);
     CHECK((c.r(Msc + 0x01c) & (1u << 16)) != 0);
@@ -261,6 +261,44 @@ void test_efr32_radio_state_and_rssi() {
     b.w(Radio + 0x3004, 1);
     run_both(a, b, 500);
     CHECK(static_cast<std::int8_t>(a.r(Radio + 0x5020) & 0xff) > -60);
+}
+
+// The RTCC counts at 32768 Hz (inferred clock), reads the same through the
+// secure and non-secure bases, and sets IF.CC1 at OCVALUE + 1 (the sleeptimer's
+// convention) with the interrupt taken on the RTCC line.
+void test_efr32_rtcc_counts_and_compares() {
+    Chip c;
+    c.w(0x58000004, 1);      // EN (non-secure alias)
+    c.w(0x4800000c, 1);      // CMD.START
+    c.chip.core().advance_to(19200000); // 0.5 s at 38.4 MHz
+    CHECK(c.r(0x58000020) == 16384);
+    CHECK(c.r(0x48000020) == 16384);
+    c.w(0x48000020, 100);    // CNT = 100
+    c.w(0x4800003c, 2);      // CC1.CTRL = OUTPUTCOMPARE
+    c.w(0x48000040, 110);    // CC1.OCVALUE: match at tick 111
+    c.w(0x48000018, 8);      // IEN.CC1
+    const std::uint64_t start = c.chip.core().cycles();
+    c.chip.run(start + 5000); // about 4 ticks
+    CHECK((c.r(0x48000014) & 8) == 0);
+    c.chip.run(start + 20000); // about 17 ticks
+    CHECK((c.r(0x48000014) & 8) != 0);
+    c.w(0x48002014, 8);      // IF_CLR: the clear alias (+0x2000) of IF
+    CHECK((c.r(0x48000014) & 8) == 0);
+}
+
+// The SEMAILBOX host answers a command once the words its TX_HEADER announces
+// have arrived (the handle word is not stored), with SUCCESS and no output.
+void test_efr32_semailbox_answers_commands() {
+    Chip c;
+    CHECK((c.r(0x4C000040) & (1u << 20)) != 0);   // TX_STATUS.TXINT: room
+    c.w(0x4C000050, 16);                          // TX_HEADER: 4 words
+    c.w(0x4C000000, 1);                           // command
+    c.w(0x4C000000, 2);
+    CHECK((c.r(0x4C000044) & (1u << 20)) == 0);   // not yet: 2 of 3 words
+    c.w(0x4C000000, 3);
+    CHECK((c.r(0x4C000044) & (1u << 20)) != 0);   // RX_STATUS.RXINT
+    CHECK((c.r(0x4C000054) & 0x000f0000) == 0);   // RX_HEADER: SLI_SE_RESPONSE_OK
+    CHECK((c.r(0x5C000044) & (1u << 20)) != 0);   // the non-secure alias
 }
 
 } // namespace mcuemu_tests

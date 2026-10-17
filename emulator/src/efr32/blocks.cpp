@@ -45,6 +45,197 @@ std::uint32_t Hfxo::read(std::uint32_t reg) {
     return status;
 }
 
+// ---- DPLL ------------------------------------------------------------------------
+
+namespace {
+constexpr std::uint32_t DpllEn = 0x004, DpllIf = 0x010, DpllStatus = 0x018;
+} // namespace
+
+std::uint32_t Dpll::read(std::uint32_t reg) {
+    const bool enabled = regs_[DpllEn >> 2] & 1u;
+    if (reg == DpllIf)
+        return RegBlock::read(reg) | (enabled ? 1u : 0u);
+    if (reg == DpllStatus)
+        return enabled ? (1u | 2u | (1u << 31)) : 0u; // RDY, ENS, LOCK
+    return RegBlock::read(reg);
+}
+
+// ---- USART -----------------------------------------------------------------------
+
+namespace {
+constexpr std::uint32_t UsartStatus = 0x018, UsartTxdataX = 0x038, UsartTxdata = 0x03c;
+constexpr std::uint32_t UsartStatusTxc = 1u << 5, UsartStatusTxbl = 1u << 6, UsartStatusTxidle = 1u << 13;
+} // namespace
+
+std::uint32_t Usart::read(std::uint32_t reg) {
+    if (reg == UsartStatus)
+        return UsartStatusTxc | UsartStatusTxbl | UsartStatusTxidle;
+    return RegBlock::read(reg);
+}
+
+void Usart::write(std::uint32_t reg, std::uint32_t value) {
+    if (reg == UsartTxdata || reg == UsartTxdataX) {
+        chip().uart0_output().push_back(static_cast<char>(value & 0xffu));
+        return;
+    }
+    RegBlock::write(reg, value);
+}
+
+// ---- SEMAILBOX host --------------------------------------------------------------
+
+namespace {
+constexpr std::uint32_t SeFifo = 0x000, SeTxStatus = 0x040, SeRxStatus = 0x044, SeTxHeader = 0x050,
+                        SeRxHeader = 0x054;
+constexpr std::uint32_t SeTxint = 1u << 20, SeRxint = 1u << 20;
+} // namespace
+
+std::uint32_t SeMailbox::read(std::uint32_t reg) {
+    if (reg == SeTxStatus)
+        return SeTxint; // room in the TX FIFO
+    return RegBlock::read(reg);
+}
+
+void SeMailbox::write(std::uint32_t reg, std::uint32_t value) {
+    if (reg == SeFifo) {
+        const std::uint32_t words = regs_[SeTxHeader >> 2] / 4;
+        // The header counts the command's words, including one that is not
+        // stored (the handle word), so the command is complete one word early.
+        if (++words_ >= (words > 1 ? words - 1 : 1)) {
+            words_ = 0;
+            regs_[SeRxHeader >> 2] = 0; // SLI_SE_RESPONSE_OK
+            regs_[SeRxStatus >> 2] |= SeRxint;
+        }
+        return;
+    }
+    if (reg == SeTxHeader)
+        words_ = 0;
+    RegBlock::write(reg, value);
+}
+
+void SeMailbox::reset() {
+    RegBlock::reset();
+    words_ = 0;
+}
+
+// ---- RTCC ------------------------------------------------------------------------
+
+namespace {
+constexpr std::uint32_t RtccEn = 0x004, RtccCfg = 0x008, RtccCmd = 0x00c, RtccIf = 0x014, RtccIen = 0x018,
+                        RtccCnt = 0x020, RtccCombcnt = 0x024, RtccCc1Ctrl = 0x03c, RtccCc1Ocvalue = 0x040;
+constexpr std::uint32_t RtccCmdStart = 1u << 0, RtccCmdStop = 1u << 1, RtccIfCc1 = 1u << 3;
+constexpr std::uint64_t RtccWrap = 1ull << 32, RtccTickHz = 32768;
+// CNTPRESC above DIV64 is not a valid setting; clamping keeps the cycle arithmetic in 64 bits.
+constexpr unsigned RtccMaxPresc = 6;
+} // namespace
+
+bool Rtcc::counting() const { return started_ && (regs_[RtccEn >> 2] & 1u); }
+
+std::uint64_t Rtcc::ticks(std::uint64_t at) const {
+    if (!counting() || at <= cycle_at_)
+        return ticks_at_;
+    const unsigned presc = std::min<unsigned>((regs_[RtccCfg >> 2] >> 4) & 0xfu, RtccMaxPresc);
+    return ticks_at_ + (((at - cycle_at_) * RtccTickHz / clock_hz()) >> presc);
+}
+
+// The first core cycle at which the counter reaches `tick` (rounded up, so the
+// counter is there when the service runs).
+std::uint64_t Rtcc::cycle_for(std::uint64_t tick) const {
+    const unsigned presc = std::min<unsigned>((regs_[RtccCfg >> 2] >> 4) & 0xfu, RtccMaxPresc);
+    const std::uint64_t cycles = ((tick - ticks_at_) * (clock_hz() << presc) + RtccTickHz - 1) / RtccTickHz;
+    return cycle_at_ + cycles;
+}
+
+// Moves the base to the cycle where the counter reached its current value. The base
+// used to move to `now`, so the fraction of a tick in progress was dropped at every
+// freeze: the service runs every few thousand cycles and the counter lost about 40%.
+void Rtcc::freeze() {
+    const std::uint64_t n = now();
+    const std::uint64_t t = ticks(n);
+    const std::uint64_t anchor = std::min(cycle_for(t), n);
+    ticks_at_ = t;
+    cycle_at_ = anchor;
+}
+
+void Rtcc::arm() {
+    if (!counting() || (regs_[RtccCc1Ctrl >> 2] & 3u) != 2u) { // OUTPUTCOMPARE
+        armed_tick_ = Never;
+        return;
+    }
+    // Match when the counter reaches OCVALUE + 1 (32-bit). A target equal to the
+    // current count is taken as a full wrap away, not as an immediate match.
+    const auto target = static_cast<std::uint32_t>(regs_[RtccCc1Ocvalue >> 2] + 1u);
+    std::uint64_t delta = static_cast<std::uint32_t>(target - static_cast<std::uint32_t>(ticks_at_));
+    if (delta == 0)
+        delta = RtccWrap;
+    armed_tick_ = ticks_at_ + delta;
+    chip().request_service(cycle_for(armed_tick_));
+}
+
+void Rtcc::update_irq() { set_irq_level(Irq, (regs_[RtccIf >> 2] & regs_[RtccIen >> 2]) != 0); }
+
+std::uint32_t Rtcc::read(std::uint32_t reg) {
+    if (reg == RtccCnt || reg == RtccCombcnt)
+        return static_cast<std::uint32_t>(ticks(now()));
+    return RegBlock::read(reg);
+}
+
+void Rtcc::write(std::uint32_t reg, std::uint32_t value) {
+    switch (reg) {
+    case RtccCmd:
+        freeze();
+        if (value & RtccCmdStart)
+            started_ = true;
+        if (value & RtccCmdStop)
+            started_ = false;
+        arm();
+        return;
+    case RtccCnt:
+        freeze();
+        ticks_at_ = value;
+        arm();
+        return;
+    case RtccEn:
+    case RtccCfg:
+    case RtccCc1Ctrl:
+    case RtccCc1Ocvalue:
+        freeze();
+        RegBlock::write(reg, value);
+        arm();
+        return;
+    case RtccIf:
+    case RtccIen:
+        RegBlock::write(reg, value);
+        update_irq();
+        return;
+    default:
+        RegBlock::write(reg, value);
+        return;
+    }
+}
+
+std::uint64_t Rtcc::service(std::uint64_t) {
+    if (!counting() || armed_tick_ == Never)
+        return Never;
+    freeze();
+    if (ticks_at_ >= armed_tick_) {
+        regs_[RtccIf >> 2] |= RtccIfCc1;
+        do {
+            armed_tick_ += RtccWrap;
+        } while (armed_tick_ <= ticks_at_);
+        update_irq();
+    }
+    return cycle_for(armed_tick_);
+}
+
+void Rtcc::reset() {
+    RegBlock::reset();
+    ticks_at_ = 0;
+    cycle_at_ = 0;
+    armed_tick_ = Never;
+    started_ = false;
+    update_irq();
+}
+
 // ---- MSC -------------------------------------------------------------------------
 
 namespace {

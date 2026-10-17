@@ -75,6 +75,71 @@ private:
     Cmu &cmu_;
 };
 
+// DPLL0 (0x4001C000): lock follows the enable bit at once. No frequency model;
+// CMU_DPLLLock only waits for IF.LOCK after EN_SET.
+class Dpll final : public RegBlock {
+public:
+    using RegBlock::RegBlock;
+    std::uint32_t read(std::uint32_t reg) override;
+};
+
+// RTCC (0x48000000 secure, 0x58000000 non-secure alias). The Zephyr kernel tick
+// runs on the sleeptimer, which runs on this counter, so it has to count.
+// Counter: 32-bit, clocked at 32768 Hz (inferred: the LFXO/LFRCO clock is not
+// modelled) divided by 2^CFG.CNTPRESC, runs while EN and CMD.START are set.
+// Compare channel 1 in output-compare mode sets IF.CC1 when the counter reaches
+// OCVALUE + 1 (inferred from sl_sleeptimer_hal_rtcc.c, which programs
+// OCVALUE = target - 1 and says the match fires one tick later).
+class Rtcc final : public RegBlock {
+public:
+    static constexpr unsigned Irq = 10; // RTCC_IRQn
+    using RegBlock::RegBlock;
+    std::uint32_t read(std::uint32_t reg) override;
+    void write(std::uint32_t reg, std::uint32_t value) override;
+    std::uint64_t service(std::uint64_t now) override;
+    void reset() override;
+
+private:
+    bool counting() const;
+    std::uint64_t ticks(std::uint64_t at) const;
+    std::uint64_t cycle_for(std::uint64_t tick) const;
+    void freeze();
+    void arm();
+    void update_irq();
+
+    // The counter is ticks_at_ at core cycle cycle_at_ while it runs; armed_tick_
+    // is the next compare match (Never when the channel is not armed).
+    std::uint64_t ticks_at_{0}, cycle_at_{0}, armed_tick_{Never};
+    bool started_{false};
+};
+
+// USART0 (0x40058000), the console. Transmission is instantaneous: TXC, TXBL and
+// TXIDLE read as set, and each byte written to TXDATA is appended to the chip's
+// UART0 output. Everything else reads back what was written.
+class Usart final : public RegBlock {
+public:
+    using RegBlock::RegBlock;
+    std::uint32_t read(std::uint32_t reg) override;
+    void write(std::uint32_t reg, std::uint32_t value) override;
+};
+
+// SEMAILBOX host (0x4C000000 secure, 0x5C000000 non-secure): the mailbox to the
+// Secure Element that se_manager uses for its commands. The SE itself is not
+// modelled; the mailbox answers every command with SUCCESS and no output data.
+// Inferred from sli_se_manager_mailbox.c: the host writes TX_HEADER (bytes) and
+// then the command words to FIFO; the response is ready (RX_STATUS.RXINT) once
+// the words the header announces have arrived, and RX_HEADER holds the response.
+class SeMailbox final : public RegBlock {
+public:
+    using RegBlock::RegBlock;
+    std::uint32_t read(std::uint32_t reg) override;
+    void write(std::uint32_t reg, std::uint32_t value) override;
+    void reset() override;
+
+private:
+    unsigned words_{0};
+};
+
 // MSC (0x40030000): page erase and word programming by the register protocol
 // the zigbee-rs flash driver uses.
 class Msc final : public RegBlock {
@@ -131,7 +196,6 @@ public:
     std::uint64_t service(std::uint64_t now) override;
     void reset() override;
     void connect(mcuemu::VirtualAir &air, const std::string &node);
-
 private:
     enum class State : std::uint32_t { Off = 0, Idle = 1, Rx = 2, Tx = 3 };
 
