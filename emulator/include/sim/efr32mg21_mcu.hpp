@@ -31,6 +31,9 @@ public:
                       const std::vector<std::string> &protocols) override;
     void read_memory(std::uint32_t address, std::uint8_t *out, std::size_t length) override;
     void write_memory(std::uint32_t address, const std::uint8_t *data, std::size_t length) override;
+    // The console (USART0) is the only UART; its output is taken as it grows.
+    unsigned uart_count() const override { return 1; }
+    std::vector<std::uint8_t> uart_take_tx(unsigned index) override;
 
     efr32emu::Efr32mg21 &chip() noexcept { return chip_; }
 
@@ -39,6 +42,7 @@ private:
 
     efr32emu::Efr32mg21 chip_;
     McuState state_{McuState::Running};
+    std::size_t uart_taken_{0};
     std::string fault_;
     std::array<Pin *, efr32emu::Efr32mg21::PadCount> pins_{};
 };

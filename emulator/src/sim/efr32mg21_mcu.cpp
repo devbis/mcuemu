@@ -123,6 +123,15 @@ void Efr32mg21Mcu::read_memory(std::uint32_t address, std::uint8_t *out, std::si
         throw std::runtime_error("address 0x" + std::to_string(address) + " is not mapped");
 }
 
+std::vector<std::uint8_t> Efr32mg21Mcu::uart_take_tx(unsigned index) {
+    if (index != 0)
+        return {};
+    const std::string &all = chip_.uart0_output();
+    std::vector<std::uint8_t> bytes(all.begin() + uart_taken_, all.end());
+    uart_taken_ = all.size();
+    return bytes;
+}
+
 void Efr32mg21Mcu::write_memory(std::uint32_t address, const std::uint8_t *data, std::size_t length) {
     if (!chip_.core().write_memory(address, data, length))
         throw std::runtime_error("address 0x" + std::to_string(address) + " is not mapped");
