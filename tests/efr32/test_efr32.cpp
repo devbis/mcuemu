@@ -301,4 +301,127 @@ void test_efr32_semailbox_answers_commands() {
     CHECK((c.r(0x5C000044) & (1u << 20)) != 0);   // the non-secure alias
 }
 
+// The RTCC keeps the fraction of a tick when the counter is frozen, so reading it
+// many times in a row (each read-modify-write of a register freezes it) must not
+// make it run slow.
+void test_efr32_rtcc_keeps_tick_fraction() {
+    Chip c;
+    c.w(0x48000004, 1);
+    c.w(0x4800000c, 1);
+    // 1171.875 cycles per tick: a freeze every 1000 cycles would lose the remainder each time.
+    for (std::uint64_t cycle = 1000; cycle <= 1000 * 1000; cycle += 1000) {
+        c.chip.core().advance_to(cycle);
+        c.w(0x48000008, 0); // CFG write freezes the counter
+    }
+    const std::uint32_t expected = static_cast<std::uint32_t>(1000ull * 1000 * 32768 / 38400000);
+    const std::uint32_t got = c.r(0x48000020);
+    CHECK(got + 1 >= expected && got <= expected);
+}
+
+namespace {
+// The RAIL register addresses used below (secure view).
+constexpr std::uint32_t RacRxEnable = 0xA8020008, RacCmd = 0xA8020010, FrcIf = 0xA8004068;
+constexpr std::uint32_t Buf0Addr = 0x4400400C, Buf0WriteOffset = 0x44004010, Buf0WriteData = 0x44004020;
+constexpr std::uint32_t Buf1Addr = 0x4400403C, Buf1WriteOffset = 0x44004040, BufcIf = 0x440040E0;
+constexpr std::uint32_t ProtimerCmd = 0xA801C00C, ProtimerStatus = 0xA801C014;
+} // namespace
+
+// RAIL's blocks keep what is written, with set/clear/toggle aliases everywhere except the
+// sequencer RAM; the PROTIMER start and stop commands drive STATUS.RUNNING.
+void test_efr32_rail_registers() {
+    Chip c;
+    c.w(RacRxEnable, 0x10);
+    c.w(RacRxEnable + Set, 0x03);
+    CHECK(c.r(RacRxEnable) == 0x13);
+    c.w(RacRxEnable + Clear, 0x01);
+    c.w(RacRxEnable + Toggle, 0x10);
+    CHECK(c.r(RacRxEnable) == 0x02);
+    // The sequencer RAM is memory: an address with alias bits is a different word.
+    c.w(0xA0000100, 0xdeadbeef);
+    c.w(0xA0001100, 0x11111111);
+    CHECK(c.r(0xA0000100) == 0xdeadbeef);
+    // The non-secure view is the same register.
+    CHECK(c.r(0xB8020008) == 0x02);
+    CHECK((c.r(ProtimerStatus) & 1) == 0);
+    c.w(ProtimerCmd, 1);
+    CHECK((c.r(ProtimerStatus) & 1) == 1);
+    c.w(ProtimerCmd, 4);
+    CHECK((c.r(ProtimerStatus) & 1) == 0);
+}
+
+// A transmit takes the frame from the BUF0 buffer RAM on RAC CMD.TXEN, puts it on the air
+// on the SYNTH channel, and raises FRC TX_PACKET_SENT when it ends.
+void test_efr32_rail_transmit() {
+    mcuemu::VirtualAir air;
+    air.set_node("a", {});
+    Chip a;
+    a.chip.connect_radio(air, "a");
+    a.w(Buf0Addr, 0x20001000);
+    a.w(0xA8018044, 15);
+    a.w(Buf0WriteOffset, 0);
+    // The FIFO writer stores through WRITEDATA, which advances WRITEOFFSET.
+    const std::uint8_t frame[] = {7, 0x41, 0x88, 0x05, 0xaa, 0xbb};
+    for (std::uint8_t byte : frame)
+        a.w(Buf0WriteData, byte);
+    CHECK(a.r(Buf0WriteOffset) == sizeof(frame));
+    std::uint8_t stored[sizeof(frame)] = {};
+    a.chip.core().read_memory(0x20001000, stored, sizeof(stored));
+    CHECK(std::memcmp(stored, frame, sizeof(frame)) == 0);
+    a.w(RacCmd, 1);
+    CHECK(air.frames().size() == 1 && air.frames()[0].channel == 15 && air.frames()[0].payload.size() == 5);
+    CHECK((a.r(FrcIf) & (1u << 15)) == 0);
+    a.chip.run(a.chip.core().cycles() + 30 * 1000); // far longer than 7 bytes on air
+    CHECK((a.r(FrcIf) & (1u << 15)) != 0);
+    CHECK((a.r(RacRxEnable) & 2) != 0); // a successful transmit leaves the radio receiving
+}
+
+// A unicast data frame to this device that asks for an ACK is stored in BUF1, described in
+// the BUF2 ring and answered with an ACK carrying its sequence number.
+void test_efr32_rail_receive_and_ack() {
+    constexpr std::uint64_t Id = 0x0123456789abcdefull;
+    mcuemu::VirtualAir air;
+    air.set_node("a", {});
+    air.set_node("coordinator", {});
+    Chip a;
+    a.chip.set_device_id(Id);
+    a.chip.connect_radio(air, "a");
+    // Driver state: the RX context points at a BUF2 ring of 64 bytes, indexes at zero.
+    auto store32 = [&](std::uint32_t address, std::uint32_t value) { a.chip.core().write_memory(address, &value, 4); };
+    store32(0x20004048, 0x20002000);
+    store32(0x20002018, 0x20003000);
+    const std::uint16_t ring_size = 64;
+    a.chip.core().write_memory(0x2000203A, &ring_size, 2);
+    a.w(Buf1Addr, 0x20005000);
+    a.w(RacRxEnable + Set, 2);
+
+    std::vector<std::uint8_t> payload = {0x61, 0xcc, 0x42, 0x34, 0x12}; // data, ACK request, PAN-compressed
+    for (unsigned i = 0; i != 8; ++i)
+        payload.push_back(static_cast<std::uint8_t>(Id >> (8 * i))); // destination: this device
+    for (unsigned i = 0; i != 8; ++i)
+        payload.push_back(0x10 + i);                                   // source
+    payload.push_back(0x99);
+    air.transmit("coordinator", {}, mcuemu::RadioProtocol::Zigbee802154, 11, 100000, payload);
+    a.chip.run(a.chip.core().ns_to_cycles(2000000));
+
+    CHECK((a.r(BufcIf) & (1u << 18)) != 0);          // BUF2 threshold flag
+    CHECK(a.r(Buf1WriteOffset) == 1 + payload.size() + 8); // PHR + payload, then 8 appended bytes (the FCS is only in the PHR)
+    std::uint8_t phr = 0;
+    a.chip.core().read_memory(0x20005000, &phr, 1);
+    CHECK(phr == payload.size() + 2);
+    std::uint8_t descriptor[8] = {};
+    a.chip.core().read_memory(0x20003000 + 56, descriptor, sizeof(descriptor)); // (0 + 0 - 7) & 63, rounded down to 8
+    CHECK((descriptor[2] & 7) == 7 && (descriptor[2] & 0x10) == 0);
+    CHECK(descriptor[0] == a.r(Buf1WriteOffset));
+    // The second frame on the air is the ACK: type 2, sequence 0x42.
+    CHECK(air.frames().size() == 2);
+    CHECK(air.frames()[1].payload == (std::vector<std::uint8_t>{0x02, 0x00, 0x42}));
+    CHECK((a.r(FrcIf) & 2) != 0);                    // TXAFTERFRAMEDONE after the ACK
+
+    // A frame to somebody else gets no ACK.
+    payload[5] ^= 0xff;
+    air.transmit("coordinator", {}, mcuemu::RadioProtocol::Zigbee802154, 11, 3000000, payload);
+    a.chip.run(a.chip.core().ns_to_cycles(5000000));
+    CHECK(air.frames().size() == 3);
+}
+
 } // namespace mcuemu_tests

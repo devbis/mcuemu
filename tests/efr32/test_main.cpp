@@ -12,6 +12,10 @@ void test_efr32_radio_frame_exchange();
 void test_efr32_radio_state_and_rssi();
 void test_efr32_rtcc_counts_and_compares();
 void test_efr32_semailbox_answers_commands();
+void test_efr32_rtcc_keeps_tick_fraction();
+void test_efr32_rail_registers();
+void test_efr32_rail_transmit();
+void test_efr32_rail_receive_and_ack();
 } // namespace mcuemu_tests
 
 #define RUN(test)                                                                \
@@ -31,6 +35,10 @@ int main() {
     RUN(test_efr32_radio_state_and_rssi);
     RUN(test_efr32_rtcc_counts_and_compares);
     RUN(test_efr32_semailbox_answers_commands);
+    RUN(test_efr32_rtcc_keeps_tick_fraction);
+    RUN(test_efr32_rail_registers);
+    RUN(test_efr32_rail_transmit);
+    RUN(test_efr32_rail_receive_and_ack);
     if (failures != 0) {
         std::cerr << failures << " check(s) failed\n";
         return 1;
