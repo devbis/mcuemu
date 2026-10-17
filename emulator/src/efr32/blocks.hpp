@@ -6,8 +6,8 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
-#include <unordered_map>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace efr32emu {

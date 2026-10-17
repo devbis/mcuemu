@@ -129,9 +129,7 @@ constexpr std::uint32_t RacStatus = 0xA802000C;
 // for now, to see which waits they release.
 constexpr std::uint32_t SeqStatus = 0xA0001EA0;
 constexpr std::uint32_t SeqReadyBits = (1u << 11) | (1u << 17);
-} // namespace
 
-namespace {
 // RDMEM (0xA0000000) is RAM: no set/clear/toggle aliases. The register blocks
 // (RAC, BUFC, ...) use the Series 2 aliases: +0x1000 set, +0x2000 clear, +0x3000 toggle.
 bool is_rdmem(std::uint32_t address) { return address >= 0xA0000000u && address < 0xA0004000u; }

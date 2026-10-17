@@ -4,9 +4,9 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <ostream>
 #include <cstring>
 #include <limits>
+#include <ostream>
 #include <stdexcept>
 
 namespace cortexm {

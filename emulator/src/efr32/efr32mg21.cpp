@@ -25,8 +25,7 @@ constexpr unsigned BufcIrq = 32;
 constexpr std::uint32_t BufcIf = 0x440040E0u, BufcIen = 0x440040ECu;
 // The RX poll rate: 100 us at 38.4 MHz, like the PROTIMER compare check.
 constexpr std::uint64_t RailRxPollCycles = 3840;
-// Inferred: the 802.15.4 ACK wait of 54 symbols (864 us). No ACK comes back, because
-// the RAIL path does not receive frames yet.
+// Inferred: the 802.15.4 ACK wait of 54 symbols (864 us).
 constexpr std::uint64_t AckWaitCycles = 33178;
 constexpr std::uint32_t SeBase = 0x4C000000, SeSize = 0x1000;
 
@@ -165,6 +164,12 @@ void Efr32mg21::reset() {
     radio_->reset();
     rtcc_->reset();
     se_mailbox_->reset();
+    rail_regs_->reset();
+    tx_done_at_ = ack_timeout_at_ = NoEvent;
+    short_address_known_ = false;
+    rail_rx_poll_at_ = 0;
+    next_protimer_ = 0;
+    std::fill(std::begin(protimer_last_wrap_), std::end(protimer_last_wrap_), 0);
     core_->reset(boot_vector_);
 }
 
@@ -177,16 +182,6 @@ cortexm::RunResult Efr32mg21::run(std::uint64_t until_cycle) {
     }
 }
 
-// PROTIMER (IRQ 36), layout from recovery/reconstructed.c (the image's, not the
-// v5.8.0 header): WRAPCNT at +0x20 counts once per PRECNTTOP+0x100 core cycles;
-// compare channel n is at +0x100+16n (CTRL, WRAP at +0x0C). A channel in compare
-// mode (CTRL & 3 == 1) sets IF bit 8+n when WRAPCNT passes its WRAP value. IF is
-// at +0x64 (IF_SET/IF_CLR through the aliases), IEN at +0x70, and the line is
-// IF & IEN.
-// The frame RAIL sent: the bytes written to the BUF0 WRITEDATA register. Only if
-// that FIFO is empty is the BUF0 buffer RAM read (BUF0 ADDR, +0x0C),
-// which is host SRAM. The WRITEDATA bytes are used only when the buffer cannot be
-// read.
 // The frame RAIL sent is in the BUF0 buffer RAM (BUF0 ADDR, +0x0C) from the start
 // up to PHR + 1 bytes. The firmware's FIFO writer stores the first bytes through
 // WRITEDATA and copies the rest into the same RAM (see tx_store).
@@ -215,10 +210,8 @@ std::uint8_t Efr32mg21::rail_channel() const {
     return static_cast<std::uint8_t>(synth_channel >= 11 && synth_channel <= 26 ? synth_channel : 11);
 }
 
-// A received frame is written to the BUF2 buffer RAM (BUF2 ADDR) and its length to
-// BUF2 WRITEOFFSET. BUFC IF bit 18 (BUF2 threshold) is deliberately not raised: the
-// firmware's transmit path stops when it is set (measured: 49 beacon requests in
-// 30 s with it, 138 without). Inferred; the firmware does not read the frame yet.
+// A received frame goes to the BUF1 buffer RAM and its descriptor to the BUF2 ring, then
+// the BUF2 threshold flag (BUFC IF bit 18) is raised for the firmware's handler.
 void Efr32mg21::deliver_rail_rx(const std::vector<std::uint8_t> &fifo) {
     // The frame goes to the BUF1 buffer RAM (BUF1 ADDR, +0x3C) with eight bytes the hardware
     // appends after it; RAIL takes those eight bytes off the count for statuses 6 and 7 (the
@@ -305,20 +298,24 @@ void Efr32mg21::acknowledge(const std::vector<std::uint8_t> &fifo) {
     rail_regs_->set_bits(FrcIf, 1u << 1);
 }
 
+// PROTIMER (IRQ 36), layout from recovery/reconstructed.c (the image's, not the
+// v5.8.0 header): WRAPCNT at +0x20 counts once per PRECNTTOP+0x100 core cycles;
+// compare channel n is at +0x100+16n (CTRL, WRAP at +0x0C). A channel in compare
+// mode (CTRL & 3 == 1) sets IF bit 8+n when WRAPCNT passes its WRAP value. IF is
+// at +0x64 (IF_SET/IF_CLR through the aliases), IEN at +0x70, and the line is
+// IF & IEN.
 std::uint64_t Efr32mg21::service(std::uint64_t now) {
     static constexpr std::uint32_t ProtimerBase = 0xA801C000u;
     static constexpr std::uint64_t ProtimerPeriod = 3840; // 100 us at 38.4 MHz; the compare check rate
-    static std::uint64_t next_protimer = 0;
-    static std::uint64_t last_wrap[8] = {};
-    if (now >= next_protimer) {
+    if (now >= next_protimer_) {
         const std::uint64_t divisor = static_cast<std::uint64_t>(rail_regs_->peek(ProtimerBase + 0x30)) + 0x100u;
         const std::uint64_t wrap_now = divisor != 0 ? now / divisor : 0;
         const std::uint32_t enabled = rail_regs_->peek(ProtimerBase + 0x70);
         for (unsigned channel = 0; channel < 8; ++channel) {
             const std::uint32_t cc = ProtimerBase + 0x100u + 16u * channel;
             const std::uint32_t bit = 1u << (8 + channel);
-            const std::uint64_t previous = last_wrap[channel];
-            last_wrap[channel] = wrap_now;
+            const std::uint64_t previous = protimer_last_wrap_[channel];
+            protimer_last_wrap_[channel] = wrap_now;
             if (!(enabled & bit) || (rail_regs_->peek(cc) & 3u) != 1u)
                 continue;
             const std::uint64_t compare = rail_regs_->peek(cc + 0x0Cu);
@@ -326,7 +323,7 @@ std::uint64_t Efr32mg21::service(std::uint64_t now) {
                 rail_regs_->set_bits(ProtimerBase + 0x64, bit);
         }
         core_->set_irq_line(ProtimerIrq, (rail_regs_->peek(ProtimerBase + 0x64) & enabled) != 0);
-        next_protimer = now + ProtimerPeriod;
+        next_protimer_ = now + ProtimerPeriod;
     }
     // The end of the frame sets FRC TX_PACKET_SENT; the ACK wait then runs out
     // unless an ACK arrives, which the RAIL model does not receive from the air.
@@ -356,7 +353,7 @@ std::uint64_t Efr32mg21::service(std::uint64_t now) {
         }
         rx_poll = rail_rx_poll_at_;
     }
-    return std::min({radio_->service(now), rtcc_->service(now), next_protimer, tx_done_at_, ack_timeout_at_, rx_poll});
+    return std::min({radio_->service(now), rtcc_->service(now), next_protimer_, tx_done_at_, ack_timeout_at_, rx_poll});
 }
 
 void Efr32mg21::connect_radio(mcuemu::VirtualAir &air, const std::string &node) { radio_->connect(air, node); }
