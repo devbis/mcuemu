@@ -664,11 +664,16 @@ Sim with the Telink coordinator (30 s, `router-uart.yaml`):
 - EMU/EM2 sleep, LDMA, TIMER/LETIMER/BURTC, I2C, IADC, CRYPTO/SE (random
   numbers, AES) and the other stand-ins above. RTCC counts and compares, USART
   transmits, but neither is an interrupt-accurate model of the silicon.
-- A Zephyr image with the RAIL radio driver (`IEEE802154_SILABS_EFR32`) boots
-  and prints its banner, and its Zigbee stack runs, but every radio transmit
-  fails in `sl_rail_start_tx` (status 14): RAIL is not modelled, so the image
-  cannot join. The banner (`boot_banner`, `APPLICATION` level) needs the POST_KERNEL
-  radio init (`IEEE802154_SILABS_EFR32_INIT_PRIO=80`) to pass first.
+- Zephyr images with the RAIL radio driver (`IEEE802154_SILABS_EFR32`, board `slwrb4180a`,
+  `samples/zigbee/zigbee_shell` as router and as end device, no console) associate with the
+  Telink sampleGW coordinator at about 7.7 s of virtual time (checked on the air, with the
+  sim scenario of the zigbee-rs sensor and `telink-gw.bin`, 100 s). The RAIL RX context is
+  found by the buffer addresses it holds (`Efr32mg21::rx_context`), because its RAM address
+  differs per image; the first build read it from a fixed global and never saw a beacon. The
+  ED resets itself about 10 s after the join and restores its short address from storage,
+  so the address learned from the association response is kept across the chip reset.
+  Open: after the join the router sends Link Status only at 8 s and 22 s in a 100 s run
+  (the coordinator's every 15 s), the cause is not found.
 - Other family members (MG1 is Series 1 and a different chip, MG24 is a larger
   Series 2 part): `Efr32mg21` is the only class.
 - TrustZone: the model has one security state.

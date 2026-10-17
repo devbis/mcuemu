@@ -166,7 +166,10 @@ void Efr32mg21::reset() {
     se_mailbox_->reset();
     rail_regs_->reset();
     tx_done_at_ = ack_timeout_at_ = NoEvent;
-    short_address_known_ = false;
+    // short_address_known_ is deliberately kept: the driver's short address and PAN live in RAIL's
+    // RAM handle, which the model does not read, so the copy learned from the association response
+    // stands in for them. A firmware that resets after joining (the Zephyr ED does, at about 10 s)
+    // restores its address from non-volatile storage and would otherwise lose every ACK.
     rail_rx_poll_at_ = 0;
     rx_context_ = 0;
     next_protimer_ = 0;
