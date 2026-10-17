@@ -19,6 +19,7 @@ class Gpio;
 class Radio;
 class Rtcc;
 class SeMailbox;
+class RailRegs;
 
 // What a pad does to its net, as seen from outside the chip.
 enum class PadDrive { HiZ, Low, High, PullUp, PullDown };
@@ -130,6 +131,22 @@ private:
     std::string uart0_output_;
     std::unique_ptr<Rtcc> rtcc_;
     std::unique_ptr<SeMailbox> se_mailbox_;
+    std::unique_ptr<RailRegs> rail_regs_;
+    // Core cycle of the end of the frame in flight, and of the ACK timeout after it.
+    static constexpr std::uint64_t NoEvent = ~std::uint64_t{0};
+    std::uint64_t tx_done_at_{NoEvent}, ack_timeout_at_{NoEvent};
+    std::vector<std::uint8_t> tx_frame();
+    void tx_store(std::uint8_t byte);
+    std::uint8_t rail_channel() const;
+    void deliver_rail_rx(const std::vector<std::uint8_t> &fifo);
+    // The radio acknowledges a received frame that requests it and is addressed to this
+    // device: by its unique id (extended address) or, after an association response it
+    // acknowledged, by the short address and PAN that response assigned.
+    void acknowledge(const std::vector<std::uint8_t> &fifo);
+    // Short address and PAN ID taken from the association response (little-endian as sent).
+    bool short_address_known_{false};
+    std::uint8_t short_address_[2]{}, pan_id_[2]{};
+    std::uint64_t rail_rx_poll_at_{0};
 };
 
 } // namespace efr32emu

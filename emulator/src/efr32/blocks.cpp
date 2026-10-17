@@ -117,6 +117,91 @@ void SeMailbox::reset() {
     words_ = 0;
 }
 
+// ---- RAIL-driven radio registers -----------------------------------------------
+
+namespace {
+// RAC + 0x0C, state code in [27:24]. Inferred: 0 is idle (the loop after the RAC
+// enable waits for it to be 0), and 7..9 and 12 are the active states that
+// rfhal_rac accepts. No hook yet: the state follows what is stored.
+constexpr std::uint32_t RacStatus = 0xA802000C;
+// SEQRAM + 0x1EA0, polled with masks 0x800, 0x20000 and 0x40000. Inferred: these
+// are "operation done" bits the sequencer would set. Forced set on every read
+// for now, to see which waits they release.
+constexpr std::uint32_t SeqStatus = 0xA0001EA0;
+constexpr std::uint32_t SeqReadyBits = (1u << 11) | (1u << 17);
+} // namespace
+
+namespace {
+// RDMEM (0xA0000000) is RAM: no set/clear/toggle aliases. The register blocks
+// (RAC, BUFC, ...) use the Series 2 aliases: +0x1000 set, +0x2000 clear, +0x3000 toggle.
+bool is_rdmem(std::uint32_t address) { return address >= 0xA0000000u && address < 0xA0004000u; }
+std::uint32_t register_base(std::uint32_t address) { return is_rdmem(address) ? address : address & ~0x3000u; }
+} // namespace
+
+std::uint32_t RailRegs::read(std::uint32_t address) {
+    const std::uint32_t base = register_base(address);
+    const auto it = words_.find(base);
+    std::uint32_t value = it != words_.end() ? it->second : 0;
+    if (address == SeqStatus)
+        value |= SeqReadyBits;
+    // RAC STATUS.STATE (bits 27:24): code 1 is RX (RAIL state 2), 0 is idle.
+    if (base == RacStatus && rx_enabled())
+        value = (value & ~(0xfu << 24)) | ((rx_frame_ ? 3u : 1u) << 24);
+    return value;
+}
+
+std::uint32_t RailRegs::peek(std::uint32_t address) const {
+    const auto it = words_.find(address);
+    return it != words_.end() ? it->second : 0;
+}
+
+void RailRegs::set_bits(std::uint32_t address, std::uint32_t mask) { words_[address] |= mask; }
+
+void RailRegs::clear_bits(std::uint32_t address, std::uint32_t mask) { words_[address] &= ~mask; }
+
+void RailRegs::write(std::uint32_t address, std::uint32_t value, unsigned) {
+    if (is_rdmem(address)) {
+        words_[address] = value;
+        return;
+    }
+    // PROTIMER CMD (image layout: header +0x1C moved to +0x0C): START (bit 0) and
+    // RTCSYNCSTART (bit 1) set STATUS.RUNNING (+0x14 bit 0), STOP (bit 2) clears it.
+    // The transmit path refuses to start while RUNNING is clear (sli_rail_3d0930...).
+    if (register_base(address) == 0xA801C00Cu) {
+        if (value & 0x3u)
+            words_[0xA801C014u] |= 1u;
+        if (value & 0x4u)
+            words_[0xA801C014u] &= ~1u;
+    }
+    std::uint32_t &word = words_[register_base(address)];
+    switch ((address >> 12) & 3u) {
+    case 1: word |= value; break;
+    case 2: word &= ~value; break;
+    case 3: word ^= value; break;
+    default: word = value; break;
+    }
+    // Inferred: RAC+0x008 bit 5 is a request that the hardware clears when the
+    // operation is done. RAIL sets it and polls it to zero (rfhal_rac), so the
+    // operation is treated as completing at once.
+    if (register_base(address) == 0xA8020008u)
+        word &= ~(1u << 5);
+    // RAC CMD.TXEN starts the transmitter. The frame then ends on air after its
+    // duration (the chip models that end, see Efr32mg21::service).
+    if (register_base(address) == 0xA8020010u && (value & 1u))
+        tx_started_ = true;
+}
+
+bool RailRegs::rx_enabled() const {
+    const auto it = words_.find(0xA8020008u);
+    return it != words_.end() && (it->second & 2u) != 0;
+}
+
+bool RailRegs::take_tx_start() {
+    const bool started = tx_started_;
+    tx_started_ = false;
+    return started;
+}
+
 // ---- RTCC ------------------------------------------------------------------------
 
 namespace {

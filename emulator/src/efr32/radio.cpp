@@ -150,6 +150,37 @@ void Radio::command(std::uint32_t value) {
     }
 }
 
+std::uint64_t Radio::transmit_fifo(const std::vector<std::uint8_t> &fifo, std::uint8_t channel) {
+    if (fifo.empty())
+        return 0;
+    const std::size_t phr = fifo[0];
+    const std::size_t room = fifo.size() - 1;
+    // PHR counts the two FCS bytes the radio appends itself, as in begin_transmit.
+    const std::size_t mac = phr >= 2 ? std::min(phr - 2, room) : 0;
+    const std::uint64_t airtime = mcuemu::VirtualAir::airtime_ns(mcuemu::RadioProtocol::Zigbee802154, mac + 2);
+    std::vector<std::uint8_t> payload(fifo.begin() + 1, fifo.begin() + 1 + mac);
+    if (air_ && !payload.empty() && payload.size() <= 125)
+        air_->transmit(node_, {}, mcuemu::RadioProtocol::Zigbee802154, channel, to_ns(now()), std::move(payload));
+    return airtime;
+}
+
+std::vector<std::vector<std::uint8_t>> Radio::receive_fifo(std::uint8_t channel, std::uint64_t now_ns) {
+    std::vector<std::vector<std::uint8_t>> frames;
+    if (!air_)
+        return frames;
+    const std::uint64_t after = rail_poll_ns_;
+    rail_poll_ns_ = now_ns;
+    for (const mcuemu::RadioFrame &frame :
+         air_->receive(node_, mcuemu::RadioProtocol::Zigbee802154, channel, now_ns, after)) {
+        if (frame.payload.size() + 2 > 127)
+            continue;
+        std::vector<std::uint8_t> fifo{static_cast<std::uint8_t>(frame.payload.size() + 2)};
+        fifo.insert(fifo.end(), frame.payload.begin(), frame.payload.end());
+        frames.push_back(std::move(fifo));
+    }
+    return frames;
+}
+
 void Radio::begin_transmit() {
     if (tx_fifo_.empty())
         return;

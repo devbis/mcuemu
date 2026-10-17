@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -140,6 +141,39 @@ private:
     unsigned words_{0};
 };
 
+// Radio blocks RAIL drives directly, outside the zigbee-rs register map: the
+// BUFC (0x44004000 secure, 0x54004000 non-secure), the RAC (0xA8020000 / 0xB8020000)
+// and the sequencer and FRC RAM (0xA0000000 / 0xB0000000). RAIL polls several
+// words here. Each word is plain storage unless a hook below says otherwise.
+// Every hook is an inference from the code that polls the word (see
+// docs/efr32mg21.md, "RAIL registers"), not a documented behaviour.
+class RailRegs final {
+public:
+    std::uint32_t read(std::uint32_t address);
+    void write(std::uint32_t address, std::uint32_t value, unsigned size = 4);
+    void reset() { words_.clear(); }
+    // Direct access for the protimer model: plain stored value, no aliasing.
+    std::uint32_t peek(std::uint32_t address) const;
+    void set_bits(std::uint32_t address, std::uint32_t mask);
+    void clear_bits(std::uint32_t address, std::uint32_t mask);
+    // True once after a write starts a transmit (RAC CMD.TXEN); the chip then
+    // schedules the end of the frame.
+    bool take_tx_start();
+    // RX is requested while RAC RXENSRCEN bit 1 is set (RAIL sets it through the
+    // SET alias before it starts a receive, and clears all of bits 0..7 to stop).
+    bool rx_enabled() const;
+    // RXFRAME (RAC STATUS.STATE 3) from a frame's delivery until the firmware
+    // acknowledges it (BUFC IF bit 18 cleared). RAIL's helper reads this state to
+    // decide the frame is being received (sets its gate flag B).
+    void set_rx_frame(bool on) { rx_frame_ = on; }
+    bool rx_frame() const { return rx_frame_; }
+
+private:
+    std::unordered_map<std::uint32_t, std::uint32_t> words_;
+    bool tx_started_{false};
+    bool rx_frame_{false};
+};
+
 // MSC (0x40030000): page erase and word programming by the register protocol
 // the zigbee-rs flash driver uses.
 class Msc final : public RegBlock {
@@ -196,6 +230,13 @@ public:
     std::uint64_t service(std::uint64_t now) override;
     void reset() override;
     void connect(mcuemu::VirtualAir &air, const std::string &node);
+    // Sends a TX FIFO image laid out as the RAIL path writes it (PHR, then the
+    // PSDU) on `channel`. Returns the frame's time on air in ns.
+    std::uint64_t transmit_fifo(const std::vector<std::uint8_t> &fifo, std::uint8_t channel);
+    // Frames that ended on `channel` since the previous call, each as the RAIL RX
+    // buffer holds it: PHR (payload plus the two FCS bytes), then the payload.
+    std::vector<std::vector<std::uint8_t>> receive_fifo(std::uint8_t channel, std::uint64_t now_ns);
+
 private:
     enum class State : std::uint32_t { Off = 0, Idle = 1, Rx = 2, Tx = 3 };
 
@@ -220,7 +261,7 @@ private:
     std::int8_t rx_rssi_{-127};
     std::uint64_t tx_end_ns_{0};
     bool tx_active_{false};
-    std::uint64_t rx_start_ns_{0}, last_poll_ns_{0};
+    std::uint64_t rx_start_ns_{0}, last_poll_ns_{0}, rail_poll_ns_{0};
 };
 
 } // namespace efr32emu
