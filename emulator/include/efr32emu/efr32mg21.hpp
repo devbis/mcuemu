@@ -147,6 +147,8 @@ private:
     bool short_address_known_{false};
     std::uint8_t short_address_[2]{}, pan_id_[2]{};
     std::uint64_t rail_rx_poll_at_{0};
+    std::uint32_t rx_context();
+    std::uint32_t rx_context_{0};
     // PROTIMER compare check: next due cycle and the WRAPCNT seen at the previous check, per channel.
     std::uint64_t next_protimer_{0};
     std::uint64_t protimer_last_wrap_[8]{};

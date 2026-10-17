@@ -168,6 +168,7 @@ void Efr32mg21::reset() {
     tx_done_at_ = ack_timeout_at_ = NoEvent;
     short_address_known_ = false;
     rail_rx_poll_at_ = 0;
+    rx_context_ = 0;
     next_protimer_ = 0;
     std::fill(std::begin(protimer_last_wrap_), std::end(protimer_last_wrap_), 0);
     core_->reset(boot_vector_);
@@ -210,6 +211,33 @@ std::uint8_t Efr32mg21::rail_channel() const {
     return static_cast<std::uint8_t>(synth_channel >= 11 && synth_channel <= 26 ? synth_channel : 11);
 }
 
+// RAIL's RX context (the BUF2 descriptor ring state) is a RAM structure whose address differs
+// between images, so it is found by what it holds: the buffer RAM addresses of BUF2, BUF1 and
+// BUF0 in consecutive words at +0x18, +0x1C and +0x20 (observed in the Zephyr router and ED
+// images; the ring size sits at +0x3A). The result is cached while it still matches.
+std::uint32_t Efr32mg21::rx_context() {
+    const std::uint32_t wanted[3] = {rail_regs_->peek(Buf2Addr), rail_regs_->peek(Buf1Addr), rail_regs_->peek(Buf0Addr)};
+    auto matches = [&](std::uint32_t context) {
+        std::uint32_t words[3] = {};
+        return core_->read_memory(context + 0x18, words, sizeof(words)) && std::equal(words, words + 3, wanted);
+    };
+    if (rx_context_ != 0 && matches(rx_context_))
+        return rx_context_;
+    rx_context_ = 0;
+    if (wanted[0] == 0 || wanted[1] == 0 || wanted[2] == 0)
+        return 0;
+    std::vector<std::uint8_t> ram(RamSize);
+    if (!core_->read_memory(RamBase, ram.data(), ram.size()))
+        return 0;
+    for (std::uint32_t offset = 0; offset + 12 <= RamSize; offset += 4) {
+        if (std::memcmp(ram.data() + offset, wanted, sizeof(wanted)) == 0 && offset >= 0x18) {
+            rx_context_ = RamBase + offset - 0x18;
+            return rx_context_;
+        }
+    }
+    return 0;
+}
+
 // A received frame goes to the BUF1 buffer RAM and its descriptor to the BUF2 ring, then
 // the BUF2 threshold flag (BUFC IF bit 18) is raised for the firmware's handler.
 void Efr32mg21::deliver_rail_rx(const std::vector<std::uint8_t> &fifo) {
@@ -230,13 +258,11 @@ void Efr32mg21::deliver_rail_rx(const std::vector<std::uint8_t> &fifo) {
     // at context +0x18, size at +0x3A, write and read indexes at +0x3C and +0x3E (see
     // the RX section above). Word 0 is the end offset in BUF1; byte 2 low bits are the
     // packet status, 7 = READY_SUCCESS. BUF2 STATUS counts the descriptor bytes pending.
-    std::uint32_t context = 0, base = 0;
+    std::uint32_t base = 0;
     std::uint16_t size = 0, write = 0, read = 0;
-    std::uint8_t raw[4] = {}, ring[0x42] = {};
-    if (!core_->read_memory(RxContextPointer, raw, 4))
-        return;
-    context = raw[0] | (raw[1] << 8) | (raw[2] << 16) | (static_cast<std::uint32_t>(raw[3]) << 24);
-    if (!core_->read_memory(context, ring, sizeof(ring)))
+    std::uint8_t ring[0x42] = {};
+    const std::uint32_t context = rx_context();
+    if (context == 0 || !core_->read_memory(context, ring, sizeof(ring)))
         return;
     base = ring[0x18] | (ring[0x19] << 8) | (ring[0x1A] << 16) | (static_cast<std::uint32_t>(ring[0x1B]) << 24);
     size = static_cast<std::uint16_t>(ring[0x3A] | (ring[0x3B] << 8));

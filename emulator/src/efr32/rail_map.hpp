@@ -11,6 +11,7 @@ namespace efr32emu::rail {
 constexpr std::uint32_t BufcBase = 0x44004000u;
 constexpr std::uint32_t Buf0Addr = BufcBase + 0x00C, Buf0WriteOffset = BufcBase + 0x010,
                         Buf0WriteData = BufcBase + 0x020, Buf0Cmd = BufcBase + 0x030;
+constexpr std::uint32_t Buf2Addr = BufcBase + 0x06C;
 constexpr std::uint32_t Buf1Addr = BufcBase + 0x03C, Buf1WriteOffset = BufcBase + 0x040,
                         Buf1ReadOffset = BufcBase + 0x044;
 constexpr std::uint32_t Buf2Status = BufcBase + 0x088;
@@ -35,8 +36,5 @@ constexpr std::uint32_t ProtimerBase = 0xA801C000u;
 constexpr std::uint32_t ProtimerCmd = ProtimerBase + 0x00C, ProtimerStatus = ProtimerBase + 0x014,
                         ProtimerWrapCount = ProtimerBase + 0x020, ProtimerPrecntTop = ProtimerBase + 0x030,
                         ProtimerIf = ProtimerBase + 0x064, ProtimerIen = ProtimerBase + 0x070;
-
-// RAIL's driver state in RAM: pointer to the RX context whose BUF2 ring the threshold handler reads.
-constexpr std::uint32_t RxContextPointer = 0x20004048u;
 
 } // namespace efr32emu::rail

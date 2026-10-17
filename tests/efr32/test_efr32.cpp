@@ -322,7 +322,7 @@ namespace {
 // The RAIL register addresses used below (secure view).
 constexpr std::uint32_t RacRxEnable = 0xA8020008, RacCmd = 0xA8020010, FrcIf = 0xA8004068;
 constexpr std::uint32_t Buf0Addr = 0x4400400C, Buf0WriteOffset = 0x44004010, Buf0WriteData = 0x44004020;
-constexpr std::uint32_t Buf1Addr = 0x4400403C, Buf1WriteOffset = 0x44004040, BufcIf = 0x440040E0;
+constexpr std::uint32_t Buf2Addr = 0x4400406C, Buf1Addr = 0x4400403C, Buf1WriteOffset = 0x44004040, BufcIf = 0x440040E0;
 constexpr std::uint32_t ProtimerCmd = 0xA801C00C, ProtimerStatus = 0xA801C014;
 } // namespace
 
@@ -387,8 +387,12 @@ void test_efr32_rail_receive_and_ack() {
     a.chip.connect_radio(air, "a");
     // Driver state: the RX context points at a BUF2 ring of 64 bytes, indexes at zero.
     auto store32 = [&](std::uint32_t address, std::uint32_t value) { a.chip.core().write_memory(address, &value, 4); };
-    store32(0x20004048, 0x20002000);
+    // The context is found by the three buffer addresses it holds at +0x18, +0x1C and +0x20.
     store32(0x20002018, 0x20003000);
+    store32(0x2000201C, 0x20005000);
+    store32(0x20002020, 0x20001000);
+    a.w(Buf0Addr, 0x20001000);
+    a.w(Buf2Addr, 0x20003000);
     const std::uint16_t ring_size = 64;
     a.chip.core().write_memory(0x2000203A, &ring_size, 2);
     a.w(Buf1Addr, 0x20005000);
