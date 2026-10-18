@@ -1,0 +1,23 @@
+# BL702 on the DOIT/XT-ZB1 module, the target of the zigbee-rs `bl702-sensor` image. The module has
+# no user LED or button wired in the zigbee-rs board description, so only the radio is connected.
+# The sensor reads synthetic temperature and humidity and a fixed battery, so no sensor is wired.
+# The firmware is the whole flash image (boot header at 0; see docs/bl702.md).
+version: 1
+
+params:
+  firmware: ../../firmware/bl702-xt-zb1.bin
+  air: air0
+  position: [0, 0, 0]
+  tx_power_dbm: 0
+
+device:
+  id: xt_zb1
+  mcus:
+    - id: mcu
+      model: bl702
+      firmware: "${firmware}"
+      radio:
+        air: "${air}"
+        position: "${position}"
+        tx_power_dbm: "${tx_power_dbm}"
+        protocols: [zigbee]

@@ -1,0 +1,38 @@
+# A BL702 XT-ZB1 sensor (zigbee-rs `bl702-sensor`) joining the network of the TLSR8258 sampleGW
+# coordinator on one radio medium. The sensor image is local: build it with
+# examples/bl702-sensor/build-image.sh in zigbee-rs and copy firmware.bin to firmware/bl702-xt-zb1.bin.
+#
+#   mkdir -p /tmp/bl702 && cd /tmp/bl702
+#   /path/to/build/mcuemu sim /path/to/examples/bl702_zigbee.yaml --for 60s
+#
+# `bl702-air.pcap` opens in Wireshark (802.15.4 without FCS); the console is on sensor.mcu.uart0.
+version: 1
+
+world:
+  seed: 1
+  duration: 60s
+  radio:
+    - id: air0
+      model: log_distance
+      reference_loss_db: 40
+      path_loss_exponent: 2.5
+
+devices:
+  - id: coordinator
+    mcus:
+      - id: zb
+        model: tlsr8258
+        variant: F1K
+        firmware: ../firmware/telink-gw.bin
+        radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+  - include: devices/bl702_xt_zb1.yaml
+    id: sensor
+    params:
+      position: [4, 0, 1]
+      firmware: ../../firmware/bl702-xt-zb1.bin
+      tx_power_dbm: 10
+
+attach:
+  - { endpoint: air0, sink: "pcap:bl702-air.pcap" }
+  - { endpoint: sensor.mcu.uart0, sink: "text" }

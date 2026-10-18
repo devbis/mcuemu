@@ -21,7 +21,7 @@ devices:
   - id: node               # letters, digits, '_' and '-'
     mcus:
       - id: main
-        model: tlsr8258    # tlsr8258 | ca51f253l3 | nrf52840 | efr32mg21 | esp32c6
+        model: tlsr8258    # tlsr8258 | ca51f253l3 | nrf52840 | efr32mg21 | esp32c6 | bl702
         variant: F1K       # tlsr8258 only: F512 (default) | F1K
         firmware: fw/a.bin # relative to this file; or a list of flash pieces, see below
         clock_hz: 48MHz    # 48000000 | 48MHz | 32kHz
@@ -246,7 +246,7 @@ TX power comes from the node's `tx_power_dbm`, not from the chip's registers.
 `protocols` lists what the node uses. The TLSR8258 model connects only the
 Zigbee RF path; `ble` on it is rejected (its BLE registers are not modeled),
 so BLE traffic comes from scripted parts, which can use the `radio` API in
-[scripting.md](scripting.md). `nrf52840`, `efr32mg21` and `esp32c6` connect an 802.15.4 radio (`zigbee`)
+[scripting.md](scripting.md). `nrf52840`, `efr32mg21`, `esp32c6` and `bl702` connect an 802.15.4 radio (`zigbee`)
 and reject `ble`. `ca51f253l3` has no radio.
 
 ## Naming

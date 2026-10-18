@@ -1,6 +1,7 @@
 #pragma once
 
 #include "blocks.hpp"
+#include "mcuemu/aes.hpp"
 
 #include <array>
 #include <cstdint>
@@ -26,8 +27,7 @@ private:
     void run();
 };
 
-// AES on one 16-byte block with a 16, 24 or 32-byte key.
-void aes_block(const std::uint8_t *key, unsigned key_bytes, const std::uint8_t in[16], std::uint8_t out[16],
-               bool decrypt);
+// The block transform lives in mcuemu-core (mcuemu/aes.hpp).
+using mcuemu::aes_block;
 
 } // namespace esp32emu

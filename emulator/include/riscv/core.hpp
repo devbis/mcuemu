@@ -46,6 +46,9 @@ class Core {
 public:
     struct Config {
         std::uint32_t clock_hz{160000000};
+        // The default model has no FPU (the SiFive E31). With `fpu` the hart is the SiFive U34 model, which
+        // adds F and D (and the S mode and an MMU that firmware in M mode leaves off).
+        bool fpu{false};
     };
 
     explicit Core(const Config &config);
@@ -127,6 +130,13 @@ public:
     // and instruction counters (kept exact per instruction) and nothing else of the engine.
     using CsrHandler = std::function<bool(unsigned csr, bool write, std::uint32_t &value)>;
     void set_csr_handler(unsigned first, unsigned last, CsrHandler handler);
+
+    // CLIC (mtvec mode 3): the host's choice of the interrupt the hart takes. `pick(mil, thresh, level, claim)`
+    // returns the number of the highest pending interrupt whose level is above `mil` and `thresh` (its
+    // level in `level`), or -1. claim is true when mnxti takes it. The hart keeps mintstatus.mil, mintthresh
+    // and mtvt itself (see uc_riscv_clic()). Kept across resets.
+    using ClicPick = std::function<int(std::uint32_t mil, std::uint32_t thresh, std::uint32_t &level, bool claim)>;
+    void set_clic(ClicPick pick);
 
     // Registers (x0..x31, 32 is pc), for tests and tooling.
     std::uint32_t reg(unsigned index);

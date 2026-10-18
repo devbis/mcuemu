@@ -1,5 +1,6 @@
 #include "sim/system.hpp"
 
+#include "sim/bl702_mcu.hpp"
 #include "sim/ca51f253l3_mcu.hpp"
 #include "sim/efr32mg21_mcu.hpp"
 #include "sim/esp32_mcu.hpp"
@@ -105,6 +106,17 @@ const McuRegistry &McuRegistry::builtin() {
                 return std::make_unique<Esp32Mcu>(name, variant);
             });
         }
+        r.add("bl702", [](const McuConfig &config, const std::string &name) {
+            if (config.variant)
+                throw std::invalid_argument("bl702 has no variants; remove 'variant'");
+            if (config.clock_hz)
+                throw std::invalid_argument("bl702 runs at a fixed 32 MHz; remove 'clock_hz'");
+            if (config.supply_mv)
+                throw std::invalid_argument("bl702 does not model its supply; remove 'supply_mv'");
+            if (config.flash_timing)
+                throw std::invalid_argument("flash_timing is only modelled for tlsr8258");
+            return std::make_unique<Bl702Mcu>(name);
+        });
         return r;
     }();
     return registry;

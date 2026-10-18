@@ -43,6 +43,7 @@ add_library(mcuemu-core
     emulator/src/tlsr8258_adc.cpp
     emulator/src/radio.cpp
     emulator/src/api.cpp
+    emulator/src/aes.cpp
 )
 target_include_directories(mcuemu-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(mcuemu-core PRIVATE ${MCUEMU_WARNING_FLAGS})
@@ -88,6 +89,18 @@ target_include_directories(esp32emu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/emulator
 target_include_directories(esp32emu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(esp32emu PRIVATE ${MCUEMU_WARNING_FLAGS})
 target_link_libraries(esp32emu PUBLIC riscvcore mcuemu-core)
+
+add_library(bl702emu
+    emulator/src/bl702/bl702.cpp
+    emulator/src/bl702/rom.cpp
+    emulator/src/bl702/peripherals.cpp
+    emulator/src/bl702/radio.cpp
+    emulator/src/bl702/clic.cpp
+)
+target_include_directories(bl702emu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/emulator/src/bl702)
+target_include_directories(bl702emu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
+target_compile_options(bl702emu PRIVATE ${MCUEMU_WARNING_FLAGS})
+target_link_libraries(bl702emu PUBLIC riscvcore mcuemu-core)
 
 add_library(nrf52emu
     emulator/src/nrf52/nrf52840.cpp
@@ -192,10 +205,11 @@ add_library(simcore
     emulator/src/sim/nrf52840_mcu.cpp
     emulator/src/sim/efr32mg21_mcu.cpp
     emulator/src/sim/esp32_mcu.cpp
+    emulator/src/sim/bl702_mcu.cpp
 )
 target_include_directories(simcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(simcore PRIVATE ${MCUEMU_WARNING_FLAGS})
-target_link_libraries(simcore PUBLIC mcuemu-core mcs51emu nrf52emu efr32emu esp32emu ${MCUEMU_YAML_TARGET} lua54
+target_link_libraries(simcore PUBLIC mcuemu-core mcs51emu nrf52emu efr32emu esp32emu bl702emu ${MCUEMU_YAML_TARGET} lua54
     nlohmann_json::nlohmann_json)
 if(WIN32)
     target_link_libraries(simcore PUBLIC ws2_32)
@@ -247,6 +261,14 @@ if(MCUEMU_BUILD_TESTS)
     target_link_libraries(esp32emu-tests PRIVATE esp32emu)
     add_test(NAME esp32emu-tests COMMAND esp32emu-tests)
 
+    add_executable(bl702emu-tests
+        tests/bl702/test_main.cpp
+        tests/bl702/test_bl702.cpp
+    )
+    target_include_directories(bl702emu-tests PRIVATE tests/bl702)
+    target_link_libraries(bl702emu-tests PRIVATE bl702emu)
+    add_test(NAME bl702emu-tests COMMAND bl702emu-tests)
+
     add_executable(efr32emu-tests
         tests/efr32/test_main.cpp
         tests/efr32/test_efr32.cpp
@@ -265,6 +287,7 @@ if(MCUEMU_BUILD_TESTS)
         tests/sim/test_attach.cpp
         tests/sim/test_nrf52.cpp
         tests/sim/test_efr32.cpp
+        tests/sim/test_bl702.cpp
         tests/sim/test_control.cpp
     )
     target_link_libraries(simcore-tests PRIVATE simcore)

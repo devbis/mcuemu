@@ -24,6 +24,9 @@ chips and a declarative system layer on top:
   `scripts/gen-esp-regs.py` (`emulator/include/esp32emu/`) and a ROM symbol table
   from `scripts/gen-esp-rom-symbols.py`. The ROM is replaced by host code. See
   `docs/esp32-riscv.md`; it records how far real images get (the H2 zigbee-rs sensor joins a network).
+- **BL702** (Bouffalo RISC-V, the XT-ZB1 module): the chip model `bl702emu` in
+  `emulator/src/bl702/` (`Bl702`, on the generic `riscv::Core`), the sim adapter
+  `sim/bl702_mcu.cpp`. See `docs/bl702.md`. The zigbee-rs sources it runs live in another repository.
 - **`sim` layer** (`emulator/src/sim/`, `emulator/include/sim/`): YAML-described
   systems of devices, nets, parts (built-in and Lua), a shared radio medium,
   endpoints and sinks, a scenario runner, and a JSON-RPC 2.0 control API over
@@ -45,6 +48,7 @@ emulator/src/mcs51/                        CA51F253L3 model and its `mcuemu run`
 emulator/src/cortexm/                      generic Cortex-M core (NVIC glue, SysTick, WFI/WFE, cycle clock)
 emulator/src/riscv/                        generic RV32 hart (traps, host interrupt line, WFI, cycle clock)
 emulator/src/esp32/                        ESP32-C6: chip, ROM stand-ins, flash controller/MMU, timers, `mcuemu run`
+emulator/src/bl702/                        BL702: boot header, ROM stand-ins, UART/timer/eFuse/AES, M154 radio
 emulator/src/nrf52/                        nRF52840: peripherals, FICR/UICR, `mcuemu run` runner
 emulator/src/efr32/                        EFR32MG21: CMU/HFXO/GPIO/MSC blocks, the radio, `mcuemu run` runner
 emulator/src/sim/                          system layer (config, world, rpc, server, sinks, parts)
@@ -76,8 +80,8 @@ ctest --test-dir build --output-on-failure
   `nrf52emu-tests` (Cortex-M core and the nRF52840 peripherals), `riscvemu-tests`
   (the fork's RISC-V traps and interrupts), `esp32emu-tests` (the ESP32 models and the MAC/AES blocks),
   `efr32emu-tests`
-  (the EFR32MG21), `simcore-tests` (the whole system layer, about 9 s).
-  `ctest -E firmware` runs just those seven.
+  (the EFR32MG21), `bl702emu-tests` (the BL702 model), `simcore-tests` (the whole system layer, about 9 s).
+  `ctest -E firmware` runs just those eight.
   The nrf52 test programs are assembly in `tests/nrf52/programs/*.s`; after
   editing one, run `tests/nrf52/programs/build.py` (needs `arm-none-eabi-as`) and
   commit the regenerated `tests/nrf52/programs.hpp`.
@@ -331,5 +335,8 @@ Profile with `sample <pid> 3 -file out.txt` rather than guessing. What mattered:
 - nRF52840: the RADIO is 802.15.4 only (no BLE), no SPIM/PWM/CCM/USBD; one
   cycle per instruction; lazy FP stacking is not modelled (eager stacking is
   architecturally invisible).
+- BL702: no GPIO, ADC, I2C, SPI, PWM, USB or PDS/HBN; the RF calibration is skipped (its flags
+  read 0); the zigbee-rs sensor image has not been run yet; a Zephyr router image boots, runs the zigbee
+  stack and its radio, and joins a network with the TLSR8258 coordinator in the emulator (see docs/bl702.md).
 - Stage 8 of the original plan (Python host/client, snapshot/restore) is not
   started and has not been approved.

@@ -98,6 +98,12 @@ struct Core::Impl {
 
     CsrHandler csr_handler;
     unsigned csr_first{1}, csr_last{0};
+    ClicPick clic_pick;
+
+    static int clic_thunk(void *user, std::uint32_t mil, std::uint32_t thresh, std::uint32_t *level, int claim) {
+        auto *self = static_cast<Impl *>(user);
+        return self->clic_pick ? self->clic_pick(mil, thresh, *level, claim != 0) : -1;
+    }
 
     static int csr_thunk(unsigned csr, int is_write, std::uint32_t *value, void *user) {
         auto *self = static_cast<Impl *>(user);
@@ -127,8 +133,9 @@ struct Core::Impl {
             throw std::runtime_error("cannot create the RISC-V engine");
         core.uc_ = uc;
         // SiFive E31 is RV32IMAC with M and U modes and no FPU, like the HP core
-        // of the ESP32-C6 and the ESP32-H2 (the default model also has F and D).
-        check(uc_ctl_set_cpu_model(uc, UC_CPU_RISCV32_SIFIVE_E31), "set CPU model");
+        // of the ESP32-C6 and the ESP32-H2. A hart with an FPU takes the U34 model (F and D).
+        check(uc_ctl_set_cpu_model(uc, core.config_.fpu ? UC_CPU_RISCV32_SIFIVE_U34 : UC_CPU_RISCV32_SIFIVE_E31),
+              "set CPU model");
         for (auto &region : regions) {
             const uc_prot perms = region->writable
                                       ? static_cast<uc_prot>(UC_PROT_READ | UC_PROT_WRITE | UC_PROT_EXEC)
@@ -153,6 +160,8 @@ struct Core::Impl {
         if (csr_handler)
             check(uc_riscv_csr_handler(uc, csr_first, csr_last, &Impl::csr_thunk, this),
                   "install the CSR handler");
+        if (clic_pick)
+            check(uc_riscv_clic(uc, &Impl::clic_thunk, this), "install the CLIC");
         check(uc_hook_add(uc, &invalid_hook, UC_HOOK_MEM_INVALID,
                           reinterpret_cast<void *>(&Impl::invalid_access), this, 1, 0),
               "add access fault hook");
@@ -315,6 +324,13 @@ void Core::set_csr_handler(unsigned first, unsigned last, CsrHandler handler) {
 }
 
 void Core::set_service_handler(ServiceHandler handler) { impl_->service = std::move(handler); }
+
+void Core::set_clic(ClicPick pick) {
+    impl_->clic_pick = std::move(pick);
+    if (uc_)
+        uc_riscv_clic(uc_, &Impl::clic_thunk, impl_.get());
+}
+
 
 void Core::request_service(std::uint64_t at_cycle) noexcept {
     // Only ever pulls the deadline in; the run loop recomputes it exactly.
