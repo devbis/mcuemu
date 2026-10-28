@@ -214,10 +214,12 @@ observed CRC-checked copy blocks and prints the NVM range
 reference log's `tpCap[2b 23]`. The emulator runs past the `spif_write_dma`
 NVM update, restores network state 12 and continues through timer callbacks. In
 a 15 s `sim` run with a locally built Telink sampleGW, the pcap contained 19
-frames: 15 coordinator beacon requests and 3 coordinator broadcast data
-frames; no association response or TS0001 transmission was captured. Join and
-relay commands remain unverified. Do not claim TS0001 relay support until it
-starts, joins, and exchanges Zigbee traffic in a captured network scenario.
+frames: 16 coordinator beacon requests and 3 coordinator broadcast data
+frames; no association response or TS0001 transmission was captured. Repeating
+the first-boot scenario after adding generated RX FCS bytes did not change that
+result. Join and relay commands remain unverified. Do not claim TS0001 relay
+support until it starts, joins, and exchanges Zigbee traffic in a captured
+network scenario.
 
 For a separate first-boot probe, a temporary copy of the TS0001 dump had its
 `0x6000`-byte NVM range at `0x11079000` erased. The image reported
