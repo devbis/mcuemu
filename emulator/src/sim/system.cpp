@@ -2,6 +2,7 @@
 
 #include "sim/bl702_mcu.hpp"
 #include "sim/ca51f253l3_mcu.hpp"
+#include "sim/cc2530f256_mcu.hpp"
 #include "sim/efr32mg21_mcu.hpp"
 #include "sim/esp32_mcu.hpp"
 #include "sim/nrf52840_mcu.hpp"
@@ -64,6 +65,30 @@ const McuRegistry &McuRegistry::builtin() {
                 throw std::invalid_argument("flash_timing is only modelled for tlsr8258");
             return std::make_unique<Ca51F253L3Mcu>(
                 name, config.clock_hz.value_or(24000000));
+        });
+        r.add("cc2530f256", [](const McuConfig &config, const std::string &name) {
+            if (config.variant)
+                throw std::invalid_argument(
+                    "cc2530f256 has no variants; remove 'variant'");
+            // SWRS081B: all supply pins at the same voltage (AVDD5 = DVDD),
+            // operating range 2 V - 3.6 V; default matches the nets' 3300 mV.
+            const std::uint32_t supply = config.supply_mv.value_or(3300);
+            if (supply < 2000 || supply > 3600)
+                throw std::invalid_argument(
+                    "cc2530f256 supply_mv must be between 2000 and 3600 (SWRS081B operating range)");
+            auto mcu = std::make_unique<Cc2530F256Mcu>(
+                name, config.clock_hz.value_or(32000000));
+            mcu->device().set_vdd_mv(supply);
+            if (config.debugger) {
+                std::vector<Cc2530F256Mcu::DebuggerWrite> writes;
+                for (const DebuggerWrite &write : config.debugger->writes)
+                    writes.push_back({write.hit, write.xdata, write.bytes});
+                std::optional<Cc2530F256Mcu::DebuggerReport> report;
+                if (const auto &r = config.debugger->report)
+                    report = Cc2530F256Mcu::DebuggerReport{r->file, r->hits, {r->state, r->xdata}};
+                mcu->set_debugger(config.debugger->pc, std::move(writes), std::move(report));
+            }
+            return mcu;
         });
         r.add("nrf52840", [](const McuConfig &config, const std::string &name) {
             if (config.variant)
@@ -356,6 +381,9 @@ std::unique_ptr<System> build_system(const SystemConfig &config,
                                              models.str() + ")");
             }
             const std::string name = device.id + "." + mcu_config.id;
+            if (mcu_config.debugger && mcu_config.model != "cc2530f256")
+                fail_at(mcu_config.debugger->line,
+                        "mcu '" + name + "': 'debugger' is only supported for cc2530f256");
             std::unique_ptr<Mcu> mcu;
             try {
                 mcu = (*factory)(mcu_config, name);

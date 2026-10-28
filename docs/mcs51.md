@@ -83,13 +83,29 @@ runner reports executed instruction count, backend cycle count, and final PC.
 `--state` prints CPU, timer, IDATA, and stack state. Captured UART0 and UART1
 output is printed after the CPU summary.
 
-## Extending toward CC2530
+## Other MCS-51 parts
 
-Keep CPU behavior in Unicorn and add a separate CC2530 machine model in the
-root project. That wrapper should define the device's code banking, RAM and SFR
-maps, interrupts, timers, radio, and clock behavior. Do not encode these SoC
-details into `UC_ARCH_MCS51`; another 8051-compatible part should be able to
-reuse the same core with a different memory and peripheral model.
+Keep CPU behavior in Unicorn and put each part's code banking, RAM and SFR
+maps, interrupts, timers, radio and clock behavior in its own machine model in
+the root project. Do not encode SoC details into `UC_ARCH_MCS51`; another
+8051-compatible part should be able to reuse the same core with a different
+memory and peripheral model. The TI CC2530F256 model follows this pattern; see
+[`cc2530.md`](cc2530.md). It uses generic core registers whose defaults
+keep the classic behavior described above: `UC_MCS51_REG_XDATA_PAGE_SFR`
+(the SFR that pages `MOVX @Ri`, P2 by default), `UC_MCS51_REG_TIMER0_INTERRUPT`
+(whether the core raises the classic Timer0 interrupt itself, on by default),
+`UC_MCS51_REG_INTERRUPT_IN_SERVICE` (readable and clearable on reset),
+`UC_MCS51_REG_IRQ_LEVEL`/`UC_MCS51_REG_INTERRUPT_LEVELS` (priority of a
+posted vector and the levels in progress; all-zero levels are the classic
+single in-service latch), `UC_MCS51_REG_POST_RETI_RULE` and
+`UC_MCS51_REG_INTERRUPT_INHIBIT` (one instruction after RETI before the next
+interrupt; off by default) and `UC_MCS51_REG_DPS_SFR`/`DPL1_SFR`/`DPH1_SFR`
+(a second data pointer selected by DPS bit 0; off by default).
+
+The core's cycle table (`helper.c`) is the classic Intel machine-cycle count
+except that `MOV direct,Rn`, `MOV Rn,direct`, `ORL/ANL C,bit`, `ORL/ANL
+C,/bit` and `MOV bit,C` take 1 cycle instead of 2; all MCS51 SoC models
+(and CA51F253L3 Timer0/UART1 timing) share this table.
 
 The backend's instruction execution is based on the classic 8051 instruction
 set. Enhanced or vendor-specific opcodes should be added only after identifying

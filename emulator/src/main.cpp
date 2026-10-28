@@ -63,8 +63,8 @@ void usage(std::ostream &out) {
            "       [--trace-nets]\n"
            "       mcuemu serve --root DIR [--port N] [--bind ADDR] [--token T]\n"
            "       [--allow-origin ORIGIN]... [--max-sessions N] [--idle-timeout SEC]\n\n"
-           "Models: TLSR8258F512, TLSR8258F1K, CA51F253L3 (MCS-51), NRF52840 (Cortex-M4), EFR32MG21 (Cortex-M33),\n"
-           "        ESP32C6, ESP32H2 (RISC-V, work in progress; `run`; esp32c6/esp32h2 in `sim`)\n"
+           "Models: TLSR8258F512, TLSR8258F1K, CA51F253L3 and CC2530F256 (MCS-51), NRF52840 (Cortex-M4),\n"
+           "        EFR32MG21 (Cortex-M33), ESP32C6, ESP32H2 (RISC-V, work in progress; `run`; esp32c6/esp32h2 in `sim`)\n"
            "Firmware is loaded as a raw image at flash address 0.\n"
            "Trace ranges are inclusive; addresses accept decimal or 0x hex.\n";
 }
@@ -287,10 +287,25 @@ GpioEvent parse_gpio_event(const std::string &text) {
 void require_model(const std::string &model) {
     if (model.empty())
         throw std::invalid_argument(
-            "--model is required (TLSR8258F512, TLSR8258F1K, CA51F253L3; see `mcuemu models`)");
+            "--model is required (TLSR8258F512, TLSR8258F1K, CA51F253L3, CC2530F256, NRF52840; "
+            "see `mcuemu models`)");
 }
 
-bool is_mcs51_model(const std::string &model) { return model.rfind("CA51", 0) == 0; }
+// The TLSR8258 parser only knows the TLSR variants; `run` also dispatches
+// the MCS-51 and nRF52 models before it gets here.
+mcuemu::Tlsr8258Model parse_run_model(const std::string &model) {
+    try {
+        return mcuemu::parse_model(model);
+    } catch (const std::invalid_argument &) {
+        throw std::invalid_argument("unknown model '" + model +
+                                    "'; use TLSR8258F512, TLSR8258F1K, CA51F253L3, "
+                                    "CC2530F256 or NRF52840 (see `mcuemu models`)");
+    }
+}
+
+bool is_mcs51_model(const std::string &model) {
+    return model.rfind("CA51", 0) == 0 || model == "CC2530F256";
+}
 bool is_nrf52_model(const std::string &model) { return model.rfind("NRF52", 0) == 0; }
 bool is_efr32_model(const std::string &model) { return model.rfind("EFR32", 0) == 0; }
 bool is_esp32_model(const std::string &model) { return model.rfind("ESP32", 0) == 0; }
@@ -377,7 +392,7 @@ int run_command(int argc, char **argv) {
         throw std::invalid_argument("--firmware is required");
     require_model(model);
 
-    mcuemu::Tlsr8258 device(mcuemu::parse_model(model));
+    mcuemu::Tlsr8258 device(parse_run_model(model));
     device.set_rc32k_characteristics(rc32k_hz, rc32k_calibration);
     device.set_analog_trace_enabled(trace_analog, trace_limit);
     std::ifstream input(firmware, std::ios::binary);
@@ -893,6 +908,7 @@ int main(int argc, char **argv) {
             std::cout << "TLSR8258F512 (512 KiB flash, 64 KiB SRAM)\n"
                          "TLSR8258F1K (1 MiB flash, 64 KiB SRAM)\n"
                          "CA51F253L3 (32 KiB code flash, MCS-51; `run` and `sim`)\n"
+                         "CC2530F256 (256 KiB banked flash, 8 KiB SRAM, MCS-51; `run` and `sim`)\n"
                          "NRF52840 (1 MiB flash, 256 KiB RAM, Cortex-M4F; `run`)\n"
                          "EFR32MG21 (512 KiB flash, 64 KiB RAM, Cortex-M33; `run` and `sim`)\n"
                          "ESP32C6 (4 MiB flash, 512 KiB SRAM) and ESP32H2 (320 KiB SRAM), RISC-V RV32IMAC; work in progress\n";

@@ -319,6 +319,17 @@ void test_ca51_uart1_receive() {
 } // namespace
 
 namespace mcuemu_tests {
+void test_cc2530_system_runs_banked_firmware();
+void test_cc2530_config_errors_and_pins();
+void test_cc2530_fault_and_sleep_states();
+void test_cc2530_time_offset_and_quanta();
+void test_cc2530_debugger_writes();
+void test_cc2530_debugger_config();
+void test_cc2530_debugger_report();
+void test_cc2530_uart_host_link();
+void test_cc2530_system_gpio_adc_parts();
+void test_cc2530_system_supply_mv();
+void test_cc2530_system_spi_loopback();
 void test_config_parsing();
 void test_config_errors();
 void test_system_build_and_run();
@@ -441,6 +452,17 @@ int main() {
     RUN(test_world_jumps_when_nothing_runs);
     RUN(test_ca51_adapter_basics);
     RUN(test_ca51_uart1_receive);
+    RUN(test_cc2530_system_runs_banked_firmware);
+    RUN(test_cc2530_config_errors_and_pins);
+    RUN(test_cc2530_fault_and_sleep_states);
+    RUN(test_cc2530_time_offset_and_quanta);
+    RUN(test_cc2530_debugger_writes);
+    RUN(test_cc2530_debugger_config);
+    RUN(test_cc2530_debugger_report);
+    RUN(test_cc2530_uart_host_link);
+    RUN(test_cc2530_system_gpio_adc_parts);
+    RUN(test_cc2530_system_supply_mv);
+    RUN(test_cc2530_system_spi_loopback);
     if (mcuemu_tests::failures) {
         std::cerr << mcuemu_tests::failures << " sim check(s) failed\n";
         return 1;

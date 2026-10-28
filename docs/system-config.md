@@ -7,7 +7,9 @@ virtual timeline. `--for` overrides `world.duration`; `--quantum` overrides
 `world.quantum`. Errors are reported with the YAML line. Keys for planned
 features (parts, radio, attach, scenario scripts) are rejected explicitly
 instead of being ignored. The roadmap is in
-[declarative-config-plan.md](declarative-config-plan.md).
+[declarative-config-plan.md](declarative-config-plan.md). Like `mcuemu run`,
+`sim` exits with 0 when the run completed, 1 when any MCU ended in the fault
+state, and 2 for usage or configuration errors.
 
 ```yaml
 version: 1                 # required
@@ -21,14 +23,17 @@ devices:
   - id: node               # letters, digits, '_' and '-'
     mcus:
       - id: main
-        model: tlsr8258    # tlsr8258 | ca51f253l3 | nrf52840 | efr32mg21 | esp32c6 | bl702
+        model: tlsr8258    # tlsr8258 | ca51f253l3 | cc2530f256 | nrf52840 | efr32mg21 | esp32c6 | bl702
         variant: F1K       # tlsr8258 only: F512 (default) | F1K
         firmware: fw/a.bin # relative to this file; or a list of flash pieces, see below
         clock_hz: 48MHz    # 48000000 | 48MHz | 32kHz
-        supply_mv: 3300    # tlsr8258 only: supply seen by the ADC's VBAT input (default 3300)
+        supply_mv: 3300    # tlsr8258, nrf52840, cc2530f256: chip supply seen by the ADC (default 3300; cc2530f256: AVDD5 = DVDD, 2000-3600)
         start_at: 100us    # power-on delay on the world timeline
         flash_timing: true # tlsr8258 only: flash instruction-cache and register-bus timing (default true)
         rtt: { address: 0x20000100 }   # optional: SEGGER RTT control block
+        debugger:          # cc2530f256 only: halt at a PC and write XDATA, see below
+          pc: 0x016a
+          writes: [{ hit: 1, xdata: 0x0400, hex: "4ab54eb1a95601fe" }]
         radio:             # optional: attach to a medium
           air: air0
           position: [0, 0, 1.5]    # meters
@@ -81,6 +86,53 @@ firmware:
 file where it starts (default 0) and `size` its length (default: the rest of
 the file); numbers may be decimal or `0x` hex. Only `tlsr8258` accepts more
 than a single image at offset 0.
+
+## Debugger writes (cc2530f256)
+
+Some test firmware expects a debugger: it parks at a checkpoint function, the
+host halts it there, loads input or a mailbox command into XDATA and resumes.
+`debugger:` reproduces that deterministically inside a simulation:
+
+```yaml
+debugger:
+  pc: 0x016a                                   # logical CODE address to halt at
+  writes:
+    - { hit: 1, xdata: 0x0400, hex: "00 80 00 00" }   # on the 1st arrival
+    - { hit: 1, xdata: 0x04a0, hex: "4ab54eb1a95601fe" }
+    - { hit: 2, xdata: 0x04a0, hex: "4ab54eb156a901fe" }
+```
+
+Every time the CPU reaches `pc` at an instruction boundary is one arrival,
+counted from power-on (also when a run quantum ends exactly there). On arrival
+N the writes with `hit: N` (default 1) are stored to XDATA SRAM
+(`0x0000`-`0x1fff`) in list order before the instruction at `pc` executes. No
+virtual time passes for a halt. After the last arrival that has writes (or is
+reported, below) the breakpoint is removed and the firmware runs free. `hex`
+may contain spaces or `_`. Other models reject `debugger`. This is a test
+harness input, not a modelled peripheral: anything a run proves with it
+depends on the written data.
+
+`report:` records the halted state at arrivals 1..`hits` (default 1), so
+checkpoint-based analyzers can inspect a firmware that runs inside a
+multi-device world:
+
+```yaml
+debugger:
+  pc: 0x0e2a
+  report:
+    file: rx-ready.txt          # resolved against this YAML file's directory
+    hits: 3
+    state: true                 # all IDATA and SFRs (default true)
+    xdata:                      # XDATA ranges, any address (default none)
+      - { address: 0x0400, length: 274 }
+```
+
+Each arrival appends exactly the block `mcuemu run --model CC2530F256
+--report-hits` prints (`hit: N instructions= cycles= pc= sp= dps= fmap=
+irq-levels=`, the dump rows, `end-hit: N`), taken before that arrival's
+`writes`. `instructions` and `cycles` count from the MCU's power-on. The file
+is truncated when the system is built; a power-on reset restarts the arrival
+count and appends. With a `report`, `writes` may be omitted.
 
 ## Inserting devices from files
 
@@ -145,8 +197,12 @@ An `ntc` on a net wired to a TLSR8258 ADC pad (PB0..PB7, PC4, PC5) is read
 by the chip's SAR ADC misc channel; `i2c_regs` is driven by the chip's I2C
 master as well as by bit-banging firmware. The TLSR8258 model also applies the
 internal pad pull resistors to the net, so a bus can rely on them instead of
-an external `pull: up`. SPI is not modeled yet; `ca51f253l3` has no GPIO, ADC
-or I2C model.
+an external `pull: up`. SPI is not modeled on `tlsr8258` yet; `cc2530f256`
+USART SPI (master and slave) is pad level, so its SCK, MOSI, MISO and SSN
+pads drive and read nets (see [cc2530.md](cc2530.md)); `ca51f253l3` has no GPIO, ADC
+or I2C model. `cc2530f256` pads follow its GPIO registers (including the
+internal pulls) and pass a net's voltage to its ADC; the chip has no I2C
+peripheral, so I2C parts need bit-banging firmware.
 
 Scripted parts are described in [scripting.md](scripting.md).
 
@@ -247,7 +303,8 @@ TX power comes from the node's `tx_power_dbm`, not from the chip's registers.
 Zigbee RF path; `ble` on it is rejected (its BLE registers are not modeled),
 so BLE traffic comes from scripted parts, which can use the `radio` API in
 [scripting.md](scripting.md). `nrf52840`, `efr32mg21`, `esp32c6` and `bl702` connect an 802.15.4 radio (`zigbee`)
-and reject `ble`. `ca51f253l3` has no radio.
+and reject `ble`. `cc2530f256` connects its IEEE 802.15.4 radio (`zigbee`
+only, default 32 MHz clock). `ca51f253l3` has no radio.
 
 ## Naming
 
@@ -255,10 +312,14 @@ and reject `ble`. `ca51f253l3` has no radio.
 - Net: `device.net` for device-scope nets, the plain id for world-scope nets.
   Every net is also an endpoint with the same name.
 - Pads: `tlsr8258` has `PA0`..`PE7`. `nrf52840` has `P0.00`..`P0.31` and
-  `P1.00`..`P1.15`. `efr32mg21` has `PA0`..`PD15`. `esp32c6` has `GPIO0`..`GPIO30`, `esp32h2` `GPIO0`..`GPIO27` (plain GPIO and pull-ups; the GPIO matrix to other peripherals is not modelled). `ca51f253l3` has no GPIO model yet, so no pad can be wired.
+  `P1.00`..`P1.15`. `efr32mg21` has `PA0`..`PD15`. `esp32c6` has `GPIO0`..`GPIO30`, `esp32h2` `GPIO0`..`GPIO27` (plain GPIO and pull-ups; the GPIO matrix to other peripherals is not modelled). `cc2530f256` has `P0.0`..`P0.7`, `P1.0`..`P1.7` and `P2.0`..`P2.4`. `ca51f253l3` has no GPIO model yet, so no pad can be wired.
 - UART: `uartN`. `tlsr8258` has `uart0`; `nrf52840` has `uart0`/`uart1` (UARTE0
   and UARTE1); `efr32mg21` has none yet; `esp32c6`/`esp32h2` have `uart0` (the console, with a receive FIFO and interrupts); `ca51f253l3` has `uart0`/`uart1` (transmit only), so a link to
-  it is one-way and reports a warning.
+  it is one-way and reports a warning. `cc2530f256` has `uart0`/`uart1` (USART0
+  and USART1 in UART mode).
+- Memory windows for `mem.read`/`mem.write`: `cc2530f256` maps its 8051
+  spaces (CODE, XDATA, IDATA, SFR, a CPU snapshot, physical flash) to separate
+  32-bit windows; see [cc2530.md](cc2530.md).
 
 ## Semantics
 

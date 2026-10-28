@@ -21,6 +21,7 @@ radio medium in YAML, and mcuemu runs them on one virtual timeline.
 | --- | --- | --- |
 | Telink TLSR8258 (`TLSR8258F512`, `TLSR8258F1K`) | TC32 | GPIO, timers, UART (incl. DMA), ADC, AES, sleep/wake, Zigbee RF; vendor Zigbee and Zephyr firmware tested |
 | Cmsemicron CA51F253L3 | MCS-51 | CPU, Timer0, UART1, PWM; no GPIO, ADC or radio |
+| TI CC2530F256 | MCS-51 | CPU, FMAP code banks, XBANK/XMAP, SRAM aliases, MPAGE, dual DPTR, interrupt controller (priorities, nesting), PM0-PM3, resets; I/O ports, Timers 1-4, sleep timer, watchdog, DMA, flash controller, AES, ADC/RNG/op-amp/comparator, USART UART/SPI, 802.15.4 radio; not cycle accurate, no debug interface |
 | Silicon Labs EFR32MG21 (BRD4181A) | Cortex-M33 | NVIC, SysTick, FPU, WFE; CMU/HFXO, GPIO/EXTI, MSC; a radio with the interface of the zigbee-rs driver (not the silicon's); the zigbee-rs sensor image joins a TLSR8258 coordinator |
 | Nordic nRF52840 (Pro Micro / nice!nano board) | Cortex-M4F | NVIC, SysTick, FPU, WFE; clocks, GPIO/GPIOTE, UARTE, TWIM, SAADC, TIMER, RTC, RNG, ECB, WDT, NVMC, PPI; 802.15.4 RADIO; the Embassy Zigbee sensor image joins a TLSR8258 coordinator; no BLE yet |
 
@@ -36,6 +37,7 @@ Support is partial and driven by the firmware tested so far. See
 - [`docs/tlsr8258.md`](docs/tlsr8258.md) (usage, firmware tests, status),
   [`docs/tlsr8258-register-model.md`](docs/tlsr8258-register-model.md),
   [`docs/mcs51.md`](docs/mcs51.md),
+  [`docs/cc2530.md`](docs/cc2530.md),
   [`docs/nrf52840.md`](docs/nrf52840.md) (Cortex-M core, peripherals, status),
   [`docs/efr32mg21.md`](docs/efr32mg21.md) (Cortex-M33, what is and is not the silicon) —
   chip models.
