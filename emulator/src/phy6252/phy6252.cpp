@@ -122,9 +122,12 @@ constexpr std::uint32_t RadioIrqCok = 1u << 1;
 constexpr std::uint32_t RadioIrqMask = 0x1f;
 constexpr std::uint32_t RomLlIrqHandler = 0x4e25;
 constexpr std::uint32_t RomGpioIrqHandler = 0x112d;
+constexpr std::uint32_t RomTimerIrqDispatch = 0x17ff1; // Private host trap; no exported ROM symbol.
 constexpr std::uint32_t JumpTableBase = BootImage::RamBase;
 constexpr std::uint32_t BasebandIrqJumpSlot = 228;
 constexpr std::uint32_t GpioIrqJumpSlot = 240;
+constexpr std::uint32_t Timer5IrqJumpSlot = 248;
+constexpr std::uint32_t Timer6IrqJumpSlot = 249;
 constexpr std::uint64_t RadioPollCycles = 256; // 16 us at the 16 MHz core clock
 constexpr std::uint32_t GpioMask = 0x007fffff;
 constexpr std::uint32_t TimerEnable = 1u << 0;
@@ -318,8 +321,9 @@ void Phy6252::reset() {
     }};
     for (const auto &[index, handler] : rom_vectors)
         std::memcpy(vector_alias_ + index * sizeof(std::uint32_t), &handler, sizeof handler);
-    const std::array<std::pair<unsigned, std::uint32_t>, 2> irq_vectors = {{
+    const std::array<std::pair<unsigned, std::uint32_t>, 4> irq_vectors = {{
         {16 + 4, RomLlIrqHandler}, {16 + 16, RomGpioIrqHandler},
+        {16 + 24, RomTimerIrqDispatch}, {16 + 25, RomTimerIrqDispatch},
     }};
     for (const auto &[index, handler] : irq_vectors)
         std::memcpy(vector_alias_ + index * sizeof(std::uint32_t), &handler, sizeof handler);
@@ -358,6 +362,7 @@ void Phy6252::reset() {
     ll_rand_warning_logged_ = false;
     baseband_irq_dispatch_warning_logged_ = false;
     gpio_irq_dispatch_warning_logged_ = false;
+    timer_irq_dispatch_warning_logged_.fill(false);
     ll_context_warning_logged_ = false;
     ll_rx_timeout_warning_logged_ = false;
     ble_srx_warning_logged_ = false;
@@ -823,6 +828,41 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             }
             core_.set_reg(15, handler & ~1u);
             rom_branch = true;
+        } else if (address == (RomTimerIrqDispatch & ~1u)) {
+            std::uint32_t ipsr = 0;
+            uc_reg_read(core_.engine(), UC_ARM_REG_IPSR, &ipsr);
+            const unsigned irq = ipsr >= 16 ? ipsr - 16 : 0;
+            const bool timer5 = irq == 24;
+            const bool timer6 = irq == 25;
+            if (!timer5 && !timer6)
+                return {cortexm::StopReason::Fault,
+                        "PHY6252 internal timer IRQ dispatch reached outside IRQ24/IRQ25"};
+            const std::uint32_t slot = timer5 ? Timer5IrqJumpSlot : Timer6IrqJumpSlot;
+            const std::uint32_t jump_address = JumpTableBase + slot * sizeof(std::uint32_t);
+            std::uint32_t handler = 0;
+            const bool have_handler = core_.read_memory(jump_address, &handler, sizeof handler);
+            const std::uint32_t handler_address = handler & ~1u;
+            const bool handler_in_ram = handler_address >= BootImage::RamBase &&
+                handler_address < BootImage::RamBase + BootImage::RamSize;
+            const bool handler_in_flash = handler_address >= BootImage::FlashBase &&
+                handler_address < BootImage::FlashBase + BootImage::FlashSize;
+            if (!have_handler || (handler & 1u) == 0 ||
+                (!handler_in_ram && !handler_in_flash)) {
+                char message[160];
+                std::snprintf(message, sizeof message,
+                              "PHY6252 Timer%u IRQ has no valid JUMP_FUNCTION(%u) callback (0x%08x)",
+                              timer5 ? 5 : 6, slot, handler);
+                return {cortexm::StopReason::Fault, message};
+            }
+            bool &logged = timer_irq_dispatch_warning_logged_[timer5 ? 0 : 1];
+            if (!logged) {
+                std::fprintf(stderr,
+                             "PHY6252: Timer%u IRQ dispatches JUMP_FUNCTION(%u)=0x%08x (inferred ROM vector)\n",
+                             timer5 ? 5 : 6, slot, handler);
+                logged = true;
+            }
+            core_.set_reg(15, handler_address);
+            rom_branch = true;
         } else if (address == 0xa920) {
             sleep_allowed_ = false; // SDK disableSleep() only changes power-manager policy.
         } else if (address == 0xaeac) {
@@ -1029,7 +1069,12 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             char message[512];
             std::uint32_t stack_args[2]{};
             std::uint32_t msp = 0, psp = 0, control = 0, ipsr = 0;
+            std::uint32_t cfsr = 0, hfsr = 0, bfar = 0, mmfar = 0;
             core_.read_memory(core_.reg(13), stack_args, sizeof stack_args);
+            core_.read_memory(0xe000ed28, &cfsr, sizeof cfsr);
+            core_.read_memory(0xe000ed2c, &hfsr, sizeof hfsr);
+            core_.read_memory(0xe000ed34, &mmfar, sizeof mmfar);
+            core_.read_memory(0xe000ed38, &bfar, sizeof bfar);
             uc_reg_read(core_.engine(), UC_ARM_REG_MSP, &msp);
             uc_reg_read(core_.engine(), UC_ARM_REG_PSP, &psp);
             uc_reg_read(core_.engine(), UC_ARM_REG_CONTROL, &control);
@@ -1044,11 +1089,12 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                                  address == (RomHardFaultHandler & ~1u) ? "HardFault_Handler at " :
                                  nullptr;
             std::snprintf(message, sizeof message,
-                          "unimplemented PHY6252 ROM call %s0x%08x last_pc=0x%08x previous_pc=0x%08x (r0=0x%08x r1=0x%08x r2=0x%08x r3=0x%08x sp=0x%08x msp=0x%08x psp=0x%08x control=0x%08x ipsr=0x%08x stack=[0x%08x,0x%08x] frame_pc=0x%08x frame_lr=0x%08x xpsr=0x%08x lr=0x%08x)",
+                          "unimplemented PHY6252 ROM call %s0x%08x last_pc=0x%08x previous_pc=0x%08x (r0=0x%08x r1=0x%08x r2=0x%08x r3=0x%08x sp=0x%08x msp=0x%08x psp=0x%08x control=0x%08x ipsr=0x%08x cfsr=0x%08x hfsr=0x%08x bfar=0x%08x mmfar=0x%08x stack=[0x%08x,0x%08x] frame_pc=0x%08x frame_lr=0x%08x xpsr=0x%08x lr=0x%08x)",
                           symbol ? symbol : "", pc, core_.last_instruction_pc(),
                           core_.previous_instruction_pc(),
                           core_.reg(0), core_.reg(1), core_.reg(2), core_.reg(3),
                           core_.reg(13), msp, psp, control, ipsr,
+                          cfsr, hfsr, bfar, mmfar,
                           stack_args[0], stack_args[1],
                           have_exception_frame ? exception_frame[6] : 0,
                           have_exception_frame ? exception_frame[5] : 0,

@@ -159,22 +159,28 @@ false interrupt in that interval. The callback slots are inferred from the
 SDK header aliases and observed image accesses; the dispatch behavior is not
 hardware-verified.
 
+The SDK's `timer.c` installs `hal_TIMER5_IRQHandler` and
+`hal_TIMER6_IRQHandler` in `JUMP_FUNCTION(TIM5_IRQ_HANDLER)` and
+`JUMP_FUNCTION(TIM6_IRQ_HANDLER)` before enabling IRQs 24 and 25. Its
+`jump_function.h` gives these V24/V25 slots as 248 and 249. The ROM vector
+bodies are not exported, so the model uses a private host trap for these two
+vectors and dispatches the registered callback. This inferred vector path is
+tested with a synthetic Timer6 callback; real firmware reaches it without the
+previous invalid-state fault.
+
 The supplied run prints `Stack Init`, initializes the Zigbee stack, creates the
 application tasks and prints `zb_app_task_init`. The GPIO callback now runs and
 the key/timer initialization proceeds. Execution reaches ROM symbol
 `spif_write_dma` at `0x0001744c` (the Thumb symbol is `0x0001744d`), writing into
-the printed NVM area `0x11079000..0x1107efff`. With the DMA write modeled, the
-image proceeds to restore network state 12, then reaches ROM `HardFault_Handler`
-at `0x000028f0`; the captured exception frame has PC zero and the preceding
-image instruction is `0x110201e2`. The cause remains unknown. A `run` invocation
-has no shared radio medium and a TS0001 pcap scenario has not yet been
-completed, so join and relay behavior remain unverified. The earlier HardFault
-was caused by a synthetic GPIO level interrupt before callback registration,
-not by the PendSV stack path; a Cortex-M0 regression case that pends PendSV
-from Thread mode on PSP with a valid vector table passes and keeps its
-exception frame on PSP. The earlier `VTOR=0x1fff8b00` emulation selected an
-invalid RAM vector table and caused a misleading HardFault; that is not the
-current failure.
+the printed NVM area `0x11079000..0x1107efff`. With DMA flash programming and
+Timer6 IRQ dispatch modeled, the image restores network state 12, prints
+`set read local time`, and emits Tuya reports during a 100M instruction run
+without a CPU fault. Earlier HardFaults were caused by the GPIO level-to-edge
+transition and the missing Timer6 vector; the first was fixed by clearing
+stale level status, and the second had `CFSR.INVSTATE` with stacked IPSR 41.
+The Cortex-M0 PSP PendSV regression test still passes. The earlier
+`VTOR=0x1fff8b00` emulation selected an invalid RAM vector table and caused a
+misleading HardFault; that is not the current failure.
 
 ## Firmware evidence
 
@@ -193,8 +199,10 @@ emulator reaches its Zigbee stack initialization path. It also passes three
 observed CRC-checked copy blocks and prints the NVM range
 `0x11079000..0x1107efff`. It still reports `tpCap[00 00]` instead of the
 reference log's `tpCap[2b 23]`. The emulator runs past the `spif_write_dma`
-NVM update and logs restoration of network state 12, then reaches
-`HardFault_Handler`. No TS0001 pcap scenario has been completed. Joining and
+NVM update, restores network state 12 and continues through timer callbacks. In
+a 15 s `sim` run with a locally built Telink sampleGW, the pcap contained 19
+frames: 15 coordinator beacon requests and 3 coordinator broadcast data
+frames; no association response or TS0001 transmission was captured. Join and
 relay commands remain unverified. Do not claim TS0001 relay support until it
 starts, joins, and exchanges Zigbee traffic in a captured network scenario.
 

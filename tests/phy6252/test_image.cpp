@@ -172,6 +172,38 @@ int main() {
           cortexm::StopReason::Deadline);
     CHECK(irq_chip.core().read_memory(0x1fff2300, &irq_marker, sizeof irq_marker));
     CHECK(irq_marker == 7);
+
+    Phy6252 timer_irq_chip;
+    timer_irq_chip.load_firmware(image);
+    timer_irq_chip.reset();
+    CHECK(timer_irq_chip.run(100).reason == cortexm::StopReason::Deadline);
+    constexpr std::uint32_t timer_irq_callback = 0x1fff2201;
+    CHECK(timer_irq_chip.core().write_memory(0x1fff03e4, &timer_irq_callback,
+                                              sizeof timer_irq_callback)); // V25_IRQ_HANDLER
+    const std::array<std::uint8_t, 20> timer_irq_handler = {
+        0x07, 0x20, // movs r0, #7
+        0x02, 0x49, // ldr r1, [pc, #8] ; marker address
+        0x08, 0x60, // str r0, [r1]
+        0x02, 0x49, // ldr r1, [pc, #8] ; Timer6 EOI
+        0x08, 0x68, // ldr r0, [r1] ; SDK clears EOI by reading it
+        0x70, 0x47, // bx lr
+        0x00, 0x23, 0xff, 0x1f, // 0x1fff2300 marker
+        0x70, 0x10, 0x00, 0x40, // 0x40001070 Timer6 EOI
+    };
+    CHECK(timer_irq_chip.core().write_memory(0x1fff2200, timer_irq_handler.data(),
+                                              timer_irq_handler.size()));
+    const std::uint32_t enable_timer6_irq = 1u << 25;
+    CHECK(timer_irq_chip.core().write_memory(0xe000e100, &enable_timer6_irq,
+                                              sizeof enable_timer6_irq));
+    const std::uint64_t timer_irq_start = timer_irq_chip.core().cycles();
+    timer_irq_chip.write(0x40001064, 3, 4); // Timer6 load count
+    timer_irq_chip.write(0x4000106c, 3, 4); // enable one-shot with IRQ unmasked
+    CHECK(timer_irq_chip.run(timer_irq_start + 100).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(timer_irq_chip.core().read_memory(0x1fff2300, &irq_marker, sizeof irq_marker));
+    CHECK(irq_marker == 7);
+    CHECK(timer_irq_chip.read(0x40001074, 4) == 0);
+
     const std::uint32_t fifo_probe = 0x11030000;
     auto *fifo_probe_code = chip.core().host_pointer(fifo_probe, 6);
     CHECK(fifo_probe_code != nullptr);
