@@ -295,13 +295,16 @@ read. In a timing probe, a gateway beacon request on channel 11 ended 120 us
 before the read and the model returned about -41 dBm. With AP_TIM3 running,
 the callback completes its `WaitUs()` polling and eight-sample RSSI loop, calls
 ROM `clear_timer`, and successfully enqueues a BDB event through the image's
-queue wrapper at `0x1fff7ad0`. No LL control start or TX FIFO write follows
-before the image resumes its main loop around 8.0 s. With the supplied NVM
-image, the long-press BDB request also produced no TS0001 frame. Both runs
-continue without a CPU fault. This narrows the visible gap to event handling or
-the commissioning-to-LMAC path after the RSSI sample; the event consumer and
-the exact firmware, ROM or stack contract remain unknown. Keep the cleared-NVM
-image outside the repository with the other local test inputs.
+queue wrapper at `0x1fff7ad0`; the PendSV handler then runs. No LL control
+start or TX FIFO write follows before the image resumes its main loop around
+8.0 s. In a second cleared-NVM run, the gateway's last captured frame was at
+4.739 s, before the RSSI callback at 6.409 s, but TS0001 still sent no frame.
+With the supplied NVM image, the long-press BDB request also produced no
+TS0001 frame. All runs continue without a CPU fault. This narrows the visible
+gap to event handling or the commissioning-to-LMAC path after the RSSI sample;
+the event consumer and the exact firmware, ROM or stack contract remain
+unknown. Keep the cleared-NVM image outside the repository with the other
+local test inputs.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
