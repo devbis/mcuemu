@@ -210,10 +210,53 @@ int main() {
     const std::uint32_t radio_irq_status = rom_test_chip.read(0x40031010, 4);
     CHECK((radio_irq_status & 1u) != 0); // LIRQ_MD
     CHECK((radio_irq_status & (1u << 10)) != 0); // LIRQ_COK
+    CHECK((radio_irq_status & (1u << 1)) != 0); // PB-03F Zephyr COK alias
     invoke_radio_rom(0x10bbc); // ll_hw_get_irq_status
     CHECK(rom_test_chip.core().reg(0) == radio_irq_status);
+    constexpr std::uint32_t radio_packet = 0x1fff2300;
+    constexpr std::uint32_t radio_length = 0x1fff2320;
+    constexpr std::uint32_t radio_foot0 = 0x1fff2324;
+    constexpr std::uint32_t radio_foot1 = 0x1fff2328;
+    rom_test_chip.core().set_reg(1, radio_length);
+    rom_test_chip.core().set_reg(2, radio_foot0);
+    rom_test_chip.core().set_reg(3, radio_foot1);
+    invoke_radio_rom(0x10f50, radio_packet); // ll_hw_read_rfifo_zb
+    CHECK(rom_test_chip.core().reg(0) == 0);
+    std::array<std::uint8_t, 6> received_packet{};
+    std::uint16_t received_length = 0;
+    std::uint32_t received_foot0 = 0, received_foot1 = 0;
+    CHECK(rom_test_chip.core().read_memory(radio_packet, received_packet.data(),
+                                           received_packet.size()));
+    CHECK(rom_test_chip.core().read_memory(radio_length, &received_length,
+                                           sizeof received_length));
+    CHECK(rom_test_chip.core().read_memory(radio_foot0, &received_foot0,
+                                           sizeof received_foot0));
+    CHECK(rom_test_chip.core().read_memory(radio_foot1, &received_foot1,
+                                           sizeof received_foot1));
+    CHECK(received_length == 5); // PHR length includes the two-byte FCS
+    CHECK(received_packet[0] == 5 && received_packet[1] == 0x01 &&
+          received_packet[2] == 0x00 && received_packet[3] == 0xa5);
+    CHECK((received_foot0 & 0x00ffffffu) == 2);
+    CHECK(received_foot1 == 0);
+    rom_test_chip.write(0x40031014, 1u << 1, 4); // Zephyr W1C clears the SDK COK alias too
+    CHECK(rom_test_chip.read(0x40031010, 4) == 1u); // LIRQ_MD remains pending
+    invoke_radio_rom(0x110b0); // ll_hw_rst_rfifo
+    CHECK(rom_test_chip.read(0x40031c00, 1) == 0);
     rom_test_chip.write(0x40031000, 0, 4); // PHY_ABORT stops the receive operation
     CHECK(!rom_test_chip.radio_receiving());
+    invoke_radio_rom(0x10adc); // ll_hw_clr_irq
+    invoke_radio_rom(0x11174, 1u << 2); // enable LIRQ_RTO for the timeout check
+    invoke_radio_rom(0x11278, 33); // ll_hw_set_rx_timeout(33 us)
+    invoke_radio_rom(0x112a4); // ll_hw_set_srx
+    invoke_radio_rom(0x11420); // ll_hw_trigger
+    CHECK(rom_test_chip.radio_receiving());
+    const std::uint64_t rx_timeout = rom_test_chip.core().cycles() + 33 * 16 + 128;
+    CHECK(rom_test_chip.run(rx_timeout).reason == cortexm::StopReason::Deadline);
+    CHECK(!rom_test_chip.radio_receiving());
+    CHECK(rom_test_chip.read(0x40031010, 4) == ((1u << 2) | (1u << 3)));
+    // SDK and PB-03F Zephyr expose RTO at bits 2 and 3 respectively.
+    rom_test_chip.write(0x40031014, 1u << 3, 4);
+    CHECK(rom_test_chip.read(0x40031010, 4) == 0);
     Phy6252 irq_chip;
     irq_chip.load_firmware(image);
     irq_chip.reset();

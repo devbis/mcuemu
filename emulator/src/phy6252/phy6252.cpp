@@ -119,6 +119,11 @@ constexpr std::uint32_t RadioBasebandMemoryEnd = RadioRxFifo + RadioRxFifoSize;
 constexpr unsigned RadioIrq = 4;
 constexpr std::uint32_t RadioIrqMd = 1u << 0;
 constexpr std::uint32_t RadioIrqCok = 1u << 10;
+// The PB-03F Zephyr driver reads the LL status register directly and uses a
+// compact five-bit IRQ layout, while the SDK ROM API exposes the BLE LL bits.
+constexpr std::uint32_t RadioIrqCokZephyr = 1u << 1;
+constexpr std::uint32_t RadioIrqRto = 1u << 2;
+constexpr std::uint32_t RadioIrqRtoZephyr = 1u << 3;
 constexpr std::uint32_t RadioIrqMask = 0x3fffu;
 constexpr std::uint32_t RadioModeStx = 0x00;
 constexpr std::uint32_t RadioModeSrx = 0x01;
@@ -360,6 +365,8 @@ void Phy6252::reset() {
     rx_fifo_read_ = 0;
     radio_tx_end_cycle_ = 0;
     radio_rx_after_ns_ = 0;
+    radio_rx_deadline_cycle_ = 0;
+    radio_rx_timeout_us_ = 0;
     radio_tx_active_ = false;
     radio_rx_active_ = false;
     radio_rx_rssi_ = -100;
@@ -385,7 +392,6 @@ void Phy6252::reset() {
     gpio_irq_dispatch_warning_logged_ = false;
     timer_irq_dispatch_warning_logged_.fill(false);
     ll_context_warning_logged_ = false;
-    ll_rx_timeout_warning_logged_ = false;
     ll_settle_warning_logged_ = false;
     rf_sample_e8_warning_logged_ = false;
     heap_start_ = heap_size_ = 0;
@@ -553,6 +559,30 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             // ll_hw_set_irq(mask) maps to LL_HW+0x0c, as the SDK's PHY+
             // implementation documents with its direct register setup.
             write_register(RadioLlBase + 0x0c, core_.reg(0), 4);
+        } else if (address == 0x10f50) {
+            // ll_hw_read_rfifo_zb(rxPkt, pktLen, pktFoot0, pktFoot1) copies
+            // the FIFO's length byte followed by the PSDU and its FCS.
+            const std::uint32_t packet = core_.reg(0);
+            const std::uint32_t length_out = core_.reg(1);
+            const std::uint32_t foot0_out = core_.reg(2);
+            const std::uint32_t foot1_out = core_.reg(3);
+            const std::uint16_t packet_length = rx_fifo_[0];
+            const std::uint32_t foot0 =
+                (static_cast<std::uint32_t>(static_cast<std::uint8_t>(radio_rx_rssi_)) << 24) | 2u;
+            constexpr std::uint32_t foot1 = 0;
+            const std::size_t fifo_bytes = static_cast<std::size_t>(packet_length) + 1;
+            const bool valid = packet_length >= 2 && packet_length <= 127 &&
+                packet != 0 && length_out != 0 && foot0_out != 0 && foot1_out != 0 &&
+                core_.write_memory(packet, rx_fifo_.data(), fifo_bytes) &&
+                core_.write_memory(length_out, &packet_length, sizeof packet_length) &&
+                core_.write_memory(foot0_out, &foot0, sizeof foot0) &&
+                core_.write_memory(foot1_out, &foot1, sizeof foot1);
+            if (valid) {
+                rx_fifo_read_ = fifo_bytes;
+                core_.set_reg(0, 0); // LL_STATUS_SUCCESS
+            } else {
+                core_.set_reg(0, 1);
+            }
         } else if (address == 0x10bbc) {
             // ll_hw_get_irq_status() returns LL_HW+0x10, whose bit layout is
             // listed in ll_hw_drv.h (MD=0, COK=10, RTO=2, and so on).
@@ -571,16 +601,11 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
         } else if (address == 0x110e8) {
             tx_fifo_.clear();
         } else if (address == 0x11278 || address == 0x11284) {
-            // These SDK entries are ll_hw_set_rx_timeout() and
-            // ll_hw_set_rx_timeout_1st(), each taking a uint32_t.
-            // The timeout register and its clock unit are not documented in
-            // the available SDK headers, so retain an explicit diagnostic.
-            if (!ll_rx_timeout_warning_logged_) {
-                std::fprintf(stderr,
-                             "PHY6252: ll_hw_set_rx_timeout entry 0x%05x reached (ticks=%u); timeout effect is not modeled\n",
-                             address, core_.reg(0));
-                ll_rx_timeout_warning_logged_ = true;
-            }
+            // The PHY+ SDK wrapper names this parameter rxTimeOutUs. The
+            // timeout is applied to an active receive and reused by the next.
+            radio_rx_timeout_us_ = core_.reg(0);
+            if (radio_rx_active_)
+                schedule_radio_rx_timeout();
         } else if (address == 0x113dc) {
             // The SDK exposes three settle values, but the available sources
             // do not identify their backing registers or clock units.
@@ -1913,6 +1938,7 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             ll_registers_[aligned] = written & ~1u;
             if ((written & 1u) == 0) {
                 radio_rx_active_ = false;
+                radio_rx_deadline_cycle_ = 0;
                 // PHY_ABORT cancels controller completion but cannot retract a frame already on air.
                 radio_tx_active_ = false;
             } else if ((ll_registers_[RadioLlBase + 0x04] & 7u) == 0) {
@@ -1920,6 +1946,7 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             } else if ((ll_registers_[RadioLlBase + 0x04] & 7u) == 1) {
                 radio_rx_active_ = true;
                 radio_rx_after_ns_ = core_.cycles_to_ns(core_.cycles());
+                schedule_radio_rx_timeout();
                 if (air_)
                     core_.request_service(core_.cycles() + 1);
             }
@@ -1929,8 +1956,13 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             break;
         case 0x14:
             ll_registers_[RadioLlBase + 0x10] &= ~written;
+            if ((written & (RadioIrqCok | RadioIrqCokZephyr)) != 0)
+                ll_registers_[RadioLlBase + 0x10] &= ~(RadioIrqCok | RadioIrqCokZephyr);
+            if ((written & (RadioIrqRto | RadioIrqRtoZephyr)) != 0)
+                ll_registers_[RadioLlBase + 0x10] &= ~(RadioIrqRto | RadioIrqRtoZephyr);
             ll_registers_[aligned] = written;
-            if ((ll_registers_[RadioLlBase + 0x10] & (RadioIrqMd | RadioIrqCok)) == 0)
+            if ((ll_registers_[RadioLlBase + 0x10] &
+                 (RadioIrqMd | RadioIrqCok | RadioIrqCokZephyr)) == 0)
                 radio_rx_rssi_ = -100;
             update_radio_irq();
             break;
@@ -2148,7 +2180,9 @@ std::uint8_t Phy6252::radio_channel() const noexcept {
 }
 
 void Phy6252::receive_radio_frame(const mcuemu::RadioFrame &frame) {
-    if (!radio_rx_active_ || frame.payload.size() + 2 > 127 || frame.channel != radio_channel())
+    if (!radio_rx_active_ || frame.payload.size() + 2 > 127 || frame.channel != radio_channel() ||
+        (radio_rx_deadline_cycle_ != 0 &&
+         frame.end_ns > core_.cycles_to_ns(radio_rx_deadline_cycle_)))
         return;
     rx_fifo_.fill(0);
     rx_fifo_[0] = static_cast<std::uint8_t>(frame.payload.size() + 2);
@@ -2158,8 +2192,20 @@ void Phy6252::receive_radio_frame(const mcuemu::RadioFrame &frame) {
     rx_fifo_[frame.payload.size() + 2] = static_cast<std::uint8_t>(fcs >> 8);
     rx_fifo_read_ = 0;
     radio_rx_rssi_ = static_cast<std::int8_t>(std::clamp(frame.rssi_dbm, -127, 0));
-    ll_registers_[RadioLlBase + 0x10] |= RadioIrqMd | RadioIrqCok;
+    radio_rx_active_ = false;
+    radio_rx_deadline_cycle_ = 0;
+    ll_registers_[RadioLlBase + 0x10] |= RadioIrqMd | RadioIrqCok | RadioIrqCokZephyr;
     update_radio_irq();
+}
+
+void Phy6252::schedule_radio_rx_timeout() {
+    radio_rx_deadline_cycle_ = 0;
+    if (radio_rx_timeout_us_ == 0)
+        return;
+    const std::uint64_t duration_cycles = std::max<std::uint64_t>(1,
+        static_cast<std::uint64_t>(radio_rx_timeout_us_) * core_.clock_hz() / 1'000'000);
+    radio_rx_deadline_cycle_ = core_.cycles() + duration_cycles;
+    core_.request_service(radio_rx_deadline_cycle_);
 }
 
 std::int8_t Phy6252::radio_energy_dbm(std::uint64_t at_ns) const {
@@ -2181,6 +2227,7 @@ std::int8_t Phy6252::radio_energy_dbm(std::uint64_t at_ns) const {
 
 void Phy6252::start_radio_tx() {
     radio_rx_active_ = false;
+    radio_rx_deadline_cycle_ = 0;
     const std::uint32_t length = tx_fifo_.empty() ? 0 : tx_fifo_[0];
     if (length < 5 || length > 127 || tx_fifo_.size() < length - 1) {
         std::fprintf(stderr, "PHY6252: ignored radio TX command without a valid FIFO frame (length=%u, bytes=%zu)\n",
@@ -2318,11 +2365,25 @@ std::uint64_t Phy6252::service_radio(std::uint64_t now) {
         for (const mcuemu::RadioFrame &frame : air_->receive(
                  radio_node_, mcuemu::RadioProtocol::Zigbee802154,
                  radio_channel(), now_ns, radio_rx_after_ns_)) {
-            if ((ll_registers_[RadioLlBase + 0x10] & RadioIrqMd) == 0)
-                receive_radio_frame(frame);
+            if ((ll_registers_[RadioLlBase + 0x10] & RadioIrqMd) != 0)
+                break;
+            receive_radio_frame(frame);
+            if (!radio_rx_active_)
+                break;
         }
         radio_rx_after_ns_ = now_ns;
-        next = std::min(next, now + RadioPollCycles);
+        if (radio_rx_active_)
+            next = std::min(next, now + RadioPollCycles);
+    }
+    if (radio_rx_active_ && radio_rx_deadline_cycle_ != 0) {
+        if (now >= radio_rx_deadline_cycle_) {
+            radio_rx_active_ = false;
+            radio_rx_deadline_cycle_ = 0;
+            ll_registers_[RadioLlBase + 0x10] |= RadioIrqRto | RadioIrqRtoZephyr;
+            update_radio_irq();
+        } else {
+            next = std::min(next, radio_rx_deadline_cycle_);
+        }
     }
     return next;
 }

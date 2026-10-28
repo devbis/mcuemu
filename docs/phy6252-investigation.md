@@ -141,15 +141,20 @@ randomness. The observed `rtc_get_counter` call returns the model's AON RTC coun
 The PHY62 SDK places `ll_hw_*` declarations under its BLE controller, but the
 PHY+ example also uses those helpers for Zigbee. The model implements the
 observed mode selections (`STX`, `SRX`, `TRX`, `RTX`), IRQ status/mask/clear,
-go/trigger, FIFO reset, `ll_hw_get_tr_mode`, and `read_current_fine_time`
-against the modeled baseband registers and FIFOs. IRQ status bits follow the
-SDK header (`MD` bit 0, `COK` bit 10). Fine time is inferred from the 16 MHz
-core cycle count with the SDK's `BASE_TIME_UNITS` wrap. These operations do not
-establish Zigbee stack compatibility. The SDK exposes RX timeout and settle
-helpers, but the
-available headers/example do not identify their backing registers or clock
-units, so those calls remain logged with their arguments and have no timing
-effect in the model.
+go/trigger, FIFO reset, `ll_hw_get_tr_mode`, `ll_hw_get_irq_status`,
+`ll_hw_read_rfifo_zb`, and `read_current_fine_time` against the modeled
+baseband registers and FIFOs. The Zigbee FIFO helper copies the length byte,
+PSDU and FCS to firmware memory and returns the packet length and inferred
+RSSI footer. The status register exposes the SDK ROM layout (`MD` bit 0,
+`RTO` bit 2, `COK` bit 10) and the PB-03F Zephyr driver's compact layout
+(`COK` bit 1, `RTO` bit 3) for the same completion; clearing either alias
+clears the shared event. This reconciles the two checked firmware contracts,
+whose observed bit definitions differ. Fine time uses the 16 MHz core cycle
+count with the SDK's `BASE_TIME_UNITS` wrap. The PHY+ example names the ROM
+timeout parameter `rxTimeOutUs`, so the model treats it as microseconds and completes
+a receive with `RTO` when no frame arrives. Settle timing remains unmodeled
+because the available sources do not identify its backing registers or clock
+units. These operations do not establish Zigbee stack compatibility.
 The SDK's `gpio_sel[pin / 4]` accesses are served from the inferred register
 window `0x40003818..0x4000382c`; AON wake-source reads at `0x4000f0b0` and
 `0x4000f0b4` return zero without generating wake events. These are code-driven

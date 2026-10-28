@@ -57,6 +57,8 @@ private:
     std::string radio_node_;
     std::uint64_t radio_tx_end_cycle_{0};
     std::uint64_t radio_rx_after_ns_{0};
+    std::uint64_t radio_rx_deadline_cycle_{0};
+    std::uint32_t radio_rx_timeout_us_{0};
     bool radio_tx_active_{false};
     bool radio_rx_active_{false};
     std::int8_t radio_rx_rssi_{-100};
@@ -77,7 +79,6 @@ private:
     bool gpio_irq_dispatch_warning_logged_{false};
     std::array<bool, 6> timer_irq_dispatch_warning_logged_{};
     bool ll_context_warning_logged_{false};
-    bool ll_rx_timeout_warning_logged_{false};
     bool ll_settle_warning_logged_{false};
     bool rf_sample_e8_warning_logged_{false};
     std::uint32_t heap_start_{0}, heap_size_{0};
@@ -107,6 +108,7 @@ private:
     void update_gpio_irq();
     void notify_gpio(std::uint32_t changed);
     void start_radio_tx();
+    void schedule_radio_rx_timeout();
     void update_radio_irq();
     std::int8_t radio_energy_dbm(std::uint64_t at_ns) const;
     void rom_log_printf();
