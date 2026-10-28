@@ -91,9 +91,16 @@ void Simulation::check_config(const SystemConfig &config) const {
     for (const DeviceConfig &device : config.devices) {
         for (const AttachConfig &attach : device.attach)
             check_attach(attach);
-        for (const McuConfig &mcu : device.mcus)
+        for (const McuConfig &mcu : device.mcus) {
             for (const FirmwareImage &image : mcu.images)
                 (void)confine_path(image.file);
+            if (mcu.flash) {
+                if (!mcu.flash->persist.empty())
+                    (void)confine_path(mcu.flash->persist);
+                if (!mcu.flash->log.empty())
+                    (void)confine_path(mcu.flash->log);
+            }
+        }
         for (const PartConfig &part : device.parts)
             if (!part.script.empty())
                 (void)confine_path(part.script);

@@ -445,11 +445,104 @@ PartConfig parse_part(const YAML::Node &node, const std::string &base_dir) {
     return part;
 }
 
+PowerCutConfig parse_power_cut(const YAML::Node &node) {
+    require_map(node, "power cut");
+    check_keys(node, "power cut", {"at", "op", "nth", "page", "after", "action"});
+    PowerCutConfig cut;
+    cut.line = node.Mark().line + 1;
+    if (const YAML::Node at = node["at"]) {
+        for (const char *key : {"op", "nth", "page", "after", "action"})
+            if (node[key])
+                fail(node[key], std::string("a power cut at a time takes no '") + key +
+                                    "' (that is a flash-event trigger)");
+        cut.at_ns = config_duration(at, "at");
+        return cut;
+    }
+    if (!node["op"])
+        fail(node, "power cut requires 'at' (a time) or 'op' (erase, write or any)");
+    cut.op = scalar(node["op"], "op");
+    if (cut.op != "erase" && cut.op != "write" && cut.op != "any")
+        fail(node["op"], "op must be erase, write or any, got '" + cut.op + "'");
+    if (const YAML::Node nth = node["nth"]) {
+        cut.nth = config_integer(nth, "nth");
+        if (cut.nth == 0)
+            fail(nth, "nth counts operations from 1");
+    }
+    if (const YAML::Node page = node["page"]) {
+        const std::uint64_t value = config_integer(page, "page");
+        if (value > 127)
+            fail(page, "page must be 0-127 (128 pages of 2 KiB)");
+        cut.page = static_cast<unsigned>(value);
+    }
+    if (const YAML::Node after = node["after"])
+        cut.after_ns = config_duration(after, "after");
+    if (const YAML::Node action = node["action"]) {
+        const std::string text = scalar(action, "action");
+        if (text != "power_cut" && text != "reset")
+            fail(action, "action must be power_cut or reset, got '" + text + "'");
+        cut.reset = text == "reset";
+    }
+    return cut;
+}
+
+FlashConfig parse_flash(const YAML::Node &node, const std::string &base_dir) {
+    require_map(node, "flash");
+    check_keys(node, "flash",
+               {"limits", "interrupted", "seed", "sram_fill", "persist", "log", "power_cuts"});
+    FlashConfig flash;
+    flash.line = node.Mark().line + 1;
+    auto resolve = [&](const YAML::Node &value, const char *what) {
+        std::filesystem::path path(scalar(value, what));
+        if (path.empty())
+            fail(value, std::string(what) + " must name a file");
+        if (path.is_relative())
+            path = std::filesystem::path(base_dir) / path;
+        return path.lexically_normal().string();
+    };
+    if (const YAML::Node limits = node["limits"]) {
+        flash.limits = scalar(limits, "limits");
+        if (flash.limits != "report" && flash.limits != "nondeterministic")
+            fail(limits, "limits must be report or nondeterministic, got '" + flash.limits + "'");
+    }
+    if (const YAML::Node interrupted = node["interrupted"]) {
+        flash.interrupted = scalar(interrupted, "interrupted");
+        if (flash.interrupted != "abandon" && flash.interrupted != "partial" &&
+            flash.interrupted != "complete")
+            fail(interrupted, "interrupted must be abandon, partial or complete, got '" +
+                                  flash.interrupted + "'");
+    }
+    if (const YAML::Node seed = node["seed"])
+        flash.seed = config_integer(seed, "seed");
+    if (const YAML::Node fill = node["sram_fill"]) {
+        if (scalar(fill, "sram_fill") == "random") {
+            flash.sram_fill = std::nullopt;
+        } else {
+            const std::uint64_t value = config_integer(fill, "sram_fill");
+            if (value > 0xff)
+                fail(fill, "sram_fill must be a byte (0-255) or random");
+            flash.sram_fill = static_cast<std::uint8_t>(value);
+        }
+    }
+    if (const YAML::Node persist = node["persist"])
+        flash.persist = resolve(persist, "persist");
+    if (const YAML::Node log = node["log"])
+        flash.log = resolve(log, "log");
+    if (!flash.persist.empty() && flash.persist == flash.log)
+        fail(node, "persist and log must be different files");
+    if (const YAML::Node cuts = node["power_cuts"]) {
+        if (!cuts.IsSequence())
+            fail(cuts, "power_cuts must be a list");
+        for (const YAML::Node &entry : cuts)
+            flash.power_cuts.push_back(parse_power_cut(entry));
+    }
+    return flash;
+}
+
 McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
     require_map(node, "mcu");
     check_keys(node, "mcu",
                {"id", "model", "variant", "firmware", "clock_hz", "supply_mv",
-                "start_at", "radio", "rtt", "flash_timing", "debugger"});
+                "start_at", "radio", "rtt", "flash_timing", "debugger", "flash"});
     McuConfig mcu;
     mcu.line = node.Mark().line + 1;
     mcu.id = required_string(node, "id", "mcu");
@@ -518,6 +611,8 @@ McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
         mcu.rtt = parse_rtt(rtt);
     if (const YAML::Node debugger = node["debugger"])
         mcu.debugger = parse_debugger(debugger, base_dir);
+    if (const YAML::Node flash = node["flash"])
+        mcu.flash = parse_flash(flash, base_dir);
     return mcu;
 }
 

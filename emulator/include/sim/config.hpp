@@ -89,6 +89,31 @@ struct DebuggerConfig {
     int line{0};
 };
 
+// Flash fault injection and persistence (cc2530f256 only; docs/system-config.md
+// "Flash faults, power cuts and persistence"). A power cut is either
+// scheduled at world time `at_ns` or triggered `after_ns` into the `nth`
+// matching flash operation (`op` erase|write|any, optionally on `page`).
+struct PowerCutConfig {
+    std::optional<std::uint64_t> at_ns;
+    std::string op{"any"};
+    std::uint64_t nth{1};
+    std::optional<unsigned> page;
+    std::uint64_t after_ns{0};
+    bool reset{false}; // action: reset (RESET_N) instead of a power cut
+    int line{0};
+};
+
+struct FlashConfig {
+    std::string limits{"report"};       // report | nondeterministic
+    std::string interrupted{"abandon"}; // abandon | partial | complete
+    std::uint64_t seed{0};
+    std::optional<std::uint8_t> sram_fill{std::uint8_t{0}}; // nullopt: random
+    std::string persist; // resolved against the YAML file's directory
+    std::string log;     // resolved against the YAML file's directory
+    std::vector<PowerCutConfig> power_cuts;
+    int line{0};
+};
+
 struct McuConfig {
     std::string id;
     std::string model;
@@ -104,6 +129,7 @@ struct McuConfig {
     std::optional<RadioAttachConfig> radio;
     std::optional<RttConfig> rtt;
     std::optional<DebuggerConfig> debugger;
+    std::optional<FlashConfig> flash;
     int line{0};
 };
 
