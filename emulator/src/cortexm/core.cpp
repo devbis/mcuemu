@@ -245,8 +245,10 @@ struct Core::Impl final : Bus {
             }
         }
         if (core.config_.track_last_instruction_pc || core.pc_trace_ != nullptr ||
-            core.stack_trace_ != nullptr)
+            core.stack_trace_ != nullptr) {
+            core.previous_instruction_pc_ = core.last_instruction_pc_;
             core.last_instruction_pc_ = address;
+        }
         if (core.pc_trace_ != nullptr && address >= core.pc_first_ && address <= core.pc_last_) {
             *core.pc_trace_ << "PC 0x" << std::hex << address << std::dec << " cycles=" << core.cycles_;
             if (core.pc_trace_regs_) {
@@ -502,6 +504,7 @@ void Core::reset(std::uint32_t vector_table) {
     impl_->deadline = 0;
     impl_->reset_pending = false;
     last_instruction_pc_ = 0;
+    previous_instruction_pc_ = 0;
     msp_trace_initialized_ = psp_trace_initialized_ = false;
 }
 

@@ -156,6 +156,7 @@ public:
     // Useful when a peripheral callback runs during exception entry, before
     // the handler itself has executed.
     std::uint32_t last_instruction_pc() const noexcept { return last_instruction_pc_; }
+    std::uint32_t previous_instruction_pc() const noexcept { return previous_instruction_pc_; }
 
     // Escape hatch for tests.
     uc_struct *engine() noexcept { return uc_; }
@@ -176,6 +177,7 @@ private:
     std::uint64_t instructions_{0};
     std::uint64_t instruction_limit_{0};
     std::uint32_t last_instruction_pc_{0};
+    std::uint32_t previous_instruction_pc_{0};
     std::ostream *pc_trace_{nullptr};
     std::uint32_t pc_first_{0}, pc_last_{0};
     bool pc_trace_regs_{false};

@@ -148,15 +148,27 @@ PendSV vector to the registered image handler and exposes the registered
 SysTick handler through the fixed vector alias. This callback-table contract
 is inferred from the image, not documented by the SDK.
 
-The supplied run now prints `Stack Init`, initializes the Zigbee stack, creates
-the application tasks and prints `zb_app_task_init`. It then enters the SDK's
-ROM HardFault vector at `0x000028f0`; the captured exception frame has PC zero.
-The task/context-switch failure remains under investigation. No Zigbee frames
-have been emitted by this image yet. A separate Cortex-M0 regression case that
-pends PendSV from Thread mode on PSP with a valid vector table passes and keeps
-its exception frame on PSP. The earlier `VTOR=0x1fff8b00` emulation selected an
-invalid RAM vector table and caused a misleading HardFault; that is not the
-current failure.
+The SDK maps external interrupt vectors 4 and 16 to ROM `LL_IRQHandler` and
+`GPIO_IRQHandler`. Both ROM bodies are absent from the package. The model
+dispatches these vectors through the image's `JUMP_FUNCTION` table: baseband
+slot 228 (`V4_IRQ_HANDLER`) and GPIO slot 240 (`V16_IRQ_HANDLER`). The SDK's
+GPIO setup first changes pin interrupt mode and later registers/enables its
+callback. Clearing stale level status when a pin changes to edge mode avoids a
+false interrupt in that interval. The callback slots are inferred from the
+SDK header aliases and observed image accesses; the dispatch behavior is not
+hardware-verified.
+
+The supplied run prints `Stack Init`, initializes the Zigbee stack, creates the
+application tasks and prints `zb_app_task_init`. The GPIO callback now runs and
+the key/timer initialization proceeds. Execution next reaches the unimplemented
+ROM symbol `spif_write_dma` at `0x0001744c` (the Thumb symbol is `0x0001744d`),
+with a write into the printed NVM area `0x11079000..0x1107efff`. No Zigbee
+frames have been emitted by this image yet. The earlier HardFault was caused
+by a synthetic GPIO level interrupt before callback registration, not by the
+PendSV stack path; a Cortex-M0 regression case that pends PendSV from Thread
+mode on PSP with a valid vector table passes and keeps its exception frame on
+PSP. The earlier `VTOR=0x1fff8b00` emulation selected an invalid RAM vector
+table and caused a misleading HardFault; that is not the current failure.
 
 ## Firmware evidence
 
@@ -174,10 +186,11 @@ The supplied binary contains the Zigbee and FreeRTOS executable image, and the
 emulator reaches its Zigbee stack initialization path. It also passes three
 observed CRC-checked copy blocks and prints the NVM range
 `0x11079000..0x1107efff`. It still reports `tpCap[00 00]` instead of the
-reference log's `tpCap[2b 23]`. The emulator creates application tasks but
-enters HardFault before producing radio traffic, so joining and relay commands
-remain unverified. Do not claim TS0001 relay support until it starts, joins,
-and exchanges Zigbee traffic in a captured network scenario.
+reference log's `tpCap[2b 23]`. The emulator now reaches a flash NVM write
+through `spif_write_dma`, but that ROM call is not yet implemented and the
+image has not produced radio traffic. Joining and relay commands remain
+unverified. Do not claim TS0001 relay support until it starts, joins, and
+exchanges Zigbee traffic in a captured network scenario.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables

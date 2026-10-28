@@ -120,6 +120,11 @@ constexpr unsigned RadioIrq = 4;
 constexpr std::uint32_t RadioIrqMd = 1u << 0;
 constexpr std::uint32_t RadioIrqCok = 1u << 1;
 constexpr std::uint32_t RadioIrqMask = 0x1f;
+constexpr std::uint32_t RomLlIrqHandler = 0x4e25;
+constexpr std::uint32_t RomGpioIrqHandler = 0x112d;
+constexpr std::uint32_t JumpTableBase = BootImage::RamBase;
+constexpr std::uint32_t BasebandIrqJumpSlot = 228;
+constexpr std::uint32_t GpioIrqJumpSlot = 240;
 constexpr std::uint64_t RadioPollCycles = 256; // 16 us at the 16 MHz core clock
 constexpr std::uint32_t GpioMask = 0x007fffff;
 constexpr std::uint32_t TimerEnable = 1u << 0;
@@ -313,6 +318,11 @@ void Phy6252::reset() {
     }};
     for (const auto &[index, handler] : rom_vectors)
         std::memcpy(vector_alias_ + index * sizeof(std::uint32_t), &handler, sizeof handler);
+    const std::array<std::pair<unsigned, std::uint32_t>, 2> irq_vectors = {{
+        {16 + 4, RomLlIrqHandler}, {16 + 16, RomGpioIrqHandler},
+    }};
+    for (const auto &[index, handler] : irq_vectors)
+        std::memcpy(vector_alias_ + index * sizeof(std::uint32_t), &handler, sizeof handler);
     std::copy(boot_ram_.begin(), boot_ram_.end(), ram_);
     lcr_ = ier_ = dll_ = dlm_ = mcr_ = scratch_ = 0;
     rx_.clear();
@@ -346,6 +356,8 @@ void Phy6252::reset() {
     unexported_init_hook_warned_ = false;
     pendsv_dispatch_warning_logged_ = false;
     ll_rand_warning_logged_ = false;
+    baseband_irq_dispatch_warning_logged_ = false;
+    gpio_irq_dispatch_warning_logged_ = false;
     ll_context_warning_logged_ = false;
     ll_rx_timeout_warning_logged_ = false;
     ble_srx_warning_logged_ = false;
@@ -781,6 +793,36 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                         &handlers[2], sizeof handlers[2]);
             core_.set_reg(15, handlers[1] & ~1u);
             rom_branch = true;
+        } else if (address == (RomLlIrqHandler & ~1u) ||
+                   address == (RomGpioIrqHandler & ~1u)) {
+            const bool gpio_irq = address == (RomGpioIrqHandler & ~1u);
+            const std::uint32_t slot = gpio_irq ? GpioIrqJumpSlot : BasebandIrqJumpSlot;
+            const std::uint32_t jump_address = JumpTableBase + slot * sizeof(std::uint32_t);
+            std::uint32_t handler = 0;
+            const bool have_handler = core_.read_memory(jump_address, &handler, sizeof handler);
+            const std::uint32_t handler_address = handler & ~1u;
+            const bool handler_in_ram = handler_address >= BootImage::RamBase &&
+                handler_address < BootImage::RamBase + BootImage::RamSize;
+            const bool handler_in_flash = handler_address >= BootImage::FlashBase &&
+                handler_address < BootImage::FlashBase + BootImage::FlashSize;
+            if (!have_handler || (handler & 1u) == 0 ||
+                (!handler_in_ram && !handler_in_flash)) {
+                char message[160];
+                std::snprintf(message, sizeof message,
+                              "PHY6252 ROM %s IRQ vector has no valid JUMP_FUNCTION(%u) callback (0x%08x)",
+                              gpio_irq ? "GPIO" : "baseband", slot, handler);
+                return {cortexm::StopReason::Fault, message};
+            }
+            bool &logged = gpio_irq ? gpio_irq_dispatch_warning_logged_ :
+                                      baseband_irq_dispatch_warning_logged_;
+            if (!logged) {
+                std::fprintf(stderr,
+                             "PHY6252: ROM %s IRQ dispatches JUMP_FUNCTION(%u)=0x%08x\n",
+                             gpio_irq ? "GPIO" : "baseband", slot, handler);
+                logged = true;
+            }
+            core_.set_reg(15, handler & ~1u);
+            rom_branch = true;
         } else if (address == 0xa920) {
             sleep_allowed_ = false; // SDK disableSleep() only changes power-manager policy.
         } else if (address == 0xaeac) {
@@ -1000,8 +1042,9 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                                  address == (RomHardFaultHandler & ~1u) ? "HardFault_Handler at " :
                                  nullptr;
             std::snprintf(message, sizeof message,
-                          "unimplemented PHY6252 ROM call %s0x%08x last_pc=0x%08x (r0=0x%08x r1=0x%08x r2=0x%08x r3=0x%08x sp=0x%08x msp=0x%08x psp=0x%08x control=0x%08x ipsr=0x%08x stack=[0x%08x,0x%08x] frame_pc=0x%08x frame_lr=0x%08x xpsr=0x%08x lr=0x%08x)",
+                          "unimplemented PHY6252 ROM call %s0x%08x last_pc=0x%08x previous_pc=0x%08x (r0=0x%08x r1=0x%08x r2=0x%08x r3=0x%08x sp=0x%08x msp=0x%08x psp=0x%08x control=0x%08x ipsr=0x%08x stack=[0x%08x,0x%08x] frame_pc=0x%08x frame_lr=0x%08x xpsr=0x%08x lr=0x%08x)",
                           symbol ? symbol : "", pc, core_.last_instruction_pc(),
+                          core_.previous_instruction_pc(),
                           core_.reg(0), core_.reg(1), core_.reg(2), core_.reg(3),
                           core_.reg(13), msp, psp, control, ipsr,
                           stack_args[0], stack_args[1],
@@ -1647,9 +1690,17 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             update_gpio_irq();
             break;
         case 0x38:
-            gpio_interrupt_type_ = lane_write(gpio_interrupt_type_, value, address, size) & GpioMask;
+        {
+            const std::uint32_t updated =
+                lane_write(gpio_interrupt_type_, value, address, size) & GpioMask;
+            // Switching an active-low level input to edge mode does not
+            // synthesize an edge; the SDK configures edge mode before it
+            // enables the pin and installs its ROM callback.
+            gpio_interrupt_status_ &= ~(updated & ~gpio_interrupt_type_);
+            gpio_interrupt_type_ = updated;
             update_gpio_irq();
             break;
+        }
         case 0x3c:
             gpio_interrupt_polarity_ = lane_write(gpio_interrupt_polarity_, value, address, size) & GpioMask;
             update_gpio_irq();

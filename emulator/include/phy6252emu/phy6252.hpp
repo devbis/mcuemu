@@ -73,6 +73,8 @@ private:
     bool unexported_init_hook_warned_{false};
     bool pendsv_dispatch_warning_logged_{false};
     bool ll_rand_warning_logged_{false};
+    bool baseband_irq_dispatch_warning_logged_{false};
+    bool gpio_irq_dispatch_warning_logged_{false};
     bool ll_context_warning_logged_{false};
     bool ll_rx_timeout_warning_logged_{false};
     bool ble_srx_warning_logged_{false};

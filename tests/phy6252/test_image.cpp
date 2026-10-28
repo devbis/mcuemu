@@ -94,6 +94,10 @@ int main() {
     CHECK(handler_vector == 0x28f1);
     CHECK(chip.core().read_memory(0x38, &handler_vector, sizeof handler_vector));
     CHECK(handler_vector == 0x84cd);
+    CHECK(chip.core().read_memory(0x50, &handler_vector, sizeof handler_vector));
+    CHECK(handler_vector == 0x4e25); // SDK LL_IRQHandler for BB_IRQn=4
+    CHECK(chip.core().read_memory(0x80, &handler_vector, sizeof handler_vector));
+    CHECK(handler_vector == 0x112d); // SDK GPIO_IRQHandler for GPIO_IRQn=16
     const std::uint32_t vector_word = 0x11010109;
     std::uint32_t vector_readback = 0;
     CHECK(chip.core().write_memory(0, &vector_word, sizeof vector_word));
@@ -131,6 +135,43 @@ int main() {
     rom_test_chip.core().set_reg(15, 0x0f74); // ARM runtime __aeabi_uread4 entry
     CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 16).reason == cortexm::StopReason::Deadline);
     CHECK(rom_test_chip.core().reg(0) == 0x78563412);
+    Phy6252 irq_chip;
+    irq_chip.load_firmware(image);
+    irq_chip.reset();
+    CHECK(irq_chip.run(100).reason == cortexm::StopReason::Deadline);
+    constexpr std::uint32_t irq_callback = 0x1fff2201;
+    CHECK(irq_chip.core().write_memory(0x1fff03c0, &irq_callback, sizeof irq_callback));
+    const std::array<std::uint8_t, 24> gpio_irq_callback = {
+        0x07, 0x20, // movs r0, #7
+        0x03, 0x49, // ldr r1, [pc, #12] ; marker address
+        0x08, 0x60, // str r0, [r1]
+        0x01, 0x20, // movs r0, #1
+        0x02, 0x49, // ldr r1, [pc, #8] ; GPIO interrupt status
+        0x08, 0x60, // str r0, [r1] ; clear edge status
+        0x70, 0x47, // bx lr
+        0x00, 0x00,
+        0x00, 0x23, 0xff, 0x1f, // 0x1fff2300 marker
+        0x4c, 0x80, 0x00, 0x40, // 0x4000804c GPIO interrupt status
+    };
+    CHECK(irq_chip.core().write_memory(0x1fff2200, gpio_irq_callback.data(),
+                                       gpio_irq_callback.size()));
+    irq_chip.write(0x40008038, 1, 4); // edge-triggered GPIO0
+    irq_chip.write(0x4000803c, 1, 4); // rising edge
+    irq_chip.write(0x40008034, ~1u, 4); // unmask GPIO0
+    irq_chip.write(0x40008030, 1, 4); // enable GPIO0 interrupt
+    const std::uint32_t enable_gpio_irq = 1u << 16;
+    CHECK(irq_chip.core().write_memory(0xe000e100, &enable_gpio_irq,
+                                       sizeof enable_gpio_irq));
+    CHECK(irq_chip.run(irq_chip.core().cycles() + 20).reason ==
+          cortexm::StopReason::Deadline);
+    std::uint32_t irq_marker = 0;
+    CHECK(irq_chip.core().read_memory(0x1fff2300, &irq_marker, sizeof irq_marker));
+    CHECK(irq_marker == 0); // changing level mode to edge is not itself an edge
+    irq_chip.set_gpio_input(0, true);
+    CHECK(irq_chip.run(irq_chip.core().cycles() + 100).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(irq_chip.core().read_memory(0x1fff2300, &irq_marker, sizeof irq_marker));
+    CHECK(irq_marker == 7);
     const std::uint32_t fifo_probe = 0x11030000;
     auto *fifo_probe_code = chip.core().host_pointer(fifo_probe, 6);
     CHECK(fifo_probe_code != nullptr);
