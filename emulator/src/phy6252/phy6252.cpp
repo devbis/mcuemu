@@ -586,18 +586,24 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             }
             core_.set_reg(0, 0);
         } else if (address == 0xace0) {
-            // The TS0001 image calls efuse_read(1, buffer) and consumes eight
-            // bytes. The supplied board log reports the two RF cap bytes;
-            // remaining calibration bytes are unavailable from the flash dump.
+            // The SDK names this entry but omits its prototype. The simple
+            // block/buffer path is only a test fixture; TS0001 passes more
+            // arguments and its output layout is still unknown.
             const std::uint32_t block = core_.reg(0);
             const std::uint32_t destination = core_.reg(1);
             constexpr std::array<std::uint8_t, 8> rf_calibration = {
                 0x2b, 0x23, 0, 0, 0, 0, 0, 0};
-            if (block != 1 || !core_.write_memory(destination, rf_calibration.data(),
-                                                   rf_calibration.size())) {
-                core_.set_reg(0, static_cast<std::uint32_t>(-22));
+            if (block == 1 && core_.reg(2) == 0 && core_.reg(3) == 0) {
+                if (!core_.write_memory(destination, rf_calibration.data(),
+                                        rf_calibration.size()))
+                    core_.set_reg(0, static_cast<std::uint32_t>(-22));
+                else
+                    core_.set_reg(0, 0);
             } else {
-                core_.set_reg(0, 0); // efuse_read returns zero on success in this image.
+                std::fprintf(stderr,
+                             "PHY6252: unverified efuse_read call (block=%u r1=0x%08x r2=0x%08x r3=0x%08x lr=0x%08x); leaving memory unchanged\n",
+                             block, destination, core_.reg(2), core_.reg(3), core_.reg(14));
+                core_.set_reg(0, block == 1 ? 0 : static_cast<std::uint32_t>(-22));
             }
         } else if (address == 0x3fdc) {
             // SDK ROM symbol LL_ENC_AES128_Encrypt0(input, key, output).

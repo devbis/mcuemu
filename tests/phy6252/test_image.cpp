@@ -404,10 +404,11 @@ int main() {
 
     auto invoke_rom = [&chip](std::uint32_t pc, std::uint32_t r0,
                               std::uint32_t r1, std::uint32_t r2,
-                              std::uint64_t deadline) {
+                              std::uint64_t deadline, std::uint32_t r3 = 0) {
         chip.core().set_reg(0, r0);
         chip.core().set_reg(1, r1);
         chip.core().set_reg(2, r2);
+        chip.core().set_reg(3, r3);
         chip.core().set_reg(14, 0x11010109);
         chip.core().set_reg(15, pc);
         const auto result = chip.run(deadline);
@@ -448,6 +449,14 @@ int main() {
                       [](std::uint8_t value) { return value == 0; }));
     invoke_rom(0xace0, 2, efuse_buffer, 0, 545);
     CHECK(chip.core().reg(0) == static_cast<std::uint32_t>(-22));
+    const std::uint8_t untouched_efuse_data[] = {1, 2, 3, 4, 5, 6, 7, 8};
+    CHECK(chip.core().write_memory(efuse_buffer, untouched_efuse_data,
+                                  sizeof untouched_efuse_data));
+    invoke_rom(0xace0, 1, efuse_buffer, 0x60, 547, 0x1fff2b29);
+    CHECK(chip.core().reg(0) == 0);
+    CHECK(chip.core().read_memory(efuse_buffer, efuse_data, sizeof efuse_data));
+    CHECK(std::equal(std::begin(untouched_efuse_data), std::end(untouched_efuse_data),
+                     std::begin(efuse_data)));
     const crypto::Block aes_key = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
                                    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f};
     const crypto::Block aes_input = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
