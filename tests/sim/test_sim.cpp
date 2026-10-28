@@ -6,6 +6,7 @@
 #include <fstream>
 #include "sim/endpoint.hpp"
 #include "sim/net.hpp"
+#include "sim/phy6252_mcu.hpp"
 #include "sim/scheduler.hpp"
 #include "sim/tlsr8258_mcu.hpp"
 #include "sim/world.hpp"
@@ -175,6 +176,50 @@ void test_tlsr_pad_drives_net_and_reads_back() {
     bool duplicate = false;
     try {
         world.connect(mcu, "PA0", net);
+    } catch (const std::invalid_argument &) {
+        duplicate = true;
+    }
+    CHECK(duplicate);
+}
+
+void test_phy6252_pads_follow_nets() {
+    sim::World world;
+    auto &mcu = static_cast<sim::Phy6252Mcu &>(
+        world.add_mcu(std::make_unique<sim::Phy6252Mcu>("phy")));
+    CHECK(mcu.pin_names().size() == 23);
+    sim::Net &output_net = world.add_net("phy_output");
+    world.connect(mcu, "GPIO3", output_net);
+    CHECK(output_net.level() == sim::Level::Floating);
+    mcu.chip().write(0x40008004, 1u << 3, 4);
+    mcu.chip().write(0x40008000, 1u << 3, 4);
+    CHECK(output_net.level() == sim::Level::High);
+    mcu.chip().write(0x40008000, 0, 4);
+    CHECK(output_net.level() == sim::Level::Low);
+    mcu.chip().write(0x40008004, 0, 4);
+    CHECK(output_net.level() == sim::Level::Floating);
+
+    sim::Pin &switch_pin = output_net.attach("switch");
+    switch_pin.set_drive(sim::Drive::High, 1);
+    CHECK((mcu.chip().read(0x40008050, 4) & (1u << 3)) != 0);
+    switch_pin.set_drive(sim::Drive::Low, 2);
+    CHECK((mcu.chip().read(0x40008050, 4) & (1u << 3)) == 0);
+
+    sim::Net &pull_net = world.add_net("phy_pull");
+    world.connect(mcu, "GPIO0", pull_net);
+    mcu.chip().write(0x4000f008, 2u << 1, 4);
+    CHECK(mcu.chip().gpio_drive(0) == phy6252emu::GpioDrive::PullUp);
+    CHECK(pull_net.level() == sim::Level::High);
+
+    bool unknown = false;
+    try {
+        world.connect(mcu, "GPIO23", pull_net);
+    } catch (const std::invalid_argument &) {
+        unknown = true;
+    }
+    CHECK(unknown);
+    bool duplicate = false;
+    try {
+        world.connect(mcu, "GPIO0", output_net);
     } catch (const std::invalid_argument &) {
         duplicate = true;
     }
@@ -436,6 +481,7 @@ int main() {
     RUN(test_net_analog_source);
     RUN(test_endpoint_registry_and_net_events);
     RUN(test_tlsr_pad_drives_net_and_reads_back);
+    RUN(test_phy6252_pads_follow_nets);
     RUN(test_two_mcus_and_a_button_on_one_net);
     RUN(test_start_offset_delays_mcu);
     RUN(test_world_jumps_when_nothing_runs);

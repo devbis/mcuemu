@@ -13,7 +13,7 @@ struct uc_struct;
 namespace cortexm {
 
 // M33 is ARMv8-M Mainline without the Security Extension (one security state).
-enum class Model { M3, M4, M33 };
+enum class Model { M0, M3, M4, M33 };
 
 // Peripheral window: a chip model implements this for each MMIO range it
 // maps. Addresses are absolute; `size` is 1, 2 or 4 bytes.
@@ -85,6 +85,8 @@ public:
     // it too) and clears the NVIC. A chip with a boot loader in front of the
     // application starts the application directly this way.
     void reset(std::uint32_t vector_table = 0);
+    // Overrides VTOR after reset for chips with fixed or aliased vectors.
+    void set_vtor(std::uint32_t address);
     // Runs until `until_cycle` (absolute core cycles) or a stop condition.
     // While the core sleeps in WFI/WFE the clock jumps to the next event.
     RunResult run(std::uint64_t until_cycle);
@@ -104,6 +106,7 @@ public:
     std::uint64_t cycles() const noexcept { return cycles_; }
     std::uint64_t instructions() const noexcept { return instructions_; }
     std::uint32_t clock_hz() const noexcept { return config_.clock_hz; }
+    void set_clock_hz(std::uint32_t clock_hz);
     std::uint64_t cycles_to_ns(std::uint64_t cycles) const noexcept;
     std::uint64_t ns_to_cycles(std::uint64_t ns) const noexcept;
     // Moves the clock forward without executing (a chip model's start offset).
@@ -122,11 +125,14 @@ public:
     // Stops the current or next run with StopReason::Reset (watchdog, system
     // reset request from a peripheral). The caller restarts with reset().
     void request_reset();
-    // Drops translated code after flash was rewritten behind the CPU's back.
+    // Drops translated code after the host rewrites executable memory.
     void invalidate_code();
 
     // External interrupt line `irq` (0-based; exception number is 16 + irq).
     void set_irq_line(unsigned irq, bool level);
+    // PRIMASK helpers for chip ROM wrappers that expose critical-section APIs.
+    bool interrupts_masked();
+    void set_interrupts_masked(bool masked);
     // True when an enabled exception is pending (a sleeping core wakes).
     bool interrupt_pending();
 
@@ -150,6 +156,7 @@ private:
     uc_struct *uc_{nullptr};
     std::unique_ptr<Impl> impl_;
     std::uint64_t cycles_{0};
+    std::uint64_t clock_epoch_cycles_{0}, clock_epoch_ns_{0};
     std::uint64_t instructions_{0};
     std::uint64_t instruction_limit_{0};
     std::ostream *pc_trace_{nullptr};

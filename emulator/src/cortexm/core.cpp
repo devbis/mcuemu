@@ -1,5 +1,6 @@
 #include "cortexm/core.hpp"
 
+#include <unicorn/arm.h>
 #include <unicorn/unicorn.h>
 
 #include <algorithm>
@@ -64,8 +65,12 @@ struct Core::Impl final : Bus {
     WriteProtectHandler write_protect;
     ServiceHandler service;
     std::vector<std::function<void()>> deferred;
-
     uc_hook hooks[3]{};
+    uc_hook invalid_hook{};
+    std::uint64_t invalid_address{0};
+    std::uint64_t invalid_value{0};
+    unsigned invalid_size{0};
+    bool invalid_write{false};
     std::uint64_t deadline{0};
     std::uint64_t service_deadline{Never};
     Cause cause{Cause::None};
@@ -123,6 +128,16 @@ struct Core::Impl final : Bus {
                                    static_cast<std::uint32_t>(value));
     }
 
+    static bool invalid_access(uc_engine *, uc_mem_type type, std::uint64_t address, int size,
+                               std::int64_t value, void *user) {
+        auto *self = static_cast<Impl *>(user);
+        self->invalid_address = address;
+        self->invalid_size = static_cast<unsigned>(size);
+        self->invalid_value = static_cast<std::uint64_t>(value);
+        self->invalid_write = type == UC_MEM_WRITE_UNMAPPED || type == UC_MEM_WRITE_PROT;
+        return false; // Preserve the engine fault; record details for the host diagnostic.
+    }
+
     void build() {
         if (core.uc_) {
             uc_close(core.uc_);
@@ -132,7 +147,8 @@ struct Core::Impl final : Bus {
         if (uc_open(UC_ARCH_ARM, static_cast<uc_mode>(UC_MODE_THUMB | UC_MODE_MCLASS), &uc) != UC_ERR_OK)
             throw std::runtime_error("cannot create the ARM engine");
         core.uc_ = uc;
-        const uc_cpu_arm model = core.config_.model == Model::M3    ? UC_CPU_ARM_CORTEX_M3
+        const uc_cpu_arm model = core.config_.model == Model::M0    ? UC_CPU_ARM_CORTEX_M0
+                                 : core.config_.model == Model::M3    ? UC_CPU_ARM_CORTEX_M3
                                  : core.config_.model == Model::M33 ? UC_CPU_ARM_CORTEX_M33
                                                                     : UC_CPU_ARM_CORTEX_M4;
         check(uc_ctl_set_cpu_model(uc, model), "set CPU model");
@@ -161,6 +177,9 @@ struct Core::Impl final : Bus {
         check(uc_hook_add(uc, &hooks[2], UC_HOOK_MEM_WRITE_PROT,
                           reinterpret_cast<void *>(&Impl::write_prot_hook), this, 1, 0),
               "add write-protect hook");
+        check(uc_hook_add(uc, &invalid_hook, UC_HOOK_MEM_INVALID,
+                          reinterpret_cast<void *>(&Impl::invalid_access), this, 1, 0),
+              "add invalid memory hook");
         std::uint32_t priority_bits = core.config_.priority_bits;
         check(uc_arm_nvic(uc, UC_ARM_NVIC_CONFIG, core.config_.irq_count, &priority_bits, 0),
               "configure NVIC");
@@ -448,6 +467,11 @@ void Core::request_reset() {
     }
 }
 
+void Core::set_vtor(std::uint32_t address) {
+    if (uc_)
+        uc_arm_nvic(uc_, UC_ARM_NVIC_SCS_WRITE, 0xd08, &address, 4);
+}
+
 void Core::invalidate_code() {
     if (uc_)
         uc_ctl_flush_tb(uc_);
@@ -465,12 +489,38 @@ void Core::request_service(std::uint64_t at_cycle) noexcept {
 
 std::uint64_t Core::cycles_to_ns(std::uint64_t cycles) const noexcept {
     const std::uint64_t hz = config_.clock_hz;
-    return cycles / hz * 1000000000ull + cycles % hz * 1000000000ull / hz;
+    if (cycles >= clock_epoch_cycles_) {
+        const std::uint64_t elapsed = cycles - clock_epoch_cycles_;
+        return clock_epoch_ns_ + elapsed / hz * 1000000000ull +
+               elapsed % hz * 1000000000ull / hz;
+    }
+    const std::uint64_t elapsed = clock_epoch_cycles_ - cycles;
+    const std::uint64_t ns = elapsed / hz * 1000000000ull +
+                             elapsed % hz * 1000000000ull / hz;
+    return ns > clock_epoch_ns_ ? 0 : clock_epoch_ns_ - ns;
 }
 
 std::uint64_t Core::ns_to_cycles(std::uint64_t ns) const noexcept {
     const std::uint64_t hz = config_.clock_hz;
-    return ns / 1000000000ull * hz + ns % 1000000000ull * hz / 1000000000ull;
+    if (ns >= clock_epoch_ns_) {
+        const std::uint64_t elapsed = ns - clock_epoch_ns_;
+        return clock_epoch_cycles_ + elapsed / 1000000000ull * hz +
+               elapsed % 1000000000ull * hz / 1000000000ull;
+    }
+    const std::uint64_t elapsed = clock_epoch_ns_ - ns;
+    const std::uint64_t cycles = elapsed / 1000000000ull * hz +
+                                 elapsed % 1000000000ull * hz / 1000000000ull;
+    return cycles > clock_epoch_cycles_ ? 0 : clock_epoch_cycles_ - cycles;
+}
+
+void Core::set_clock_hz(std::uint32_t clock_hz) {
+    if (clock_hz == 0)
+        throw std::invalid_argument("Cortex-M clock must be nonzero");
+    if (clock_hz == config_.clock_hz)
+        return;
+    clock_epoch_ns_ = cycles_to_ns(cycles_);
+    clock_epoch_cycles_ = cycles_;
+    config_.clock_hz = clock_hz;
 }
 
 void Core::advance_to(std::uint64_t cycle) noexcept {
@@ -483,6 +533,20 @@ void Core::set_irq_line(unsigned irq, bool level) {
         return;
     std::uint32_t value = level ? 1 : 0;
     uc_arm_nvic(uc_, UC_ARM_NVIC_SET_IRQ, 16 + irq, &value, 0);
+}
+
+bool Core::interrupts_masked() {
+    std::uint32_t value = 0;
+    if (uc_)
+        uc_reg_read(uc_, UC_ARM_REG_PRIMASK, &value);
+    return (value & 1u) != 0;
+}
+
+void Core::set_interrupts_masked(bool masked) {
+    if (!uc_)
+        return;
+    std::uint32_t value = masked ? 1u : 0u;
+    uc_reg_write(uc_, UC_ARM_REG_PRIMASK, &value);
 }
 
 bool Core::interrupt_pending() {
@@ -551,6 +615,10 @@ RunResult Core::run(std::uint64_t until_cycle) {
         if (impl.deadline <= cycles_)
             impl.deadline = cycles_ + 1;
         impl.cause = Cause::None;
+        impl.invalid_address = 0;
+        impl.invalid_value = 0;
+        impl.invalid_size = 0;
+        impl.invalid_write = false;
 
         std::uint32_t pc_value = pc() | 1u;
         const uc_err error = uc_emu_start(uc_, pc_value, 0x100000000ull, 0, 0);
@@ -604,8 +672,17 @@ RunResult Core::run(std::uint64_t until_cycle) {
         case Cause::None:
             if (error != UC_ERR_OK) {
                 result.reason = StopReason::Fault;
-                char buffer[96];
-                std::snprintf(buffer, sizeof buffer, "%s at pc 0x%x", uc_strerror(error), pc());
+                char buffer[192];
+                if (impl.invalid_size != 0) {
+                    std::snprintf(buffer, sizeof buffer,
+                                  "%s at pc 0x%x (invalid %s 0x%llx size=%u value=0x%llx)",
+                                  uc_strerror(error), pc(), impl.invalid_write ? "write" : "read",
+                                  static_cast<unsigned long long>(impl.invalid_address),
+                                  impl.invalid_size,
+                                  static_cast<unsigned long long>(impl.invalid_value));
+                } else {
+                    std::snprintf(buffer, sizeof buffer, "%s at pc 0x%x", uc_strerror(error), pc());
+                }
                 result.message = buffer;
                 return result;
             }

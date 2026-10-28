@@ -5,6 +5,7 @@
 #include "sim/efr32mg21_mcu.hpp"
 #include "sim/esp32_mcu.hpp"
 #include "sim/nrf52840_mcu.hpp"
+#include "sim/phy6252_mcu.hpp"
 #include "sim/tlsr8258_mcu.hpp"
 
 #include <tuple>
@@ -116,6 +117,11 @@ const McuRegistry &McuRegistry::builtin() {
             if (config.flash_timing)
                 throw std::invalid_argument("flash_timing is only modelled for tlsr8258");
             return std::make_unique<Bl702Mcu>(name);
+        });
+        r.add("phy6252", [](const McuConfig &config, const std::string &name) {
+            if (config.variant || config.clock_hz || config.supply_mv || config.flash_timing)
+                throw std::invalid_argument("phy6252 does not accept variant, clock_hz, supply_mv or flash_timing");
+            return std::make_unique<Phy6252Mcu>(name);
         });
         return r;
     }();
