@@ -24,7 +24,42 @@
 //   the shift register (17.1.2 note) and moves to UxDBUF when UxDBUF is
 //   read; a further byte overwrites it (overrun: SWRU191F documents no
 //   overrun flag, ERR is the parity error only, so nothing is flagged).
-//   Host bytes are always well formed: FE and ERR are never set.
+//   9th bit (17.1.4, UxUCR): with BIT9 = 1 a frame carries a 9th bit after
+//   the data bits. PARITY = 1: the parity of the 8 data bits, D9 = 0 odd
+//   (data and parity bits hold an odd number of ones), D9 = 1 even
+//   (SWRU191F UxUCR; the DN112 design note SWRA222B labels D9 the other way
+//   round, so this needs hardware evidence). PARITY = 0: the 9th bit is
+//   D9 itself (DN112 "fixed level"; SWRU191F does not say). The bit is
+//   independent of ORDER. TX computes it from UxUCR when the frame starts;
+//   with frame capture on (host) each transmitted frame is also recorded
+//   with its 9th bit, the byte stream is unchanged.
+//   Errors: a host frame (receive(Cc2530UartFrame)) may carry an explicit
+//   9th bit, a wrong parity bit, wrong stop-bit levels or a break; a plain
+//   host byte is a well-formed frame in the receiver's format, so it never
+//   sets FE or ERR. The frame is rendered in the receiver's UxUCR, latched
+//   at its start bit (model-defined, like the baud rate): ERR (17.1.4) when
+//   BIT9 = PARITY = 1 and the received 9th bit is not the parity of the
+//   data per D9; FE when the first stop bit is not at UxUCR.STOP, and with
+//   SPB = 1 also when the second one is not ("the receiver checks both
+//   stop bits when UxUCR.SPB is set"). Model-defined: a frame with ERR or a
+//   bad first stop bit is still received normally at the end of its first
+//   stop bit (UxDBUF, RX_BYTE, URXxIF, the URXx DMA trigger, or the pending
+//   shift register on overrun: UxCSR "byte received with parity error /
+//   incorrect stop-bit level"), ERR/FE being set at that instant before the
+//   interrupt; this needs hardware evidence ("the RX interrupt is set when
+//   the first stop bit is checked OK"). A bad second stop bit sets FE one
+//   bit later, at the end of that bit (17.1.4: "a delay in setting the
+//   framing error bit ... (bit duration)"), a scheduled event of its own;
+//   FLUSH, RE = 0, a mode change or a reset cancel it. A frame discarded
+//   by FLUSH sets no flag. The received 9th bit cannot be read back
+//   (SWRU191F has no register for it). A 9th bit sent to a receiver with
+//   BIT9 = 0 falls into its first stop-bit slot (FE if that level is not
+//   STOP) and the sender's first stop bit into its second slot; a frame
+//   always occupies the receiver's frame time on the wire. Break
+//   (model-defined, SWRU191F describes none): the line stays at the
+//   start-bit level for one frame time, i.e. data, 9th and stop bits at
+//   the START level, so FE (and ERR with odd parity) are set and the byte
+//   is START ? 0xff : 0x00.
 // SPI (17.2, UxGCR), pad level. SCK idles at CPOL. A leading edge goes
 // from CPOL to CPOL inverted, a trailing edge back to CPOL. CPHA = 0: data
 // is output on trailing edges and sampled on leading edges; CPHA = 1:
@@ -86,6 +121,7 @@
 #include "cc2530_io.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <utility>
 
 namespace mcs51emu::cc2530 {
@@ -98,8 +134,8 @@ constexpr Registers UsartRegs[2] = {{0x86, 0xc1, 0xc2, 0xc4, 0xc5}, {0xf8, 0xf9,
 
 constexpr std::uint8_t CsrMode = 0x80, CsrRe = 0x40, CsrSlave = 0x20, CsrFe = 0x10, CsrErr = 0x08,
                        CsrRxByte = 0x04, CsrTxByte = 0x02, CsrActive = 0x01;
-constexpr std::uint8_t UcrFlush = 0x80, UcrFlow = 0x40, UcrBit9 = 0x10, UcrSpb = 0x04,
-                       UcrStart = 0x01;
+constexpr std::uint8_t UcrFlush = 0x80, UcrFlow = 0x40, UcrD9 = 0x20, UcrBit9 = 0x10, UcrParity = 0x08,
+                       UcrSpb = 0x04, UcrStop = 0x02, UcrStart = 0x01;
 constexpr std::uint8_t GcrCpol = 0x80, GcrCpha = 0x40, GcrOrder = 0x20;
 // Model-defined bound of the host receive queue.
 constexpr std::size_t RxQueueCapacity = 4096;
@@ -114,6 +150,15 @@ std::uint8_t reverse_bits(std::uint8_t byte) {
 
 // Bits from the start bit to the end of the first stop bit (RX complete).
 unsigned bits_to_first_stop_end(std::uint8_t ucr) { return 1 + 8 + ((ucr & UcrBit9) ? 1 : 0) + 1; }
+
+// The 9th bit a UART with `ucr` sends after the LSB-first wire byte `data`
+// (17.1.4, UxUCR D9/PARITY): parity (D9 = 1 even, 0 odd) or D9 itself.
+bool ninth_bit(std::uint8_t ucr, std::uint8_t data) {
+    if (!(ucr & UcrParity))
+        return (ucr & UcrD9) != 0;
+    const bool odd_ones = (std::popcount(data) & 1) != 0;
+    return (ucr & UcrD9) ? odd_ones : !odd_ones;
+}
 
 using PadUse = std::optional<std::optional<bool>>;
 
@@ -169,6 +214,7 @@ void Usart::reset(ResetCause) {
     rx_discard_ = false;
     rx_done_hf_ = Never;
     rx_idle_hf_ = 0;
+    rx_fe2_hf_ = Never;
     rx_data_ = 0;
     rx_pending_.reset();
     spi_pads_ = false;
@@ -180,14 +226,17 @@ void Usart::reset(ResetCause) {
     slave_tx_ = 0;
     miso_out_ = false;
     spi_slave_reset(false);
-    // The host side (spi_device_, bytes already transmitted) is kept.
+    // The host side (spi_device_, bytes and frames already transmitted,
+    // frame capture) is kept.
 }
 
 std::uint8_t Usart::read(Reg reg) {
     const Registers &r = UsartRegs[index_];
     if (reg == sfr_reg(r.csr)) {
         const std::uint8_t value = peek(reg);
-        // FE and ERR clear on a read of UxCSR (17.8).
+        // FE and ERR clear on a read of UxCSR "or bits in the UxCSR
+        // register" (17.8): byte, bit (U1CSR) and read-modify-write reads
+        // all come through here.
         bus_.storage(reg) = static_cast<std::uint8_t>(bus_.storage(reg) & ~(CsrFe | CsrErr));
         return value;
     }
@@ -248,6 +297,7 @@ void Usart::write(Reg reg, std::uint8_t value) {
             rx_active_ = false;
             rx_discard_ = false;
             rx_done_hf_ = Never;
+            rx_fe2_hf_ = Never;
             rx_queue_.clear();
         }
         if ((old & CsrRxByte) && !(csr & CsrRxByte))
@@ -294,17 +344,20 @@ void Usart::write(Reg reg, std::uint8_t value) {
 std::uint64_t Usart::deadline() const {
     const std::uint64_t tx = tx_busy_ ? bus_.hf_deadline(spi_pads_ ? spi_edge_hf() : tx_end_hf_) : Never;
     const std::uint64_t rx = rx_active_ ? bus_.hf_deadline(rx_done_hf_) : Never;
-    return std::min(tx, rx);
+    const std::uint64_t fe2 = rx_fe2_hf_ != Never ? bus_.hf_deadline(rx_fe2_hf_) : Never;
+    return std::min({tx, rx, fe2});
 }
 
 void Usart::service(std::uint64_t) {
     for (;;) {
         const std::uint64_t tx = tx_busy_ ? (spi_pads_ ? spi_edge_hf() : tx_end_hf_) : Never;
         const std::uint64_t rx = rx_active_ ? rx_done_hf_ : Never;
-        const std::uint64_t next = std::min(tx, rx);
+        const std::uint64_t next = std::min({tx, rx, rx_fe2_hf_});
         if (next == Never || next > bus_.hf_now())
             return;
-        if (tx > rx)
+        if (rx_fe2_hf_ == next)
+            rx_second_stop();
+        else if (tx > rx)
             rx_complete();
         else if (spi_pads_)
             spi_master_edge();
@@ -322,15 +375,27 @@ bool Usart::can_receive() const {
            rx_queue_.size() < RxQueueCapacity;
 }
 
-void Usart::receive(std::uint8_t byte) {
+void Usart::receive(std::uint8_t byte) { receive(Cc2530UartFrame{.data = byte}); }
+
+void Usart::receive(const Cc2530UartFrame &frame) {
     if (!can_receive())
-        return; // receiver disabled or queue full: the byte is lost
-    rx_queue_.push_back(byte);
+        return; // receiver disabled or queue full: the frame is lost
+    rx_queue_.push_back(frame);
     try_start_rx(bus_.hf_now());
     bus_.reschedule();
 }
 
 std::vector<std::uint8_t> Usart::take_transmitted() { return std::exchange(transmitted_, {}); }
+
+void Usart::set_frame_capture(bool on) {
+    capture_frames_ = on;
+    if (!on)
+        transmitted_frames_.clear();
+}
+
+std::vector<Cc2530UartFrame> Usart::take_transmitted_frames() {
+    return std::exchange(transmitted_frames_, {});
+}
 
 void Usart::set_spi_device(std::function<std::uint8_t(std::uint8_t)> device) {
     spi_device_ = std::move(device);
@@ -426,6 +491,14 @@ void Usart::try_start_tx(std::uint64_t at, bool chained) {
     tx_hold_.reset();
     tx_busy_ = true;
     tx_bits_ = is_uart ? frame_bits() : 8;
+    if (is_uart) {
+        // The 9th bit follows UxUCR at the start of the frame, like the
+        // frame length; the parity is over the data bits, whatever ORDER.
+        const std::uint8_t ucr = bus_.storage(sfr_reg(UsartRegs[index_].ucr));
+        tx_ninth_ = !(ucr & UcrBit9)        ? Cc2530UartFrame::Ninth::Expected
+                    : ninth_bit(ucr, tx_byte_) ? Cc2530UartFrame::Ninth::One
+                                               : Cc2530UartFrame::Ninth::Zero;
+    }
     tx_end_hf_ = tx_clock_.time_after(tx_bits_);
     // SPI master on the pads unless a host device takes the byte.
     spi_pads_ = !is_uart && !spi_device_;
@@ -452,7 +525,11 @@ void Usart::tx_complete() {
     const bool msb_first = bus_.storage(sfr_reg(UsartRegs[index_].gcr)) & GcrOrder;
     set_csr_bits(CsrTxByte, true);
     if (uart()) {
-        transmitted_.push_back(msb_first ? reverse_bits(tx_byte_) : tx_byte_);
+        const std::uint8_t wire = msb_first ? reverse_bits(tx_byte_) : tx_byte_;
+        transmitted_.push_back(wire);
+        // Stop bits are always sent at UxUCR.STOP: no error to report.
+        if (capture_frames_)
+            transmitted_frames_.push_back(Cc2530UartFrame{.data = wire, .ninth = tx_ninth_});
     } else if (spi_pads_) {
         rx_data_ = spi_rx_;
         bus_.storage(sfr_reg(UsartRegs[index_].dbuf)) = rx_data_;
@@ -583,8 +660,9 @@ void Usart::try_start_rx(std::uint64_t at) {
         rx_clock_.advance(rx_bits_);
     else
         rx_clock_.restart(std::max(at, rx_idle_hf_), num, den);
-    rx_byte_ = rx_queue_.front();
+    rx_frame_ = rx_queue_.front();
     rx_queue_.pop_front();
+    rx_ucr_ = ucr;
     rx_active_ = true;
     rx_discard_ = false;
     rx_bits_ = bits;
@@ -596,12 +674,45 @@ void Usart::try_start_rx(std::uint64_t at) {
 void Usart::rx_complete() {
     const bool discard = rx_discard_;
     const std::uint64_t at = rx_done_hf_;
+    const std::uint64_t frame_end = rx_idle_hf_;
     rx_active_ = false;
     rx_discard_ = false;
     rx_done_hf_ = Never;
     if (!discard) {
+        // Render the host frame in the format latched at its start bit and
+        // check it (17.1.4); see the header comment.
+        using Ninth = Cc2530UartFrame::Ninth;
+        const std::uint8_t ucr = rx_ucr_;
+        const bool stop = ucr & UcrStop;
+        std::uint8_t wire = rx_frame_.data;
+        bool parity_error = false;
+        bool slot1 = rx_frame_.stop1_error ? !stop : stop; // stop-bit slot levels
+        bool slot2 = rx_frame_.stop2_error ? !stop : stop;
+        if (rx_frame_.line_break) {
+            const bool start = ucr & UcrStart;
+            wire = start ? 0xff : 0x00;
+            slot1 = slot2 = start;
+            parity_error = (ucr & UcrBit9) && (ucr & UcrParity) && start != ninth_bit(ucr, wire);
+        } else if (ucr & UcrBit9) {
+            const bool expected = ninth_bit(ucr, wire);
+            const bool ninth = rx_frame_.ninth == Ninth::Zero  ? false
+                               : rx_frame_.ninth == Ninth::One ? true
+                               : rx_frame_.ninth == Ninth::BadParity ? !expected
+                                                                     : expected;
+            parity_error = (ucr & UcrParity) && ninth != expected;
+        } else if (rx_frame_.ninth == Ninth::Zero || rx_frame_.ninth == Ninth::One) {
+            // An 8-bit receiver samples the 9th bit as its first stop bit.
+            slot2 = slot1;
+            slot1 = rx_frame_.ninth == Ninth::One;
+        }
+        const bool framing_error = slot1 != stop;
+        if (parity_error || framing_error)
+            set_csr_bits(static_cast<std::uint8_t>((parity_error ? CsrErr : 0u) | (framing_error ? CsrFe : 0u)),
+                         true);
+        if ((ucr & UcrSpb) && slot2 != stop)
+            rx_fe2_hf_ = frame_end; // checked at the end of the second stop bit
         const bool msb_first = bus_.storage(sfr_reg(UsartRegs[index_].gcr)) & GcrOrder;
-        const std::uint8_t byte = msb_first ? reverse_bits(rx_byte_) : rx_byte_;
+        const std::uint8_t byte = msb_first ? reverse_bits(wire) : wire;
         if (bus_.storage(sfr_reg(UsartRegs[index_].csr)) & CsrRxByte)
             rx_pending_ = byte; // overrun replaces an older pending byte
         else
@@ -609,6 +720,12 @@ void Usart::rx_complete() {
     }
     // The next host byte follows on the wire right after this frame.
     try_start_rx(at);
+}
+
+// 17.1.4: a bad second stop bit sets FE one bit after the byte completed.
+void Usart::rx_second_stop() {
+    rx_fe2_hf_ = Never;
+    set_csr_bits(CsrFe, true);
 }
 
 void Usart::deliver(std::uint8_t byte) {
@@ -623,8 +740,9 @@ void Usart::deliver(std::uint8_t byte) {
 // FLUSH (17.5, drop_queue = false) or a mode change (drop_queue = true).
 // Model-defined: frames in progress stop at once (no sub-bit delay), the
 // TX data buffer and the pending RX byte are cleared, status flags are
-// kept. After FLUSH a host frame being received still occupies the wire
-// until its end and is discarded; later host bytes follow normally.
+// kept and a pending second stop-bit check is dropped. After FLUSH a host
+// frame being received still occupies the wire until its end and is
+// discarded; later host bytes follow normally.
 void Usart::abort_all(bool drop_queue) {
     tx_hold_.reset();
     tx_busy_ = false;
@@ -634,6 +752,7 @@ void Usart::abort_all(bool drop_queue) {
     slave_rx_ = 0;
     slave_loaded_ = false;
     rx_pending_.reset();
+    rx_fe2_hf_ = Never;
     if (drop_queue) {
         rx_queue_.clear();
         rx_active_ = false;

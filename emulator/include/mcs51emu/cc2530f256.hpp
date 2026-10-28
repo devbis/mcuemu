@@ -35,6 +35,28 @@ enum class Cc2530ResetCause : std::uint8_t { PowerOn = 0, External = 1, Watchdog
 // What the chip does to a pad.
 enum class Cc2530PinDrive : std::uint8_t { HiZ, Low, High, PullUp, PullDown };
 
+// One UART frame with line detail beyond the byte (SWRU191F 17.1.4): the
+// 9th bit, stop-bit errors and a break. `data` is the byte as an LSB-first
+// receiver sees it on the wire (the convention of plain host bytes). A
+// default frame is a plain byte: well formed in the receiver's format.
+struct Cc2530UartFrame {
+    enum class Ninth : std::uint8_t {
+        Expected,  // received: the 9th bit the receiver expects (parity or
+                   // D9), if it uses one; transmitted: BIT9 = 0, no 9th bit
+        Zero,      // a 9th bit of 0 on the wire
+        One,       // a 9th bit of 1 on the wire
+        BadParity, // received: the inverse of the expected 9th bit
+    };
+    std::uint8_t data{};
+    Ninth ninth{Ninth::Expected};
+    bool stop1_error{}; // the first stop bit is at the wrong level
+    bool stop2_error{}; // the second stop bit is at the wrong level
+    // Break: the line stays at the start-bit level for the whole frame.
+    // The other fields are ignored.
+    bool line_break{};
+    bool operator==(const Cc2530UartFrame &) const = default;
+};
+
 struct Cc2530RunResult {
     std::size_t instructions{};
     std::uint16_t pc{};
@@ -308,7 +330,15 @@ public:
     // USART `index` 0/1 in UART mode.
     bool uart_can_receive(unsigned index) const;
     void uart_receive(unsigned index, std::uint8_t byte);
+    // Queues a frame with an explicit 9th bit, a parity or stop-bit error or
+    // a break, in order with plain bytes; a plain frame equals uart_receive.
+    void uart_receive_frame(unsigned index, const Cc2530UartFrame &frame);
     std::vector<std::uint8_t> uart_take_transmitted(unsigned index);
+    // While on (off at construction), every transmitted UART frame is also
+    // recorded with its 9th bit for uart_take_transmitted_frames; the byte
+    // stream of uart_take_transmitted is unchanged.
+    void uart_capture_frames(unsigned index, bool on);
+    std::vector<Cc2530UartFrame> uart_take_transmitted_frames(unsigned index);
     void set_spi_device(unsigned index, std::function<std::uint8_t(std::uint8_t)> device);
     // Seeds deterministic noise sources (ADC analog noise, radio RFRND and
     // CSP RANDXY).

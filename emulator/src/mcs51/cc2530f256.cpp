@@ -1644,9 +1644,24 @@ void Cc2530F256::uart_receive(unsigned index, std::uint8_t byte) {
     soc_->usart[index]->receive(byte);
 }
 
+void Cc2530F256::uart_receive_frame(unsigned index, const Cc2530UartFrame &frame) {
+    check_usart(index);
+    soc_->usart[index]->receive(frame);
+}
+
 std::vector<std::uint8_t> Cc2530F256::uart_take_transmitted(unsigned index) {
     check_usart(index);
     return soc_->usart[index]->take_transmitted();
+}
+
+void Cc2530F256::uart_capture_frames(unsigned index, bool on) {
+    check_usart(index);
+    soc_->usart[index]->set_frame_capture(on);
+}
+
+std::vector<Cc2530UartFrame> Cc2530F256::uart_take_transmitted_frames(unsigned index) {
+    check_usart(index);
+    return soc_->usart[index]->take_transmitted_frames();
 }
 
 void Cc2530F256::set_spi_device(unsigned index,
