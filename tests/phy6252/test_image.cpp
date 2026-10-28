@@ -424,6 +424,18 @@ int main() {
     chip_flash = chip.core().host_pointer(destination, sizeof second_write);
     CHECK(chip_flash != nullptr && chip_flash[0] == 0xff && chip_flash[1] == 0xff && chip_flash[2] == 0xff);
 
+    const std::uint8_t dma_write[] = {0xa5, 0x5a};
+    const std::uint32_t flash_dma_destination = BootImage::FlashBase + 0x13020;
+    CHECK(chip.core().write_memory(source, dma_write, sizeof dma_write));
+    invoke_rom(0x1744c, flash_dma_destination, source, sizeof dma_write, 710);
+    CHECK(chip.core().reg(0) == 0);
+    auto *dma_flash = chip.core().host_pointer(flash_dma_destination, sizeof dma_write);
+    CHECK(dma_flash != nullptr && dma_flash[0] == 0xa5 && dma_flash[1] == 0x5a);
+
+    invoke_rom(0x1744c, BootImage::FlashBase + BootImage::FlashSize - 1,
+               source, 2, 720);
+    CHECK(chip.core().reg(0) == static_cast<std::uint32_t>(-22));
+
     invoke_rom(0x17394, BootImage::FlashBase + BootImage::FlashSize - 1,
                source, 2, 800);
     CHECK(chip.core().reg(0) == static_cast<std::uint32_t>(-22));

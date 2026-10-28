@@ -78,11 +78,12 @@ unverified on silicon.
 Implemented ROM entries include clock setup/query, IRQ critical-section
 helpers, eFuse read, AES-128 block encryption, OSAL heap and memory functions,
 `log_printf`, the ARM runtime memory/string functions,
-`__ARM_common_switch8`, `spif_config`, `spif_cmd`, `spif_rddata`, and the
-flash write/erase entries used by the Zephyr port. SPIF command completion is
-synchronous; status reads report WIP clear. Flash timing, write protection,
-page limits and most opcodes are not modeled. Invalid arguments return
-`-EINVAL`.
+`__ARM_common_switch8`, `spif_config`, `spif_cmd`, `spif_rddata`,
+`spif_write`, `spif_write_dma`, and sector erase. Both write calls share the
+SDK's `(address, RAM source, byte count)` contract and program flash with NOR
+1-to-0 semantics. SPIF command completion is synchronous; status reads report
+WIP clear. Flash timing, write protection, page limits and most opcodes are not
+modeled. Invalid arguments return `-EINVAL`.
 
 The eFuse shim covers only block 1 and supplies RF cap bytes `0x2b,0x23` from
 the user's sample log, with zeros for the remaining six bytes. The current
@@ -160,15 +161,20 @@ hardware-verified.
 
 The supplied run prints `Stack Init`, initializes the Zigbee stack, creates the
 application tasks and prints `zb_app_task_init`. The GPIO callback now runs and
-the key/timer initialization proceeds. Execution next reaches the unimplemented
-ROM symbol `spif_write_dma` at `0x0001744c` (the Thumb symbol is `0x0001744d`),
-with a write into the printed NVM area `0x11079000..0x1107efff`. No Zigbee
-frames have been emitted by this image yet. The earlier HardFault was caused
-by a synthetic GPIO level interrupt before callback registration, not by the
-PendSV stack path; a Cortex-M0 regression case that pends PendSV from Thread
-mode on PSP with a valid vector table passes and keeps its exception frame on
-PSP. The earlier `VTOR=0x1fff8b00` emulation selected an invalid RAM vector
-table and caused a misleading HardFault; that is not the current failure.
+the key/timer initialization proceeds. Execution reaches ROM symbol
+`spif_write_dma` at `0x0001744c` (the Thumb symbol is `0x0001744d`), writing into
+the printed NVM area `0x11079000..0x1107efff`. With the DMA write modeled, the
+image proceeds to restore network state 12, then reaches ROM `HardFault_Handler`
+at `0x000028f0`; the captured exception frame has PC zero and the preceding
+image instruction is `0x110201e2`. The cause remains unknown. A `run` invocation
+has no shared radio medium and a TS0001 pcap scenario has not yet been
+completed, so join and relay behavior remain unverified. The earlier HardFault
+was caused by a synthetic GPIO level interrupt before callback registration,
+not by the PendSV stack path; a Cortex-M0 regression case that pends PendSV
+from Thread mode on PSP with a valid vector table passes and keeps its
+exception frame on PSP. The earlier `VTOR=0x1fff8b00` emulation selected an
+invalid RAM vector table and caused a misleading HardFault; that is not the
+current failure.
 
 ## Firmware evidence
 
@@ -186,11 +192,11 @@ The supplied binary contains the Zigbee and FreeRTOS executable image, and the
 emulator reaches its Zigbee stack initialization path. It also passes three
 observed CRC-checked copy blocks and prints the NVM range
 `0x11079000..0x1107efff`. It still reports `tpCap[00 00]` instead of the
-reference log's `tpCap[2b 23]`. The emulator now reaches a flash NVM write
-through `spif_write_dma`, but that ROM call is not yet implemented and the
-image has not produced radio traffic. Joining and relay commands remain
-unverified. Do not claim TS0001 relay support until it starts, joins, and
-exchanges Zigbee traffic in a captured network scenario.
+reference log's `tpCap[2b 23]`. The emulator runs past the `spif_write_dma`
+NVM update and logs restoration of network state 12, then reaches
+`HardFault_Handler`. No TS0001 pcap scenario has been completed. Joining and
+relay commands remain unverified. Do not claim TS0001 relay support until it
+starts, joins, and exchanges Zigbee traffic in a captured network scenario.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables

@@ -904,7 +904,9 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             } else {
                 core_.set_reg(0, static_cast<std::uint32_t>(-22));
             }
-        } else if (address == 0x17394) {
+        } else if (address == 0x17394 || address == 0x1744c) {
+            // SDK ROM spif_write()/spif_write_dma() share the same destination,
+            // RAM source and byte-count contract.
             rom_flash_write();
         } else if (address == 0x16fa8) {
             rom_flash_erase();
