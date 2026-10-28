@@ -198,8 +198,13 @@ NWK frames. This is an emulator-to-emulator result, not a hardware comparison.
 The runnable system is `examples/phy6252-zephyr.yaml`; its image remains a
 local input under `firmware/`.
 
+The TS0001 dump contains Zigbee and FreeRTOS code, including retained source
+path strings for the Zigbee LMAC, PHY62 radio driver and OS task sources. The
+public PHY62XX SDK package has no `components/zigbee` source tree, so the image
+is the available source of evidence for that stack's runtime behavior.
+
 The user-supplied TS0001 log shows startup through `Stack Init`,
-`Zigbe stack initialized`, restoration of network state 12 and Tuya reports.
+`Zigbee stack initialized`, restoration of network state 12 and Tuya reports.
 The supplied binary contains the Zigbee and FreeRTOS executable image, and the
 emulator reaches its Zigbee stack initialization path. It also passes three
 observed CRC-checked copy blocks and prints the NVM range
@@ -219,8 +224,12 @@ GPIO8 reached ROM `set_timer` for Timer1, dispatched its registered callback,
 and read RF register `0x400300e8`; the model returns the virtual-air RSSI
 sample there because this SDK package does not document the register. The
 image then ran through a 15 s simulation without a CPU fault, but still sent
-no Zigbee frames. The cleared-NVM copy and all other firmware images remain
-external test inputs.
+no Zigbee frames. A temporary MMIO trace found no later TS0001 TX FIFO writes
+or link-layer TX/RX commands after its BDB request; only coordinator frames
+were present in the pcap. The trace narrows the next investigation to the
+commissioning-to-PHY path, but does not establish whether the missing step is
+commissioning state or a radio contract. The cleared-NVM copy and all other
+firmware images remain external test inputs.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
