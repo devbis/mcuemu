@@ -91,6 +91,70 @@ struct Cc2530Registers {
     int posted_source{-1};
 };
 
+// ---- Flash fault model (docs/cc2530.md "Flash fault injection") ----
+// SWRU191F 6.2.2 multiple-write limits since the last page erase (a 0 written
+// at most twice to a bit, a 32-bit word written at most 8 times, a page at
+// most 1024 times; otherwise "any bit of a 32-bit flash word" becomes
+// nondeterministic). Report: violations are only counted, programming stays a
+// deterministic AND. Nondeterministic: model-defined fault injection, a
+// violating word takes a seeded pseudo-random value (not hardware-accurate).
+enum class Cc2530FlashLimitPolicy : std::uint8_t { Report, Nondeterministic };
+// Result of a page erase or word write cut by a reset or a power cut.
+// SWRU191F does not specify it; every outcome is model-defined. Abandon: no
+// flash change. Partial: a seeded subset of the bits the operation changes
+// lands, in proportion to the elapsed fraction of the operation time.
+// Complete: the full effect is applied.
+enum class Cc2530FlashInterrupted : std::uint8_t { Abandon, Partial, Complete };
+struct Cc2530FlashFaultConfig {
+    Cc2530FlashLimitPolicy limit_policy{Cc2530FlashLimitPolicy::Report};
+    Cc2530FlashInterrupted interrupted{Cc2530FlashInterrupted::Abandon};
+    // Seeds every pseudo-random outcome (same seed, same results).
+    std::uint64_t seed{0};
+    // SRAM content after a power-on reset or power cut (SWRU191F leaves it
+    // undefined); nullopt: seeded pseudo-random bytes.
+    std::optional<std::uint8_t> sram_fill{std::uint8_t{0}};
+    // Record every flash operation in Cc2530F256::flash_log().
+    bool log{false};
+};
+enum class Cc2530FlashOpKind : std::uint8_t { PageErase, WordWrite, ChipErase };
+enum class Cc2530FlashOutcome : std::uint8_t {
+    Completed, // effect applied when the operation time elapsed
+    Aborted,   // page locked: FCTL.ABORT, no effect
+    Abandoned, // cut: no effect
+    Partial,   // cut: a seeded subset of the bits changed
+    Forced,    // cut: full effect applied
+};
+// What ended an operation before its time.
+enum class Cc2530FlashCut : std::uint8_t { None, Reset, PowerCut };
+// 6.2.2 limits broken by a word write (Cc2530FlashLogEntry::violations).
+inline constexpr std::uint8_t Cc2530FlashBitLimit = 0x01;  // 3rd+ 0-write to a bit
+inline constexpr std::uint8_t Cc2530FlashWordLimit = 0x02; // 9th+ write to a word
+inline constexpr std::uint8_t Cc2530FlashPageLimit = 0x04; // 1025th+ write to a page
+struct Cc2530FlashLogEntry {
+    std::uint64_t cycle{}; // virtual time at which the outcome was decided
+    Cc2530FlashOpKind op{};
+    std::uint32_t address{}; // physical byte address (page start for an erase)
+    unsigned page{};
+    Cc2530FlashOutcome outcome{};
+    Cc2530FlashCut cut{};
+    Cc2530ResetCause reset_cause{}; // for cut == Reset
+    std::uint64_t elapsed_cycles{}; // operation time that had elapsed
+    std::uint32_t changed_bits{};   // flash bits the operation changed
+    std::uint8_t violations{};      // Cc2530Flash*Limit bits
+};
+enum class Cc2530FaultAction : std::uint8_t { PowerCut, Reset };
+enum class Cc2530FlashOpFilter : std::uint8_t { Any, Erase, Write };
+// Fires `action` `delay_cycles` of HF time after the start of the nth page
+// erase or word write (counted from when the trigger is added, locked pages
+// excluded) that matches `op` and `page`. Fires once.
+struct Cc2530FlashTrigger {
+    Cc2530FlashOpFilter op{Cc2530FlashOpFilter::Any};
+    std::uint64_t nth{1};
+    std::optional<unsigned> page;
+    std::uint64_t delay_cycles{0};
+    Cc2530FaultAction action{Cc2530FaultAction::PowerCut};
+};
+
 // Counters for accesses the model accepts but does not emulate, so a run can
 // show which unmodeled hardware the firmware touched.
 struct Cc2530Diagnostics {
@@ -142,6 +206,19 @@ struct Cc2530Diagnostics {
     std::map<std::uint16_t, std::uint64_t> unmodeled_feature_reads;
     std::map<std::uint16_t, std::uint64_t> unmodeled_feature_writes;
     std::vector<std::string> load_warnings;
+    // Flash (SWRU191F 6): erases applied in full and word writes applied
+    // (also partially) per 2 KiB page, operations cut by a reset or power
+    // cut (any outcome), and word writes breaking each 6.2.2 limit.
+    std::array<std::uint64_t, 128> flash_page_erases{};
+    std::array<std::uint64_t, 128> flash_page_writes{};
+    std::uint64_t flash_interrupted_erases{};
+    std::uint64_t flash_interrupted_writes{};
+    std::uint64_t flash_bit_limit_violations{};
+    std::uint64_t flash_word_limit_violations{};
+    std::uint64_t flash_page_limit_violations{};
+    // Power cuts (power_cut(), scheduled or triggered) and the last one's time.
+    std::uint64_t power_cuts{};
+    std::uint64_t last_power_cut_cycle{};
 };
 
 // TI CC2530F256 SoC around the generic Unicorn MCS-51 core (SWRU191F).
@@ -216,8 +293,10 @@ public:
     void load_flash(std::uint32_t address, const std::vector<std::uint8_t> &image);
 
     // Power-on reset: virtual time and SRAM cleared (SRAM power-on content is
-    // undefined), then a reset. reset() keeps SRAM content and virtual time,
-    // like a watchdog or external reset (SLEEPSTA.RST = 01).
+    // undefined; the model fills it with flash_fault_config().sram_fill, 0 by
+    // default), then a reset. A flash operation in flight ends with the
+    // configured interrupted outcome. reset() keeps SRAM content and virtual
+    // time, like a watchdog or external reset (SLEEPSTA.RST = 01).
     void power_on_reset();
     void reset();
 
@@ -346,6 +425,33 @@ public:
     // Connects the IEEE 802.15.4 radio to a shared air as node `node`.
     // Virtual time maps to air time as ns = ns_offset + cycles * 1000 / 32.
     void attach_air(mcuemu::VirtualAir &air, std::string node, std::uint64_t ns_offset = 0);
+
+    // ---- flash fault model (docs/cc2530.md "Flash fault injection") ----
+    // Kept across loads and resets.
+    void set_flash_fault_config(const Cc2530FlashFaultConfig &config);
+    const Cc2530FlashFaultConfig &flash_fault_config() const;
+    // Power cut now (between runs): a flash operation in flight ends with
+    // the configured interrupted outcome, SRAM takes the power-on fill, then
+    // a power-on reset (SLEEPSTA.RST = 00, SWRU191F 4.3). Flash, the info
+    // page and virtual time are kept (the supply returns at once).
+    void power_cut();
+    // Power cut at the first instruction boundary at which cycles >=
+    // `at_cycle`, in every power mode. Survives resets.
+    void schedule_power_cut(std::uint64_t at_cycle);
+    // Arms a flash-event trigger (see Cc2530FlashTrigger). Survives resets.
+    void add_flash_trigger(const Cc2530FlashTrigger &trigger);
+    // Scheduled power cuts and armed triggers that have not fired yet.
+    std::size_t pending_power_faults() const;
+    // Flash operations recorded while flash_fault_config().log is set;
+    // take_flash_log() hands them over and clears the log.
+    const std::vector<Cc2530FlashLogEntry> &flash_log() const;
+    std::vector<Cc2530FlashLogEntry> take_flash_log();
+    // The whole 256 KiB physical flash (for saving it across runs).
+    const std::vector<std::uint8_t> &flash_image() const noexcept { return flash_; }
+    // Replaces the whole flash with a saved image (exactly FlashSize bytes)
+    // and performs a power-on reset; diagnostics restart, load_warnings are
+    // kept.
+    void restore_flash(const std::vector<std::uint8_t> &image);
     // Internal peripheral objects (src/mcs51/cc2530_*.hpp), for white-box
     // tests and the system layer.
     cc2530::Soc &peripherals() noexcept { return *soc_; }
@@ -421,6 +527,8 @@ private:
     bool engine_inhibit() const;
     void reset_core(Cc2530ResetCause cause);
     void create_peripherals();
+    void request_power_fault(Cc2530FaultAction action);
+    void power_on_sram_fill();
 
     uc_struct *uc_{};
     std::size_t code_hook_{};
@@ -455,6 +563,8 @@ private:
     std::uint64_t hf_stopped_{}; // completed time in PM1-PM3
     std::uint64_t lf_stopped_{}; // completed time in PM3
     std::optional<Cc2530ResetCause> pending_reset_;
+    // The pending reset is a power cut (power_cut() at the boundary).
+    bool pending_power_cut_{};
     std::uint64_t stall_until_{};
     std::uint64_t fast_event_stop_{UINT64_MAX};
 

@@ -171,6 +171,15 @@ int run_cc2530(const Cc2530Options &options) {
     for (const auto &[address, count] : diag.unmodeled_xreg_writes)
         std::cout << "unmodeled-xreg-write: 0x" << std::hex << address << std::dec
                   << " x" << count << '\n';
+    // Only when something happened, so ordinary runs print what they did before.
+    if (diag.flash_bit_limit_violations || diag.flash_word_limit_violations ||
+        diag.flash_page_limit_violations)
+        std::cout << "flash-limit-violations: bit=" << diag.flash_bit_limit_violations
+                  << " word=" << diag.flash_word_limit_violations
+                  << " page=" << diag.flash_page_limit_violations << '\n';
+    if (diag.flash_interrupted_erases || diag.flash_interrupted_writes)
+        std::cout << "flash-interrupted: erases=" << diag.flash_interrupted_erases
+                  << " writes=" << diag.flash_interrupted_writes << '\n';
     if (options.state) {
         std::cout << "core: A=0x" << std::hex << unsigned(regs.a) << " B=0x"
                   << unsigned(regs.b) << " PSW=0x" << unsigned(regs.psw) << " SP=0x"

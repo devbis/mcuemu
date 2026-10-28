@@ -547,6 +547,8 @@ void Cc2530F256::create_peripherals() {
     soc_->usart[1] = add(std::make_unique<cc2530::Usart>(bus, 1));
     soc_->dma = add(std::make_unique<cc2530::Dma>(bus));
     soc_->flash = add(std::make_unique<cc2530::FlashController>(bus));
+    soc_->flash->bind(diagnostics_,
+                      [this](Cc2530FaultAction action) { request_power_fault(action); });
     soc_->aes = add(std::make_unique<cc2530::Aes>(bus));
     soc_->radio = add(std::make_unique<cc2530::Radio>(bus));
 }
@@ -566,6 +568,7 @@ void Cc2530F256::check_error(int error, const char *operation) const {
 void Cc2530F256::load_firmware(const std::string &path) {
     const FlashImage image = load_firmware_file(path);
     diagnostics_ = {};
+    soc_->flash->flash_replaced();
     flash_ = image.bytes;
     bool reserved = false;
     bool lock = false;
@@ -591,6 +594,7 @@ void Cc2530F256::load_flash(std::uint32_t address, const std::vector<std::uint8_
     if (address > FlashSize || image.size() > FlashSize - address)
         throw std::out_of_range("image exceeds the 256 KiB flash");
     diagnostics_ = {};
+    soc_->flash->flash_replaced();
     std::fill(flash_.begin(), flash_.end(), 0xff);
     std::copy(image.begin(), image.end(), flash_.begin() + address);
     rebuild_views();
@@ -607,10 +611,14 @@ void Cc2530F256::rebuild_views() {
 }
 
 void Cc2530F256::power_on_reset() {
-    // SRAM content is undefined at power-on; the model makes it zero so runs
-    // are deterministic. Virtual time restarts first so peripherals reset at
+    // The supply went away: a flash operation in flight gets its interrupted
+    // outcome while virtual time still shows the cut.
+    soc_->flash->interrupt_operation(Cc2530FlashCut::PowerCut, Cc2530ResetCause::PowerOn);
+    // SRAM content is undefined at power-on; the model fills it with the
+    // configured byte (0 by default) or seeded bytes so runs are
+    // deterministic. Virtual time restarts first so peripherals reset at
     // cycle 0.
-    std::fill_n(sram_, SramSize, 0);
+    power_on_sram_fill();
     power_mode_ = requested_mode_ = Cc2530PowerMode::Active; // time restarts below
     auto *engine = reinterpret_cast<uc_engine *>(uc_);
     const std::uint64_t zero = 0;
@@ -619,6 +627,7 @@ void Cc2530F256::power_on_reset() {
                 "reset instruction counter");
     hf_stopped_ = 0;
     lf_stopped_ = 0;
+    soc_->flash->time_restarted();
     reset_core(Cc2530ResetCause::PowerOn);
 }
 
@@ -629,6 +638,10 @@ void Cc2530F256::reset() {
 bool Cc2530F256::apply_pending_reset() {
     if (!pending_reset_)
         return false;
+    if (pending_power_cut_) {
+        power_cut();
+        return true;
+    }
     const Cc2530ResetCause cause = *pending_reset_;
     reset_core(cause);
     return true;
@@ -636,6 +649,9 @@ bool Cc2530F256::apply_pending_reset() {
 
 void Cc2530F256::reset_core(Cc2530ResetCause cause) {
     auto *engine = reinterpret_cast<uc_engine *>(uc_);
+    // A flash operation in flight ends with the configured interrupted
+    // outcome (no-op after power_cut(), which ended it already).
+    soc_->flash->interrupt_operation(Cc2530FlashCut::Reset, cause);
     const std::uint64_t now = engine_cycles();
     // A reset in PM1-PM3 ends the power mode: close the clock-domain books.
     if (power_mode_ != Cc2530PowerMode::Active) {
@@ -648,6 +664,7 @@ void Cc2530F256::reset_core(Cc2530ResetCause cause) {
     }
     power_mode_ = requested_mode_ = Cc2530PowerMode::Active;
     pending_reset_.reset();
+    pending_power_cut_ = false;
     stall_until_ = 0;
     ++diagnostics_.resets_by_cause[static_cast<unsigned>(cause)];
     const auto reset_cause = static_cast<std::uint8_t>(cause);
@@ -1678,6 +1695,86 @@ void Cc2530F256::set_noise_seed(std::uint64_t seed) {
 void Cc2530F256::attach_air(mcuemu::VirtualAir &air, std::string node,
                             std::uint64_t ns_offset) {
     soc_->radio->attach_air(air, std::move(node), ns_offset);
+}
+
+// ---- flash fault model (docs/cc2530.md "Flash fault injection") ----
+
+void Cc2530F256::set_flash_fault_config(const Cc2530FlashFaultConfig &config) {
+    soc_->flash->configure(config);
+}
+
+const Cc2530FlashFaultConfig &Cc2530F256::flash_fault_config() const {
+    return soc_->flash->config();
+}
+
+void Cc2530F256::power_cut() {
+    // Model-defined power cut: the supply drops and returns at once. The
+    // flash operation in flight gets its interrupted outcome, SRAM loses its
+    // content (power_on_sram_fill), flash, the info page and virtual time
+    // are kept, and the chip comes out of a power-on reset (SLEEPSTA.RST =
+    // 00, "Power-on reset and brownout detection", SWRU191F 4.3).
+    soc_->flash->interrupt_operation(Cc2530FlashCut::PowerCut, Cc2530ResetCause::PowerOn);
+    power_on_sram_fill();
+    ++diagnostics_.power_cuts;
+    diagnostics_.last_power_cut_cycle = engine_cycles();
+    reset_core(Cc2530ResetCause::PowerOn);
+}
+
+void Cc2530F256::schedule_power_cut(std::uint64_t at_cycle) {
+    soc_->flash->schedule_power_cut(at_cycle);
+}
+
+void Cc2530F256::add_flash_trigger(const Cc2530FlashTrigger &trigger) {
+    soc_->flash->add_trigger(trigger);
+}
+
+std::size_t Cc2530F256::pending_power_faults() const { return soc_->flash->pending_faults(); }
+
+const std::vector<Cc2530FlashLogEntry> &Cc2530F256::flash_log() const {
+    return soc_->flash->log();
+}
+
+std::vector<Cc2530FlashLogEntry> Cc2530F256::take_flash_log() { return soc_->flash->take_log(); }
+
+void Cc2530F256::restore_flash(const std::vector<std::uint8_t> &image) {
+    if (image.size() != FlashSize)
+        throw std::invalid_argument("flash image must be exactly 256 KiB");
+    std::vector<std::string> warnings = std::move(diagnostics_.load_warnings);
+    diagnostics_ = {};
+    diagnostics_.load_warnings = std::move(warnings);
+    soc_->flash->flash_replaced();
+    flash_ = image;
+    rebuild_views();
+    power_on_reset();
+}
+
+void Cc2530F256::request_power_fault(Cc2530FaultAction action) {
+    if (action == Cc2530FaultAction::PowerCut) {
+        // Overrides any other pending reset: the power cut includes one.
+        pending_reset_ = Cc2530ResetCause::PowerOn;
+        pending_power_cut_ = true;
+        uc_emu_stop(reinterpret_cast<uc_engine *>(uc_));
+    } else {
+        bus_->request_reset(Cc2530ResetCause::External);
+    }
+}
+
+void Cc2530F256::power_on_sram_fill() {
+    const Cc2530FlashFaultConfig &config = soc_->flash->config();
+    if (config.sram_fill) {
+        std::fill_n(sram_, SramSize, *config.sram_fill);
+        return;
+    }
+    // Model-defined seeded content; the stream changes with every power-on
+    // reset since the load so successive power cuts differ.
+    constexpr std::uint64_t SramStream = 0x5352414d'00000000ull;
+    const std::uint64_t stream =
+        SramStream + diagnostics_.resets_by_cause[static_cast<unsigned>(Cc2530ResetCause::PowerOn)];
+    for (std::uint32_t i = 0; i < SramSize; i += 8) {
+        const std::uint64_t value = cc2530::fault_draw(config.seed, stream, i / 8);
+        for (unsigned j = 0; j < 8 && i + j < SramSize; ++j)
+            sram_[i + j] = static_cast<std::uint8_t>(value >> (8 * j));
+    }
 }
 
 std::uint16_t Cc2530F256::pc() const {

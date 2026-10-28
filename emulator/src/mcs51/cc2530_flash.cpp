@@ -17,9 +17,20 @@
 //   when not in debug mode (the debug interface is not modeled, so always).
 //   A locked page aborts the operation (FCTL.ABORT = 1).
 // - Effects are applied deterministically at the completion of the erase /
-//   word write; a reset or power loss before that abandons the operation
-//   (a partially erased/written flash after power loss is not modeled).
+//   word write. A reset or power cut before that ends the operation with the
+//   configured model-defined outcome (SWRU191F does not specify it):
+//   abandon (default, no flash change), partial (a seeded subset of the bits
+//   the operation changes lands, in proportion to the elapsed fraction of
+//   the 20 ms / 20 us operation time) or complete.
 // - The CPU stalls while executing from flash during an operation (6.3.1).
+// - 6.2.2 multiple-write limits since the last page erase: a 0 written at
+//   most twice to a bit, a 32-bit word written at most 8 times, a page at
+//   most 1024 times. Violations are counted per word write; the default
+//   policy keeps the deterministic AND, the model-defined `nondeterministic`
+//   policy gives the violating word a seeded pseudo-random value.
+// - Fault injection: power cuts at a virtual time and triggers on the nth
+//   erase / word write; per-page erase and write counters and an optional
+//   operation log (docs/cc2530.md "Flash fault injection").
 //
 // All internal times are HF-clock times; the events are processed by
 // Dma::advance() so the FLASH DMA trigger and DMA writes to FWDATA
@@ -32,6 +43,8 @@
 #include "mcs51emu/cc2530f256.hpp"
 
 #include <algorithm>
+#include <bit>
+#include <stdexcept>
 
 namespace mcs51emu::cc2530 {
 
@@ -57,7 +70,34 @@ constexpr std::uint32_t PageSize = 2048;                       // 6.1
 constexpr unsigned PageCount = Cc2530F256::FlashSize / PageSize; // 128
 constexpr unsigned WordsPerPage = PageSize / 4;
 
+// SWRU191F 6.2.2 limits since the last page erase.
+constexpr unsigned MaxZeroWritesPerBit = 2;
+constexpr unsigned MaxWritesPerWord = 8;
+constexpr std::uint32_t MaxWritesPerPage = 1024;
+
+// Draw index of the nondeterministic word value; indices 0-31 are the
+// per-bit draws of a partial word write with the same operation serial.
+constexpr std::uint64_t NondeterministicIndex = 32;
+
+std::uint64_t mix(std::uint64_t x) {
+    x += 0x9e3779b97f4a7c15ull;
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ull;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
+    return x ^ (x >> 31);
+}
+
+std::uint32_t load_word(const std::vector<std::uint8_t> &flash, std::uint32_t begin) {
+    return static_cast<std::uint32_t>(flash[begin]) |
+           static_cast<std::uint32_t>(flash[begin + 1]) << 8 |
+           static_cast<std::uint32_t>(flash[begin + 2]) << 16 |
+           static_cast<std::uint32_t>(flash[begin + 3]) << 24;
+}
+
 } // namespace
+
+std::uint64_t fault_draw(std::uint64_t seed, std::uint64_t stream, std::uint64_t index) {
+    return mix(mix(seed ^ mix(stream)) + index);
+}
 
 FlashController::FlashController(Bus &bus) : Peripheral(bus) {
     for (Reg reg = RegFctl; reg <= RegFwdata; ++reg)
@@ -66,7 +106,10 @@ FlashController::FlashController(Bus &bus) : Peripheral(bus) {
 
 void FlashController::reset(ResetCause) {
     // 6.5 reset values: FCTL = 0x04 (CM = 01), FADDRH/L = FWDATA = 0. Flash
-    // contents are kept by the core; an operation in progress is abandoned.
+    // contents are kept by the core; an operation in progress has already
+    // been given its interrupted outcome (interrupt_operation()). The fault
+    // model state (configuration, 6.2.2 tracking, scheduled cuts, triggers,
+    // log) is kept: it is not chip state.
     op_ = Op::None;
     write_after_erase_ = false;
     erase_end_ = 0;
@@ -153,9 +196,18 @@ void FlashController::write(Reg reg, std::uint8_t value) {
     bus_.storage(RegFctl) = peek(RegFctl);
 }
 
-std::uint64_t FlashController::deadline() const { return bus_.hf_deadline(next_event()); }
+std::uint64_t FlashController::deadline() const {
+    // The fault deadlines stay out of next_event(): Dma::advance() only
+    // processes the controller's own operation events.
+    return std::min(bus_.hf_deadline(next_event()), fault_deadline());
+}
 
-void FlashController::service(std::uint64_t) { bus_.soc().dma->advance(bus_.hf_now()); }
+void FlashController::service(std::uint64_t now) {
+    // Operation events first: an operation ending at the very cycle of a cut
+    // completes.
+    bus_.soc().dma->advance(bus_.hf_now());
+    fire_due_faults(now);
+}
 
 void FlashController::power_mode_changed(PowerMode, PowerMode to) {
     // 6.2.1 / 6.3: "Power mode 1, 2, or 3 must not be entered while writing
@@ -237,22 +289,33 @@ void FlashController::start_erase(std::uint64_t at, bool then_write) {
         // Model-defined: an aborted erase (and the write that would follow
         // it) ends at once with ABORT = 1, BUSY = ERASE = WRITE = 0.
         abort_ = true;
+        ++op_serial_;
+        log_op(at, Cc2530FlashOpKind::PageErase, page * PageSize, Cc2530FlashOutcome::Aborted,
+               Cc2530FlashCut::None, ResetCause::PowerOn, 0, 0, 0);
         return;
     }
     op_ = Op::Erase;
     erase_page_ = page;
     write_after_erase_ = then_write;
     erase_end_ = at + PageEraseCycles;
+    erase_serial_ = ++op_serial_;
     stall_if_executing_from_flash(erase_end_);
+    op_started(Cc2530FlashOpKind::PageErase, page, at);
 }
 
 void FlashController::finish_erase(std::uint64_t at) {
     // Model-defined: the page is latched when the erase starts.
     const std::uint32_t begin = erase_page_ * PageSize;
     std::vector<std::uint8_t> &flash = bus_.flash();
+    std::uint32_t changed = 0;
+    for (std::uint32_t i = begin; i < begin + PageSize; ++i)
+        changed += static_cast<std::uint32_t>(std::popcount(static_cast<std::uint8_t>(~flash[i])));
     std::fill(flash.begin() + begin, flash.begin() + begin + PageSize, 0xff);
     bus_.flash_changed(begin, begin + PageSize);
     op_ = Op::None;
+    erase_applied(erase_page_, 1);
+    log_op(at, Cc2530FlashOpKind::PageErase, begin, Cc2530FlashOutcome::Completed,
+           Cc2530FlashCut::None, ResetCause::PowerOn, PageEraseCycles, changed, 0);
     const bool then_write = write_after_erase_;
     write_after_erase_ = false;
     // 6.3: "the page erase is performed before the page-write operation
@@ -282,6 +345,9 @@ void FlashController::start_word(std::uint64_t at, const std::uint8_t *data) {
         // to the page being locked, FCTL.BUSY (and FCTL.WRITE) are 0 and
         // FCTL.ABORT is 1."
         abort_ = true;
+        ++op_serial_;
+        log_op(at, Cc2530FlashOpKind::WordWrite, static_cast<std::uint32_t>(address) * 4,
+               Cc2530FlashOutcome::Aborted, Cc2530FlashCut::None, ResetCause::PowerOn, 0, 0, 0);
         end_write();
         return;
     }
@@ -289,18 +355,21 @@ void FlashController::start_word(std::uint64_t at, const std::uint8_t *data) {
     program_address_ = address;
     std::copy(data, data + 4, program_data_);
     program_end_ = at + WordWriteCycles;
+    program_serial_ = ++op_serial_;
     // FULL is 0 again: the next four bytes are due within 20 us (6.2.1).
     window_end_ = program_end_;
     stall_if_executing_from_flash(program_end_);
+    op_started(Cc2530FlashOpKind::WordWrite, address / WordsPerPage, at);
     request_data();
 }
 
 void FlashController::finish_word(std::uint64_t at) {
-    std::vector<std::uint8_t> &flash = bus_.flash();
-    const std::uint32_t begin = static_cast<std::uint32_t>(program_address_) * 4;
-    for (unsigned i = 0; i < 4; ++i)
-        flash[begin + i] = static_cast<std::uint8_t>(flash[begin + i] & program_data_[i]);
-    bus_.flash_changed(begin, begin + 4);
+    std::uint32_t changed = 0;
+    const std::uint8_t violations =
+        program_word(program_address_, program_data_, program_serial_, WordWriteCycles, changed);
+    log_op(at, Cc2530FlashOpKind::WordWrite, static_cast<std::uint32_t>(program_address_) * 4,
+           Cc2530FlashOutcome::Completed, Cc2530FlashCut::None, ResetCause::PowerOn,
+           WordWriteCycles, changed, violations);
     programming_ = false;
     // 6.2: words are programmed serially from the start address.
     // Model-defined: FADDRH:FADDRL increments (16-bit) when a word is done.
@@ -319,6 +388,284 @@ void FlashController::end_write() {
     programming_ = false;
     full_ = false;
     buffered_ = 0;
+}
+
+// ---- fault model ----
+
+void FlashController::bind(Cc2530Diagnostics &diagnostics,
+                           std::function<void(Cc2530FaultAction)> request) {
+    diagnostics_ = &diagnostics;
+    request_fault_ = std::move(request);
+}
+
+void FlashController::interrupt_operation(Cc2530FlashCut cut, ResetCause cause) {
+    // SWRU191F does not say what a reset or power loss leaves in a page being
+    // erased or a word being programmed (6.2.1 / 6.3 only forbid entering
+    // PM1-PM3). Model-defined outcomes, see Cc2530FlashInterrupted. A write
+    // sequence waiting for FWDATA bytes has no flash operation in flight; a
+    // buffered (FULL) word and the write phase of ERASE+WRITE never start.
+    if (op_ == Op::None || (op_ == Op::Write && !programming_))
+        return;
+    const std::uint64_t hf = bus_.hf_now();
+    const Cc2530FlashInterrupted mode = config_.interrupted;
+    std::vector<std::uint8_t> &flash = bus_.flash();
+    std::uint32_t changed = 0;
+    if (op_ == Op::Erase) {
+        ++diagnostics_->flash_interrupted_erases;
+        const std::uint64_t start = erase_end_ - PageEraseCycles;
+        const std::uint64_t elapsed = std::min(hf - std::min(hf, start), PageEraseCycles);
+        const std::uint32_t begin = erase_page_ * PageSize;
+        Cc2530FlashOutcome outcome = Cc2530FlashOutcome::Abandoned;
+        if (mode == Cc2530FlashInterrupted::Partial) {
+            // Model-defined: every 0 bit of the page (bit index b = 8 * byte
+            // offset + bit) is erased to 1 when draw(seed, erase serial, b)
+            // mod 20 ms < elapsed, i.e. with probability elapsed / 20 ms.
+            for (std::uint32_t i = 0; i < PageSize; ++i) {
+                std::uint8_t byte = flash[begin + i];
+                for (unsigned bit = 0; bit < 8; ++bit) {
+                    if (byte & (1u << bit))
+                        continue;
+                    if (fault_draw(config_.seed, erase_serial_, i * 8u + bit) % PageEraseCycles <
+                        elapsed) {
+                        byte = static_cast<std::uint8_t>(byte | (1u << bit));
+                        ++changed;
+                    }
+                }
+                flash[begin + i] = byte;
+            }
+            bus_.flash_changed(begin, begin + PageSize);
+            // A partial erase is no erase: the 6.2.2 tracking goes on.
+            outcome = Cc2530FlashOutcome::Partial;
+        } else if (mode == Cc2530FlashInterrupted::Complete) {
+            for (std::uint32_t i = begin; i < begin + PageSize; ++i)
+                changed += static_cast<std::uint32_t>(
+                    std::popcount(static_cast<std::uint8_t>(~flash[i])));
+            std::fill(flash.begin() + begin, flash.begin() + begin + PageSize, 0xff);
+            bus_.flash_changed(begin, begin + PageSize);
+            erase_applied(erase_page_, 1);
+            outcome = Cc2530FlashOutcome::Forced;
+        }
+        log_op(hf, Cc2530FlashOpKind::PageErase, begin, outcome, cut, cause, elapsed, changed, 0);
+    } else {
+        ++diagnostics_->flash_interrupted_writes;
+        const std::uint64_t start = program_end_ - WordWriteCycles;
+        const std::uint64_t elapsed = std::min(hf - std::min(hf, start), WordWriteCycles);
+        Cc2530FlashOutcome outcome = Cc2530FlashOutcome::Abandoned;
+        std::uint8_t violations = 0;
+        if (mode == Cc2530FlashInterrupted::Partial) {
+            violations =
+                program_word(program_address_, program_data_, program_serial_, elapsed, changed);
+            outcome = Cc2530FlashOutcome::Partial;
+        } else if (mode == Cc2530FlashInterrupted::Complete) {
+            violations = program_word(program_address_, program_data_, program_serial_,
+                                      WordWriteCycles, changed);
+            outcome = Cc2530FlashOutcome::Forced;
+        }
+        log_op(hf, Cc2530FlashOpKind::WordWrite, static_cast<std::uint32_t>(program_address_) * 4,
+               outcome, cut, cause, elapsed, changed, violations);
+    }
+    // The operation is over; reset() clears the rest of the controller state.
+    op_ = Op::None;
+    write_after_erase_ = false;
+    programming_ = false;
+    full_ = false;
+    buffered_ = 0;
+}
+
+void FlashController::flash_replaced() {
+    op_ = Op::None;
+    write_after_erase_ = false;
+    programming_ = false;
+    full_ = false;
+    buffered_ = 0;
+    for (auto &wear : wear_)
+        wear.reset();
+    log_.clear();
+    op_serial_ = erase_serial_ = program_serial_ = 0;
+}
+
+void FlashController::time_restarted() {
+    std::erase_if(triggers_, [](const Trigger &trigger) { return trigger.fire_hf != Never; });
+}
+
+void FlashController::erase_applied(unsigned first_page, unsigned count) {
+    for (unsigned page = first_page; page < first_page + count && page < PageCount; ++page) {
+        ++diagnostics_->flash_page_erases[page];
+        wear_[page].reset(); // 6.2.2 limits count "since the last page erase"
+    }
+}
+
+void FlashController::record_erase(unsigned first_page, unsigned count, Cc2530FlashOpKind op,
+                                   Cc2530FlashOutcome outcome, std::uint64_t elapsed_cycles) {
+    if (first_page >= PageCount || count == 0 || count > PageCount - first_page)
+        throw std::out_of_range("flash erase record outside the 128 pages");
+    erase_applied(first_page, count);
+    log_op(bus_.hf_now(), op, first_page * PageSize, outcome, Cc2530FlashCut::None,
+           ResetCause::PowerOn, elapsed_cycles, 0, 0);
+}
+
+void FlashController::schedule_power_cut(std::uint64_t at_cycle) {
+    cuts_.insert(std::upper_bound(cuts_.begin(), cuts_.end(), at_cycle), at_cycle);
+    bus_.reschedule();
+}
+
+void FlashController::add_trigger(const Cc2530FlashTrigger &trigger) {
+    if (trigger.nth == 0)
+        throw std::invalid_argument("flash trigger: nth counts from 1");
+    if (trigger.page && *trigger.page >= PageCount)
+        throw std::out_of_range("flash trigger: page outside 0-127");
+    triggers_.push_back(Trigger{trigger, 0, Never});
+}
+
+std::vector<Cc2530FlashLogEntry> FlashController::take_log() {
+    std::vector<Cc2530FlashLogEntry> entries;
+    entries.swap(log_);
+    return entries;
+}
+
+std::uint8_t FlashController::program_word(std::uint16_t word_address, const std::uint8_t *data,
+                                           std::uint64_t serial, std::uint64_t elapsed,
+                                           std::uint32_t &changed) {
+    const std::uint32_t begin = static_cast<std::uint32_t>(word_address) * 4;
+    const unsigned page = begin / PageSize;
+    const unsigned word = (begin % PageSize) / 4;
+    std::unique_ptr<PageWear> &slot = wear_[page];
+    if (!slot)
+        slot = std::make_unique<PageWear>();
+    PageWear &wear = *slot;
+    const std::uint32_t value = static_cast<std::uint32_t>(data[0]) |
+                                static_cast<std::uint32_t>(data[1]) << 8 |
+                                static_cast<std::uint32_t>(data[2]) << 16 |
+                                static_cast<std::uint32_t>(data[3]) << 24;
+    // 6.2.2: every word write counts, whatever its data; every 0 data bit is
+    // a "0 written" to that bit, whether or not it is already 0.
+    static_assert(MaxZeroWritesPerBit == 2, "zero_once/zero_twice track up to two 0-writes");
+    const std::uint32_t zeros = ~value;
+    std::uint8_t violations = 0;
+    if (zeros & wear.zero_twice[word])
+        violations |= Cc2530FlashBitLimit;
+    wear.zero_twice[word] |= zeros & wear.zero_once[word];
+    wear.zero_once[word] |= zeros;
+    if (wear.word_writes[word] < 0xff)
+        ++wear.word_writes[word];
+    if (wear.word_writes[word] > MaxWritesPerWord)
+        violations |= Cc2530FlashWordLimit;
+    if (++wear.page_writes > MaxWritesPerPage)
+        violations |= Cc2530FlashPageLimit;
+    if (violations & Cc2530FlashBitLimit)
+        ++diagnostics_->flash_bit_limit_violations;
+    if (violations & Cc2530FlashWordLimit)
+        ++diagnostics_->flash_word_limit_violations;
+    if (violations & Cc2530FlashPageLimit)
+        ++diagnostics_->flash_page_limit_violations;
+    ++diagnostics_->flash_page_writes[page];
+
+    std::vector<std::uint8_t> &flash = bus_.flash();
+    const std::uint32_t old = load_word(flash, begin);
+    // 6.2: "the 0-bits are programmed to 0 and the 1-bits are ignored".
+    std::uint32_t target = old & value;
+    if (violations && config_.limit_policy == Cc2530FlashLimitPolicy::Nondeterministic) {
+        // 6.2.2: "The state of any bit of a 32-bit flash word is
+        // nondeterministic if these limitations are violated". Model-defined
+        // fault injection: the word takes a seeded pseudo-random value.
+        target = static_cast<std::uint32_t>(fault_draw(config_.seed, serial, NondeterministicIndex));
+    }
+    std::uint32_t result = target;
+    if (elapsed < WordWriteCycles) {
+        // Model-defined partial word write: each bit that would change lands
+        // when draw(seed, write serial, bit) mod 20 us < elapsed.
+        result = old;
+        for (unsigned bit = 0; bit < 32; ++bit) {
+            const std::uint32_t mask = 1u << bit;
+            if (((old ^ target) & mask) &&
+                fault_draw(config_.seed, serial, bit) % WordWriteCycles < elapsed)
+                result = (result & ~mask) | (target & mask);
+        }
+    }
+    changed = static_cast<std::uint32_t>(std::popcount(old ^ result));
+    for (unsigned i = 0; i < 4; ++i)
+        flash[begin + i] = static_cast<std::uint8_t>(result >> (8 * i));
+    bus_.flash_changed(begin, begin + 4);
+    return violations;
+}
+
+void FlashController::op_started(Cc2530FlashOpKind op, unsigned page, std::uint64_t at) {
+    bool armed = false;
+    for (Trigger &trigger : triggers_) {
+        if (trigger.fire_hf != Never)
+            continue;
+        const Cc2530FlashOpFilter filter = trigger.spec.op;
+        if ((filter == Cc2530FlashOpFilter::Erase && op != Cc2530FlashOpKind::PageErase) ||
+            (filter == Cc2530FlashOpFilter::Write && op != Cc2530FlashOpKind::WordWrite))
+            continue;
+        if (trigger.spec.page && *trigger.spec.page != page)
+            continue;
+        if (++trigger.matched == trigger.spec.nth) {
+            trigger.fire_hf = at + trigger.spec.delay_cycles;
+            armed = true;
+        }
+    }
+    if (armed)
+        bus_.reschedule();
+}
+
+void FlashController::log_op(std::uint64_t at_hf, Cc2530FlashOpKind op, std::uint32_t address,
+                             Cc2530FlashOutcome outcome, Cc2530FlashCut cut, ResetCause cause,
+                             std::uint64_t elapsed, std::uint32_t changed,
+                             std::uint8_t violations) {
+    if (!config_.log)
+        return;
+    // HF times map to virtual time through the current offset between the
+    // two domains (an operation never spans PM1-PM3 time).
+    const std::uint64_t hf = bus_.hf_now();
+    const std::uint64_t now = bus_.now();
+    const std::uint64_t back = hf > at_hf ? hf - at_hf : 0;
+    Cc2530FlashLogEntry entry;
+    entry.cycle = now > back ? now - back : 0;
+    entry.op = op;
+    entry.address = address;
+    entry.page = address / PageSize;
+    entry.outcome = outcome;
+    entry.cut = cut;
+    entry.reset_cause = cause;
+    entry.elapsed_cycles = elapsed;
+    entry.changed_bits = changed;
+    entry.violations = violations;
+    log_.push_back(entry);
+}
+
+std::uint64_t FlashController::fault_deadline() const {
+    std::uint64_t deadline = cuts_.empty() ? Never : cuts_.front();
+    for (const Trigger &trigger : triggers_)
+        if (trigger.fire_hf != Never)
+            deadline = std::min(deadline, bus_.hf_deadline(trigger.fire_hf));
+    return deadline;
+}
+
+void FlashController::fire_due_faults(std::uint64_t now) {
+    bool power_cut = false;
+    bool reset = false;
+    while (!cuts_.empty() && cuts_.front() <= now) {
+        cuts_.erase(cuts_.begin());
+        power_cut = true;
+    }
+    if (!triggers_.empty()) {
+        const std::uint64_t hf = bus_.hf_now();
+        std::erase_if(triggers_, [&](const Trigger &trigger) {
+            if (trigger.fire_hf == Never || trigger.fire_hf > hf)
+                return false;
+            (trigger.spec.action == Cc2530FaultAction::PowerCut ? power_cut : reset) = true;
+            return true;
+        });
+    }
+    // Several due faults at one boundary act once; a power cut includes a
+    // reset.
+    if (!request_fault_)
+        return;
+    if (power_cut)
+        request_fault_(Cc2530FaultAction::PowerCut);
+    else if (reset)
+        request_fault_(Cc2530FaultAction::Reset);
 }
 
 } // namespace mcs51emu::cc2530
