@@ -94,10 +94,14 @@ sequence: stop, select user mode, load `4 * time`, then enable the one-shot
 timer. TS0001 calls it for Timer1 with `time=1512` while entering network
 setup. This inferred ROM behavior is covered by a Timer1 expiry test.
 
-The eFuse shim covers only block 1 and supplies RF cap bytes `0x2b,0x23` from
-the user's sample log, with zeros for the remaining six bytes. The current
-TS0001 UART still prints `tpCap[00 00]`, so the actual read path or data layout
-is not yet matched; the remaining calibration bytes have not been recovered.
+The SDK exports `efuse_read` but has no public prototype. Its simple
+`(block, buffer)` path only remains as a test fixture; firmware-observed calls
+are logged and leave memory unchanged. For block 1, TS0001 passes a stack
+address in `r1`, `0x60` in `r2`, and a Thumb code address in `r3`; a block 3
+call passes a stack address, `0x1fff0100`, and `0x10`. The actual call ABI and
+data layout remain unresolved, and the UART still prints `tpCap[00 00]`
+instead of the user's `tpCap[2b 23]`. The remaining calibration bytes have not
+been recovered, so eFuse compatibility is not established.
 
 Two calls are deliberately visible limitations. The image reaches unexported
 ROM entry `0xa2e0`, inside the SDK symbol range for `ble_crc24_gen`; its body is
@@ -214,12 +218,22 @@ observed CRC-checked copy blocks and prints the NVM range
 reference log's `tpCap[2b 23]`. The emulator runs past the `spif_write_dma`
 NVM update, restores network state 12 and continues through timer callbacks. In
 a 15 s `sim` run with a locally built Telink sampleGW, the pcap contained 19
-frames: 16 coordinator beacon requests and 3 coordinator broadcast data
-frames; no association response or TS0001 transmission was captured. Repeating
-the first-boot scenario after adding generated RX FCS bytes did not change that
-result. Join and relay commands remain unverified. Do not claim TS0001 relay
-support until it starts, joins, and exchanges Zigbee traffic in a captured
-network scenario.
+frames: 16 beacon requests and 3 broadcast data frames. A 6 s coordinator-only
+control run with the same `samplegw_tb03f.bin` produced the same frame types at
+the same times, so these frames are attributable to the gateway image; no
+TS0001 association request, NWK data or ACK was captured. Repeating the
+first-boot scenario after adding generated RX FCS bytes did not change that
+result. The emulated UART otherwise reaches the same startup milestones as the
+supplied `log.txt`, but differs in reported values: `power report time = 4744`
+(reference 3288), `set read local time: 39` (reference 44), and
+`fix Report time = 326790` (reference 330785). Join and relay commands remain
+unverified. Do not claim TS0001 relay support until it starts, joins, and
+exchanges Zigbee traffic in a captured network scenario.
+
+The reusable `examples/phy6252-ts0001.yaml` probe also reproduces the reference
+short key1 press on GPIO8 and key-level transitions on GPIO3. It does not print
+the reference relay `On`/`Off` reports, and the paired pcap remains identical
+to the gateway-only capture.
 
 For a separate first-boot probe, a temporary copy of the TS0001 dump had its
 `0x6000`-byte NVM range at `0x11079000` erased. The image reported
@@ -242,3 +256,7 @@ instruction tracing for a PC interval and prints registers on a fault.
 with the preceding instruction address. UART0 is exposed as `mcu.uart0`.
 Firmware inputs can be the package beginning at physical flash offset `0x2000`
 or a 512 KiB full flash dump; keep local images outside the repository.
+For the TS0001 capture setup, place the full dump at
+`firmware/phy6252-ts0001.bin` and run `examples/phy6252-ts0001.yaml` from a
+scratch working directory. The scenario writes `air.pcap` there and probes
+GPIO8 and GPIO3; inspect both the UART output and the captured frames.
