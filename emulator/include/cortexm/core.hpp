@@ -51,6 +51,7 @@ public:
         std::uint32_t clock_hz{64000000};
         unsigned irq_count{48};       // external interrupt lines
         unsigned priority_bits{3};
+        bool track_last_instruction_pc{false};
     };
 
     explicit Core(const Config &config);
@@ -102,6 +103,16 @@ public:
         pc_last_ = last;
         pc_trace_regs_ = registers;
     }
+    // Logs the first stack pointer outside the caller-supplied valid range and
+    // transitions back into range. The upper bound is inclusive for a stack
+    // pointer at the top of memory.
+    void set_stack_trace(std::ostream *out, std::uint32_t lower_bound,
+                         std::uint32_t upper_bound) noexcept {
+        stack_trace_ = out;
+        stack_lower_bound_ = lower_bound;
+        stack_upper_bound_ = upper_bound;
+        msp_trace_initialized_ = psp_trace_initialized_ = false;
+    }
 
     std::uint64_t cycles() const noexcept { return cycles_; }
     std::uint64_t instructions() const noexcept { return instructions_; }
@@ -140,6 +151,10 @@ public:
     std::uint32_t reg(unsigned index);
     void set_reg(unsigned index, std::uint32_t value);
     std::uint32_t pc();
+    // Address of the most recent instruction delivered to the code hook.
+    // Useful when a peripheral callback runs during exception entry, before
+    // the handler itself has executed.
+    std::uint32_t last_instruction_pc() const noexcept { return last_instruction_pc_; }
 
     // Escape hatch for tests.
     uc_struct *engine() noexcept { return uc_; }
@@ -159,9 +174,14 @@ private:
     std::uint64_t clock_epoch_cycles_{0}, clock_epoch_ns_{0};
     std::uint64_t instructions_{0};
     std::uint64_t instruction_limit_{0};
+    std::uint32_t last_instruction_pc_{0};
     std::ostream *pc_trace_{nullptr};
     std::uint32_t pc_first_{0}, pc_last_{0};
     bool pc_trace_regs_{false};
+    std::ostream *stack_trace_{nullptr};
+    std::uint32_t stack_lower_bound_{0}, stack_upper_bound_{0}, last_msp_{0}, last_psp_{0};
+    bool msp_trace_initialized_{false}, psp_trace_initialized_{false};
+    bool last_msp_valid_{false}, last_psp_valid_{false};
     std::uint32_t cpi_{1};
     bool sleeping_{false};
 };

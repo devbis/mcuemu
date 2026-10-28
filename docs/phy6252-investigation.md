@@ -42,7 +42,9 @@ the Zephyr path at 16 MHz), and provide down-counting, one-shot alarms and IRQs
 24/25. The AON RTC counter advances at 32.768 kHz when `RTCCTL.RUN` is set;
 direct image boot starts it in the state inferred for the skipped ROM board-init
 path. The AON RTC clock-select, control, compare and flag registers are stored,
-but compare events and IRQ generation are not. The watchdog uses the SDK's
+but compare events and IRQ generation are not. The four retained AON sleep
+words at `0x4000f0c0..0x4000f0cc` are read/write storage, as indicated by the
+SDK's sleep/tracking fields. The watchdog uses the SDK's
 2–256 second timeout selections, feed key and IRQ 10;
 its clock source and reset details are inferred. PCR software reset and clock
 registers, including SW_CLK1 and APB_CLK, retain writes; clock gating and reset
@@ -93,27 +95,27 @@ a warning. `LL_InitConnectContext` returns success for the unused BLE context
 and logs that BLE connection state is not modeled. Neither behavior establishes
 BLE or Zigbee stack compatibility.
 
-The TS0001 boot path calls the exported ROM symbol `phy_sec_encrypt`, entry
-`0x15338`, with `r0=0x1fff9440`, `r1=0x11002830`, source `r2=0x11020000`,
-length `r3=0x4000`, and stack arguments `0` and `0x1ffff6d4`. The expected
-16-bit MIC at the caller's record is `0xcf3f`. CRC-16/ARC over those 16 KiB
-matches it exactly. The same candidate matches the record values for each
-subsequent boot block reached by the image. The model therefore has a narrowly
-gated inferred path for this argument shape: it writes the CRC-16/ARC result to
-the supplied output pointer, where the caller still compares it with the
-recorded MIC. Other argument shapes remain visible unimplemented ROM calls.
-This evidence identifies the boot-check operation used by this image; it does
-not establish the semantics of `phy_sec_encrypt` as a general SDK API.
+The SDK declares `phy_sec_encrypt` and `phy_sec_decrypt` at ROM entries
+`0x15338` and `0x1531c`. It also contains a disabled (`#if 0`) implementation
+of the PHY+ AES-CCM-shaped decrypt operation: a 13-byte IV, a 4-byte MIC, a
+counter increment of 13 per block, and a CBC-MAC over the plaintext. The model
+implements that transform using the existing AES-128 primitive, plus the
+matching encrypt direction. This is source evidence for the transform, but the
+ROM implementation and provisioning rules are not included in the SDK.
 
-The SDK package provides the symbol name for `phy_sec_decrypt` at entry
-`0x1531c`, but not its ROM implementation or a prototype. For the calls observed
-in this image, the emulator computes CRC-16/ARC over the source bytes, compares
-it with the record's 16-bit MIC, and copies the bytes unchanged to the supplied
-SRAM destination only when they match. Three observed blocks pass this check.
-This is an image-specific inferred compatibility path; it does not establish
-that the general SDK function uses CRC-16/ARC or that other call shapes are
-supported. The destination can contain executable code, so the model invalidates
-the Cortex-M translated-code cache after each successful copy.
+The supplied TS0001 image has sixteen erased bytes at full-flash offset
+`0x2920`, where its secure-area MIC would otherwise be. Its partition table
+stores CRC-16/ARC values, and the CRCs over the source blocks match all eleven
+entries. For this erased-MIC image, the model infers an unencrypted CRC path:
+`phy_sec_encrypt` writes a two-byte CRC (zero padded to four bytes) to its MIC
+output, while `phy_sec_decrypt` verifies the two-byte MIC and copies the bytes
+unchanged. Three observed copy blocks pass, including executable SRAM blocks;
+the Cortex-M translated-code cache is invalidated after a successful copy.
+When the secure-area MIC is provisioned, the model instead uses the AES-CCM
+transform and checks the four-byte MIC. That branch is covered by round-trip
+and tamper-rejection tests, but has not been matched against a provisioned
+device image. The erased-area selector and CRC fallback are image-driven
+inferences, not a general PHY6252 ROM contract.
 
 The image also reaches the SDK's `__aeabi_uidiv` and `__aeabi_idiv` ROM helpers,
 which are modeled with quotient in `r0` and remainder in `r1`; division by zero
@@ -127,16 +129,25 @@ compatibility observations, not hardware-verified peripheral contracts.
 
 The TS0001 image fills an LL extension/table area at `0x40031e00..0x40031ffc`,
 inside the modeled 2 KiB RX FIFO range. Its RF effect is unknown. After the
-300 ms RF startup wait, the current run reaches PCR setup and stops when
-exception entry attempts a stack write at `0x400313e0`, with `SP=0x40031400`,
-`PC=0x1fffdd00`, and `LR=0xfffffff1`. The write is below the 2 KiB TX FIFO
-starting at `0x40031400` and is not mapped as memory. The model reads VTOR as
-`0x1fff8b00`, while the SDK's PHY6222 device header declares no VTOR; the exact
-exception source and stack setup remain unresolved. The run has not printed
+300 ms RF startup wait, the current run reaches PCR setup and pends PendSV from
+`0x1fff66e6` by writing `0x10000000` to `ICSR`. Immediately before that write,
+the core is in Thread mode with `CONTROL=2`, `MSP=0x1fffce40` and
+`PSP=0x1fffe270`, both inside SRAM. During the following exception path, the
+run faults on a word write at `0x400313e0`, with `MSP=0x40031400`,
+`PSP=0x1fffe250`, `IPSR=3` (HardFault), `PC=0x1fffdd00` and
+`LR=0xfffffff1`. The PSP has moved down by one basic exception frame, while the
+MSP is now the TX FIFO base. The attempted write lies below the modeled 2 KiB
+TX FIFO and is not mapped as memory. This narrows the failure to the exception
+or HardFault transition; the source of the changed MSP remains unresolved.
+The model reads VTOR as `0x1fff8b00`, while the SDK's PHY6222 device header
+declares no VTOR. PHY6252 MMIO faults report the current and last instruction
+addresses and both stack banks to support further tracing. The run has not printed
 `Stack Init`, has not started Zigbee radio traffic, and has not joined a
 coordinator. The user-supplied device log reaches `Stack Init`, restores network
 state 12 and emits Tuya reports, but that is evidence about the hardware image,
-not this emulator run.
+not this emulator run. A separate Cortex-M0 regression case that pends PendSV
+from Thread mode on PSP with a valid vector table passes and keeps its exception
+frame on PSP; this failure is specific to the TS0001 path or its vector state.
 
 ## Firmware evidence
 
@@ -160,7 +171,8 @@ and exchanges Zigbee traffic in a captured network scenario.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
-instruction tracing for a PC interval and prints registers on a fault. UART0 is
-exposed as `mcu.uart0`. Firmware inputs can be the package beginning at physical
-flash offset `0x2000` or a 512 KiB full flash dump; keep local images outside
-the repository.
+instruction tracing for a PC interval and prints registers on a fault.
+`--trace-stack` reports when MSP or PSP leaves or returns to the PHY6252 SRAM range,
+with the preceding instruction address. UART0 is exposed as `mcu.uart0`.
+Firmware inputs can be the package beginning at physical flash offset `0x2000`
+or a 512 KiB full flash dump; keep local images outside the repository.

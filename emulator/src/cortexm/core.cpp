@@ -216,11 +216,51 @@ struct Core::Impl final : Bus {
             uc_emu_stop(core.uc_);
             return;
         }
+        if (core.stack_trace_ != nullptr) {
+            std::uint32_t msp = 0, psp = 0;
+            if (uc_reg_read(core.uc_, UC_ARM_REG_MSP, &msp) == UC_ERR_OK &&
+                uc_reg_read(core.uc_, UC_ARM_REG_PSP, &psp) == UC_ERR_OK) {
+                auto trace_bank = [&](const char *name, std::uint32_t value,
+                                      std::uint32_t &last, bool &last_valid,
+                                      bool &initialized) {
+                    const bool valid = value >= core.stack_lower_bound_ &&
+                                       value <= core.stack_upper_bound_;
+                    if ((!initialized && value != 0 && !valid) ||
+                        (initialized && valid != last_valid)) {
+                        *core.stack_trace_ << name << " trace: 0x" << std::hex << last
+                                           << " -> 0x" << value;
+                        if (core.last_instruction_pc_ != 0)
+                            *core.stack_trace_ << " after 0x" << core.last_instruction_pc_;
+                        *core.stack_trace_ << " before 0x" << address << " ("
+                                           << (valid ? "valid" : "outside SRAM") << ")\n" << std::dec;
+                    }
+                    last = value;
+                    last_valid = valid;
+                    initialized = true;
+                };
+                trace_bank("MSP", msp, core.last_msp_, core.last_msp_valid_,
+                           core.msp_trace_initialized_);
+                trace_bank("PSP", psp, core.last_psp_, core.last_psp_valid_,
+                           core.psp_trace_initialized_);
+            }
+        }
+        if (core.config_.track_last_instruction_pc || core.pc_trace_ != nullptr ||
+            core.stack_trace_ != nullptr)
+            core.last_instruction_pc_ = address;
         if (core.pc_trace_ != nullptr && address >= core.pc_first_ && address <= core.pc_last_) {
             *core.pc_trace_ << "PC 0x" << std::hex << address << std::dec << " cycles=" << core.cycles_;
             if (core.pc_trace_regs_) {
                 for (unsigned reg = 0; reg != 13; ++reg)
                     *core.pc_trace_ << " r" << reg << "=0x" << std::hex << core.reg(reg) << std::dec;
+                *core.pc_trace_ << " sp=0x" << std::hex << core.reg(13)
+                                << " lr=0x" << core.reg(14);
+                std::uint32_t msp = 0, psp = 0, control = 0, ipsr = 0;
+                uc_reg_read(core.uc_, UC_ARM_REG_MSP, &msp);
+                uc_reg_read(core.uc_, UC_ARM_REG_PSP, &psp);
+                uc_reg_read(core.uc_, UC_ARM_REG_CONTROL, &control);
+                uc_reg_read(core.uc_, UC_ARM_REG_IPSR, &ipsr);
+                *core.pc_trace_ << " msp=0x" << msp << " psp=0x" << psp
+                                << " control=0x" << control << " ipsr=0x" << ipsr << std::dec;
             }
             *core.pc_trace_ << '\n';
         }
@@ -457,6 +497,8 @@ void Core::reset(std::uint32_t vector_table) {
     impl_->service_deadline = 0; // service once before the first instruction
     impl_->deadline = 0;
     impl_->reset_pending = false;
+    last_instruction_pc_ = 0;
+    msp_trace_initialized_ = psp_trace_initialized_ = false;
 }
 
 void Core::request_reset() {

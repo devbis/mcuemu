@@ -3,6 +3,8 @@
 #include "crypto/aes128.hpp"
 #include "phy6252emu/image.hpp"
 #include "phy6252emu/phy6252.hpp"
+#include <unicorn/arm.h>
+#include <unicorn/unicorn.h>
 
 #include <algorithm>
 #include <cstring>
@@ -38,6 +40,7 @@ int main() {
     config.model = cortexm::Model::M0;
     config.irq_count = 32;
     config.priority_bits = 2;
+    config.track_last_instruction_pc = true;
     cortexm::Core core(config);
     auto *flash = core.map_memory(BootImage::FlashBase, BootImage::FlashSize, false);
     auto *ram = core.map_memory(BootImage::RamBase, BootImage::RamSize, true);
@@ -46,7 +49,40 @@ int main() {
     core.reset(boot.run_address);
     CHECK(core.run(100).reason == cortexm::StopReason::Deadline);
     CHECK(core.pc() == 0x11010108);
+    CHECK(core.last_instruction_pc() != 0);
     CHECK(core.reg(13) == 0x1fff2000);
+
+    cortexm::Core::Config m0_config;
+    m0_config.model = cortexm::Model::M0;
+    m0_config.irq_count = 32;
+    m0_config.priority_bits = 2;
+    cortexm::Core m0(m0_config);
+    auto *m0_memory = m0.map_memory(0, 0x1000, true);
+    m0.map_memory(BootImage::RamBase, BootImage::RamSize, true);
+    std::uint32_t m0_vectors[16]{};
+    m0_vectors[0] = 0x1fffce40;
+    m0_vectors[1] = 0x201;
+    m0_vectors[3] = 0x501;
+    m0_vectors[14] = 0x401;
+    std::memcpy(m0_memory + 0x100, m0_vectors, sizeof m0_vectors);
+    m0_memory[0x200] = 0xfe; m0_memory[0x201] = 0xe7; // thread loop
+    m0_memory[0x400] = 0xfe; m0_memory[0x401] = 0xe7; // PendSV loop
+    m0_memory[0x500] = 0xfe; m0_memory[0x501] = 0xe7; // HardFault loop
+    m0.reset(0x100);
+    std::uint32_t m0_psp = 0x1fffe270, m0_control = 2;
+    CHECK(uc_reg_write(m0.engine(), UC_ARM_REG_PSP, &m0_psp) == UC_ERR_OK);
+    CHECK(uc_reg_write(m0.engine(), UC_ARM_REG_CONTROL, &m0_control) == UC_ERR_OK);
+    const std::uint32_t pend_pendsv = 1u << 28;
+    CHECK(m0.write_memory(0xe000ed04, &pend_pendsv, sizeof pend_pendsv));
+    CHECK(m0.run(20).reason == cortexm::StopReason::Deadline);
+    std::uint32_t m0_msp_after = 0, m0_psp_after = 0, m0_ipsr_after = 0;
+    CHECK(uc_reg_read(m0.engine(), UC_ARM_REG_MSP, &m0_msp_after) == UC_ERR_OK);
+    CHECK(uc_reg_read(m0.engine(), UC_ARM_REG_PSP, &m0_psp_after) == UC_ERR_OK);
+    CHECK(uc_reg_read(m0.engine(), UC_ARM_REG_IPSR, &m0_ipsr_after) == UC_ERR_OK);
+    CHECK(m0_msp_after == 0x1fffce40);
+    CHECK(m0_psp_after == 0x1fffe250);
+    CHECK(m0_ipsr_after == 14);
+
     Phy6252 chip;
     chip.load_firmware(image);
     chip.reset();
@@ -134,10 +170,9 @@ int main() {
     CHECK(unknown.reason == cortexm::StopReason::Fault);
     CHECK(unknown.message.find("unimplemented PHY6252 ROM call") != std::string::npos);
     chip.core().set_reg(15, 0x15338);
-    const auto crypto_unknown = chip.run(504);
-    CHECK(crypto_unknown.reason == cortexm::StopReason::Fault);
-    CHECK(crypto_unknown.message.find("phy_sec_encrypt") != std::string::npos);
-    CHECK(crypto_unknown.message.find("lr=") != std::string::npos);
+    const auto crypto_invalid = chip.run(504);
+    CHECK(crypto_invalid.reason == cortexm::StopReason::Deadline);
+    CHECK(chip.core().reg(0) == static_cast<std::uint32_t>(-22));
 
     CHECK(chip.read(0x4000c800, 4) == 0x80000000u);
     chip.write(0x4000c890, 0x05900001, 4);
@@ -193,6 +228,14 @@ int main() {
     CHECK(chip.read(0x4000f01c, 4) == 0x78);
     chip.write(0x4000f03c, 0x12, 4); // AON RTC clock selection
     CHECK(chip.read(0x4000f03c, 4) == 0x12);
+    chip.write(0x4000f0c0, 0x04, 4); // retained AON sleep-state words
+    chip.write(0x4000f0c4, 0x80, 4);
+    chip.write(0x4000f0c8, 0x12345678, 4);
+    chip.write(0x4000f0cc, 0x87654321, 4);
+    CHECK(chip.read(0x4000f0c0, 4) == 0x04);
+    CHECK(chip.read(0x4000f0c4, 4) == 0x80);
+    CHECK(chip.read(0x4000f0c8, 4) == 0x12345678);
+    CHECK(chip.read(0x4000f0cc, 4) == 0x87654321);
     chip.write(0x4000f0a0, 0x12345678, 4); // GPIO0..31 wakeup mask
     chip.write(0x4000f0a4, 7, 4); // GPIO32..34 wakeup mask
     CHECK(chip.read(0x4000f0a0, 4) == 0x12345678);
@@ -462,16 +505,15 @@ int main() {
     CHECK(chip.read(0x40001070, 4) == 1);
 
     constexpr char crc_vector[] = "123456789";
-    const std::uint32_t crc_source = BootImage::FlashBase + 0x20000;
-    auto *crc_bytes = chip.core().host_pointer(crc_source, sizeof crc_vector - 1);
-    CHECK(crc_bytes != nullptr);
-    std::memcpy(crc_bytes, crc_vector, sizeof crc_vector - 1);
-    const std::uint32_t crc_stack = BootImage::RamBase + 0x5000;
-    const std::uint32_t crc_result = BootImage::RamBase + 0x5100;
-    const std::uint32_t crc_stack_args[] = {0, crc_result};
-    CHECK(chip.core().write_memory(crc_stack, crc_stack_args, sizeof crc_stack_args));
-    chip.core().set_reg(0, 0x1fff9440);
-    chip.core().set_reg(1, 0x11002830);
+    const std::uint32_t crc_source = BootImage::RamBase + 0x4f00;
+    const std::uint32_t crc_mic = BootImage::RamBase + 0x4f20;
+    const std::uint32_t crc_plaintext = BootImage::RamBase + 0x4f40;
+    const std::uint32_t crc_stack = BootImage::RamBase + 0x4f80;
+    CHECK(chip.core().write_memory(crc_source, crc_vector, sizeof crc_vector - 1));
+    const std::uint32_t crc_encrypt_args[] = {0, crc_mic};
+    CHECK(chip.core().write_memory(crc_stack, crc_encrypt_args, sizeof crc_encrypt_args));
+    chip.core().set_reg(0, 0);
+    chip.core().set_reg(1, 0);
     chip.core().set_reg(2, crc_source);
     chip.core().set_reg(3, sizeof crc_vector - 1);
     chip.core().set_reg(13, crc_stack);
@@ -479,59 +521,91 @@ int main() {
     chip.core().set_reg(15, 0x15338);
     CHECK(chip.run(chip.core().cycles() + 10).reason == cortexm::StopReason::Deadline);
     std::uint32_t crc_value = 0;
-    CHECK(chip.core().read_memory(crc_result, &crc_value, sizeof crc_value));
-    CHECK(crc_value == 0xbb3d); // CRC-16/ARC for "123456789".
-
-    const std::uint32_t clear_table_source = 0x11011000;
-    auto *clear_table = chip.core().host_pointer(clear_table_source, 0x800);
-    CHECK(clear_table != nullptr);
-    std::memset(clear_table, 0, 0x800);
-    for (const auto &[offset, value] : std::array<std::pair<std::uint32_t, std::uint32_t>, 5>{{
-             {0x190, 0x1fff4519}, {0x194, 0x1fff4601}, {0x198, 0x1fff5ef9},
-             {0x370, 0x1fff190d}, {0x3ac, 0x1fff2415},
-         }})
-        CHECK(chip.core().write_memory(clear_table_source + offset, &value, sizeof value));
-    const std::uint32_t clear_table_record = 0x1ffff6d0;
-    const std::uint16_t clear_table_mic = 0x0094; // CRC-16/ARC of this sparse vector table.
-    CHECK(chip.core().write_memory(clear_table_record, &clear_table_mic, sizeof clear_table_mic));
-    const std::uint32_t clear_table_stack = BootImage::RamBase + 0xf000;
-    const std::uint32_t clear_table_args[] = {clear_table_record, BootImage::RamBase};
-    CHECK(chip.core().write_memory(clear_table_stack, clear_table_args, sizeof clear_table_args));
-    chip.core().set_reg(0, 0x1fff9440);
-    chip.core().set_reg(1, 0x11002830);
-    chip.core().set_reg(2, clear_table_source);
-    chip.core().set_reg(3, 0x800);
-    chip.core().set_reg(13, clear_table_stack);
+    CHECK(chip.core().read_memory(crc_mic, &crc_value, sizeof crc_value));
+    CHECK(crc_value == 0xbb3d); // CRC-16/ARC fallback for an erased secure-MIC area.
+    const std::uint32_t crc_decrypt_args[] = {crc_mic, crc_plaintext};
+    CHECK(chip.core().write_memory(crc_stack, crc_decrypt_args, sizeof crc_decrypt_args));
+    chip.core().set_reg(0, 0);
+    chip.core().set_reg(1, 0);
+    chip.core().set_reg(2, crc_source);
+    chip.core().set_reg(3, sizeof crc_vector - 1);
+    chip.core().set_reg(13, crc_stack);
     chip.core().set_reg(14, 0x11010109);
     chip.core().set_reg(15, 0x1531c);
     CHECK(chip.run(chip.core().cycles() + 10).reason == cortexm::StopReason::Deadline);
-    std::uint32_t copied_vector = 0;
-    CHECK(chip.core().read_memory(BootImage::RamBase + 0x194, &copied_vector, sizeof copied_vector));
-    CHECK(copied_vector == 0x1fff4601);
+    CHECK(chip.core().reg(0) == 0);
+    std::array<char, sizeof crc_vector - 1> crc_round_trip{};
+    CHECK(chip.core().read_memory(crc_plaintext, crc_round_trip.data(), crc_round_trip.size()));
+    CHECK(std::equal(crc_round_trip.begin(), crc_round_trip.end(), crc_vector));
 
-    const std::uint32_t clear_code_source = 0x11011808;
-    auto *clear_code = chip.core().host_pointer(clear_code_source, 0x4000);
-    CHECK(clear_code != nullptr);
-    std::memset(clear_code, 0, 0x4000);
-    constexpr std::array<std::uint8_t, 8> thumb_trampoline = {
-        0x04, 0x48, 0x80, 0x47, 0x04, 0x48, 0x00, 0x47};
-    std::memcpy(clear_code + 0x17c, thumb_trampoline.data(), thumb_trampoline.size());
-    const std::uint16_t clear_code_mic = 0xa2f9; // CRC-16/ARC of the sparse block.
-    CHECK(chip.core().write_memory(clear_table_record, &clear_code_mic, sizeof clear_code_mic));
-    const std::uint32_t clear_code_args[] = {clear_table_record, BootImage::RamBase + 0x1838};
-    CHECK(chip.core().write_memory(clear_table_stack, clear_code_args, sizeof clear_code_args));
-    chip.core().set_reg(0, 0x1fff9440);
-    chip.core().set_reg(1, 0x11002830);
-    chip.core().set_reg(2, clear_code_source);
-    chip.core().set_reg(3, 0x4000);
-    chip.core().set_reg(13, clear_table_stack);
+    auto *secure_area_mic = chip.core().host_pointer(BootImage::FlashBase + 0x2920, 16);
+    CHECK(secure_area_mic != nullptr);
+    if (secure_area_mic)
+        std::memset(secure_area_mic, 0, 16); // Provisioned metadata selects the AES-CCM path.
+    const crypto::Block sec_key = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+                                   0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f};
+    const std::array<std::uint8_t, 13> sec_iv = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+                                                 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c};
+    std::array<std::uint8_t, 37> sec_plain{};
+    for (std::size_t i = 0; i < sec_plain.size(); ++i)
+        sec_plain[i] = static_cast<std::uint8_t>(i * 7 + 3);
+    const std::uint32_t sec_key_address = BootImage::RamBase + 0x5000;
+    const std::uint32_t sec_iv_address = BootImage::RamBase + 0x5020;
+    const std::uint32_t sec_source = BootImage::RamBase + 0x5040;
+    const std::uint32_t sec_ciphertext = BootImage::RamBase + 0x5080;
+    const std::uint32_t sec_mic = BootImage::RamBase + 0x50c0;
+    const std::uint32_t sec_plaintext = BootImage::RamBase + 0x5100;
+    const std::uint32_t sec_stack = BootImage::RamBase + 0x5200;
+    CHECK(chip.core().write_memory(sec_key_address, sec_key.data(), sec_key.size()));
+    CHECK(chip.core().write_memory(sec_iv_address, sec_iv.data(), sec_iv.size()));
+    CHECK(chip.core().write_memory(sec_source, sec_plain.data(), sec_plain.size()));
+    const std::uint32_t encrypt_args[] = {sec_ciphertext, sec_mic};
+    CHECK(chip.core().write_memory(sec_stack, encrypt_args, sizeof encrypt_args));
+    chip.core().set_reg(0, sec_key_address);
+    chip.core().set_reg(1, sec_iv_address);
+    chip.core().set_reg(2, sec_source);
+    chip.core().set_reg(3, sec_plain.size());
+    chip.core().set_reg(13, sec_stack);
+    chip.core().set_reg(14, 0x11010109);
+    chip.core().set_reg(15, 0x15338);
+    CHECK(chip.run(chip.core().cycles() + 10).reason == cortexm::StopReason::Deadline);
+    CHECK(chip.core().reg(0) == 0);
+    std::array<std::uint8_t, 4> sec_mic_bytes{};
+    CHECK(chip.core().read_memory(sec_mic, sec_mic_bytes.data(), sec_mic_bytes.size()));
+    CHECK((sec_mic_bytes == std::array<std::uint8_t, 4>{0xdb, 0x1f, 0x56, 0x78}));
+    const std::uint32_t decrypt_args[] = {sec_mic, sec_plaintext};
+    CHECK(chip.core().write_memory(sec_stack, decrypt_args, sizeof decrypt_args));
+    chip.core().set_reg(0, sec_key_address);
+    chip.core().set_reg(1, sec_iv_address);
+    chip.core().set_reg(2, sec_ciphertext);
+    chip.core().set_reg(3, sec_plain.size());
+    chip.core().set_reg(13, sec_stack);
     chip.core().set_reg(14, 0x11010109);
     chip.core().set_reg(15, 0x1531c);
     CHECK(chip.run(chip.core().cycles() + 10).reason == cortexm::StopReason::Deadline);
-    std::uint8_t copied_trampoline[thumb_trampoline.size()]{};
-    CHECK(chip.core().read_memory(BootImage::RamBase + 0x1838 + 0x17c,
-                                  copied_trampoline, sizeof copied_trampoline));
-    CHECK(std::equal(thumb_trampoline.begin(), thumb_trampoline.end(), copied_trampoline));
+    CHECK(chip.core().reg(0) == 0);
+    std::array<std::uint8_t, sec_plain.size()> sec_round_trip{};
+    CHECK(chip.core().read_memory(sec_plaintext, sec_round_trip.data(), sec_round_trip.size()));
+    CHECK(sec_round_trip == sec_plain);
+    sec_mic_bytes[0] ^= 1;
+    CHECK(chip.core().write_memory(sec_mic, sec_mic_bytes.data(), sec_mic_bytes.size()));
+    std::array<std::uint8_t, sec_plain.size()> untouched{};
+    untouched.fill(0xa5);
+    CHECK(chip.core().write_memory(sec_plaintext, untouched.data(), untouched.size()));
+    CHECK(chip.core().write_memory(sec_stack, decrypt_args, sizeof decrypt_args));
+    chip.core().set_reg(0, sec_key_address);
+    chip.core().set_reg(1, sec_iv_address);
+    chip.core().set_reg(2, sec_ciphertext);
+    chip.core().set_reg(3, sec_plain.size());
+    chip.core().set_reg(13, sec_stack);
+    chip.core().set_reg(14, 0x11010109);
+    chip.core().set_reg(15, 0x1531c);
+    CHECK(chip.run(chip.core().cycles() + 10).reason == cortexm::StopReason::Deadline);
+    CHECK(chip.core().reg(0) != 0);
+    CHECK(chip.core().read_memory(sec_plaintext, sec_round_trip.data(), sec_round_trip.size()));
+    CHECK(sec_round_trip == untouched);
+    if (secure_area_mic)
+        std::memset(secure_area_mic, 0xff, 16);
 
     put(image, 0x100, 0x40000);
     bool rejected = false;

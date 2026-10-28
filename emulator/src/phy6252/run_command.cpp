@@ -26,6 +26,7 @@ std::uint32_t parse_address(const std::string &value) {
 int run_command(int argc, char **argv) {
     std::string firmware;
     std::uint64_t steps = 0, duration_ns = 0;
+    bool trace_stack = false;
     std::optional<std::pair<std::uint32_t, std::uint32_t>> trace_range;
     for (int i = 2; i < argc; ++i) {
         const std::string option = argv[i];
@@ -55,9 +56,11 @@ int run_command(int argc, char **argv) {
             if (!std::isfinite(number) || number <= 0 || scale == 0 || number * scale > 1e18) throw std::invalid_argument("invalid duration: " + value);
             duration_ns = static_cast<std::uint64_t>(number * scale);
             if (!duration_ns) throw std::invalid_argument("duration is shorter than one nanosecond");
+        } else if (option == "--trace-stack") {
+            trace_stack = true;
         } else if (option == "--help" || option == "-h") {
             std::cout << "Usage: mcuemu run --model PHY6252 --firmware IMAGE [--steps N] [--for DURATION]\n"
-                         "       [--trace-pc-range START:END]\n";
+                         "       [--trace-pc-range START:END] [--trace-stack]\n";
             return 0;
         } else throw std::invalid_argument("unknown or incomplete option: " + option);
     }
@@ -70,6 +73,9 @@ int run_command(int argc, char **argv) {
     chip.reset();
     if (trace_range)
         chip.core().set_pc_trace(&std::cerr, trace_range->first, trace_range->second, true);
+    if (trace_stack)
+        chip.core().set_stack_trace(&std::cerr, BootImage::RamBase,
+                                    BootImage::RamBase + BootImage::RamSize);
     if (steps) chip.core().set_instruction_limit(steps);
     if (!steps && !duration_ns) duration_ns = 1000000000;
     cortexm::RunResult result;

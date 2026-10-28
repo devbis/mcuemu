@@ -1,11 +1,15 @@
 #include "phy6252emu/phy6252.hpp"
 #include "crypto/aes128.hpp"
+#include <unicorn/arm.h>
+#include <unicorn/unicorn.h>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cctype>
 #include <cstdio>
 #include <limits>
+#include <span>
 #include <stdexcept>
 
 namespace phy6252emu {
@@ -16,6 +20,7 @@ cortexm::Core::Config config() {
     c.clock_hz = 16000000;
     c.irq_count = 32;
     c.priority_bits = 2;
+    c.track_last_instruction_pc = true;
     return c;
 }
 constexpr std::uint32_t RomSize = 0x18000, UartBase = 0x40004000;
@@ -98,6 +103,7 @@ constexpr std::uint32_t AonEfuseConfig = 0x4000f054;
 constexpr std::uint32_t AonEfuseProgram0 = 0x4000f140;
 constexpr std::uint32_t AonEfuseProgram1 = 0x4000f144;
 constexpr std::uint32_t AonXtal16Control = 0x4000f0bc;
+constexpr std::uint32_t AonSleepR0 = 0x4000f0c0;
 constexpr std::uint32_t RadioRfBase = 0x40030000;
 constexpr std::uint32_t RadioLlBase = 0x40031000;
 constexpr std::uint32_t RadioTxFifo = 0x40031400;
@@ -164,14 +170,76 @@ std::uint32_t lane_write(std::uint32_t old, std::uint32_t value,
     return (old & ~mask) | ((value << shift) & mask);
 }
 
-std::uint16_t crc16_arc(const std::uint8_t *data, std::size_t size) {
+struct PhySecResult {
+    std::vector<std::uint8_t> data;
+    std::array<std::uint8_t, 4> mic{};
+};
+
+bool phy_sec_process(const crypto::Block &key, std::span<const std::uint8_t, 13> iv,
+                     std::span<const std::uint8_t> input, bool encrypt,
+                     PhySecResult &result) {
+    if (input.size() > 0xffffu * 16u)
+        return false;
+
+    crypto::Block mac{};
+    mac[0] = 0x62;
+    std::copy(iv.begin(), iv.end(), mac.begin() + 1);
+    const auto blocks = static_cast<std::uint16_t>(input.size() / 16);
+    mac[14] = static_cast<std::uint8_t>(blocks >> 8);
+    mac[15] = static_cast<std::uint8_t>(blocks);
+
+    crypto::Block counter{};
+    counter[0] = 0x02;
+    std::copy(iv.begin(), iv.end(), counter.begin() + 1);
+    result.data.resize(input.size());
+    std::uint16_t counter_value = 0;
+    for (std::size_t offset = 0; offset < input.size(); offset += 16) {
+        counter_value = static_cast<std::uint16_t>(counter_value + 13);
+        counter[14] = static_cast<std::uint8_t>(counter_value >> 8);
+        counter[15] = static_cast<std::uint8_t>(counter_value);
+        const crypto::Block stream = crypto::aes128_encrypt(key, counter);
+        crypto::Block plain{};
+        const std::size_t count = std::min<std::size_t>(16, input.size() - offset);
+        for (std::size_t i = 0; i < count; ++i) {
+            plain[i] = encrypt ? input[offset + i] : input[offset + i] ^ stream[i];
+            result.data[offset + i] = encrypt ? plain[i] ^ stream[i] : plain[i];
+        }
+        crypto::Block next_mac = crypto::aes128_encrypt(key, mac);
+        for (std::size_t i = 0; i < next_mac.size(); ++i)
+            next_mac[i] ^= plain[i];
+        mac = next_mac;
+    }
+
+    const crypto::Block digest = crypto::aes128_encrypt(key, mac);
+    counter[14] = counter[15] = 0;
+    const crypto::Block zero_stream = crypto::aes128_encrypt(key, counter);
+    for (std::size_t i = 0; i < result.mic.size(); ++i)
+        result.mic[i] = digest[i] ^ zero_stream[i];
+    return true;
+}
+
+std::uint16_t crc16_arc(std::span<const std::uint8_t> data) {
     std::uint16_t crc = 0;
-    for (std::size_t i = 0; i < size; ++i) {
-        crc ^= data[i];
+    for (const std::uint8_t byte : data) {
+        crc ^= byte;
         for (unsigned bit = 0; bit < 8; ++bit)
             crc = static_cast<std::uint16_t>((crc >> 1) ^ ((crc & 1) ? 0xa001 : 0));
     }
     return crc;
+}
+
+bool phy_sec_provisioned(const std::uint8_t *flash) {
+    constexpr std::size_t SecureMicOffset = 0x2920;
+    return !std::all_of(flash + SecureMicOffset, flash + SecureMicOffset + 16,
+                        [](std::uint8_t byte) { return byte == 0xff; });
+}
+
+void phy_sec_crc_result(std::span<const std::uint8_t> input, PhySecResult &result) {
+    result.data.assign(input.begin(), input.end());
+    const std::uint16_t crc = crc16_arc(input);
+    result.mic[0] = static_cast<std::uint8_t>(crc);
+    result.mic[1] = static_cast<std::uint8_t>(crc >> 8);
+    result.mic[2] = result.mic[3] = 0;
 }
 
 int timer_index(std::uint32_t aligned) {
@@ -700,90 +768,118 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             rom_flash_erase();
         } else if (address == 0x1531c) {
             std::uint32_t stack_arg0 = 0, stack_arg1 = 0;
-            core_.read_memory(core_.reg(13), &stack_arg0, sizeof stack_arg0);
-            core_.read_memory(core_.reg(13) + 4, &stack_arg1, sizeof stack_arg1);
-            std::uint16_t stored_mic = 0xffff;
+            const bool args_read = core_.read_memory(core_.reg(13), &stack_arg0, sizeof stack_arg0) &&
+                core_.read_memory(core_.reg(13) + 4, &stack_arg1, sizeof stack_arg1);
             const std::uint32_t source = core_.reg(2), length = core_.reg(3);
             const std::uint64_t source_end = static_cast<std::uint64_t>(source) + length;
             const std::uint64_t output_end = static_cast<std::uint64_t>(stack_arg1) + length;
-            const bool observed_call_shape = core_.reg(0) == 0x1fff9440 &&
-                core_.reg(1) == 0x11002830 && stack_arg0 == 0x1ffff6d0 &&
-                length != 0 && length <= BootImage::FlashSize &&
-                source >= BootImage::FlashBase &&
-                source_end <= static_cast<std::uint64_t>(BootImage::FlashBase) + BootImage::FlashSize &&
-                stack_arg1 >= BootImage::RamBase &&
-                output_end <= static_cast<std::uint64_t>(BootImage::RamBase) + BootImage::RamSize &&
-                core_.read_memory(stack_arg0, &stored_mic, sizeof stored_mic);
-            std::uint16_t computed_mic = 0;
-            bool copied = false;
-            if (observed_call_shape) {
-                std::vector<std::uint8_t> data(length);
-                if (core_.read_memory(source, data.data(), data.size())) {
-                    computed_mic = crc16_arc(data.data(), data.size());
-                    if (stored_mic == computed_mic)
-                        copied = core_.write_memory(stack_arg1, data.data(), data.size());
+            const bool source_valid = length <= BootImage::FlashSize &&
+                ((source >= BootImage::FlashBase &&
+                  source_end <= static_cast<std::uint64_t>(BootImage::FlashBase) + BootImage::FlashSize) ||
+                 (source >= BootImage::RamBase &&
+                  source_end <= static_cast<std::uint64_t>(BootImage::RamBase) + BootImage::RamSize));
+            const bool output_valid = stack_arg1 == 0 ||
+                (stack_arg1 >= BootImage::RamBase &&
+                 output_end <= static_cast<std::uint64_t>(BootImage::RamBase) + BootImage::RamSize);
+            std::array<std::uint8_t, 4> stored_mic{};
+            std::vector<std::uint8_t> data(length);
+            PhySecResult transformed;
+            const bool inputs_read = args_read && source_valid && output_valid &&
+                core_.read_memory(source, data.data(), data.size()) &&
+                (stack_arg0 == 0 || core_.read_memory(stack_arg0, stored_mic.data(), stored_mic.size()));
+            bool mic_valid = false;
+            bool decrypted = false;
+            if (inputs_read && !phy_sec_provisioned(flash_)) {
+                phy_sec_crc_result(data, transformed);
+                const std::uint16_t expected = static_cast<std::uint16_t>(stored_mic[0] |
+                    (static_cast<std::uint16_t>(stored_mic[1]) << 8));
+                mic_valid = stack_arg0 == 0 || expected ==
+                    static_cast<std::uint16_t>(transformed.mic[0] |
+                    (static_cast<std::uint16_t>(transformed.mic[1]) << 8));
+                decrypted = mic_valid;
+            } else if (inputs_read) {
+                crypto::Block key{};
+                std::array<std::uint8_t, 13> iv{};
+                if (core_.read_memory(core_.reg(0), key.data(), key.size()) &&
+                    core_.read_memory(core_.reg(1), iv.data(), iv.size()) &&
+                    phy_sec_process(key, std::span<const std::uint8_t, 13>(iv),
+                                    data, false, transformed)) {
+                    mic_valid = stack_arg0 == 0 || transformed.mic == stored_mic;
+                    decrypted = mic_valid;
                 }
             }
-            if (copied) {
-                // Three observed TS0001 blocks have MICs equal to CRC-16/ARC
-                // over clear source bytes. Verify before copying unchanged.
-                // Other call shapes or MICs remain unimplemented ROM faults.
-                // The destination contains executable SRAM, so discard blocks
-                // translated from the pre-copy bytes before execution resumes.
-                core_.invalidate_code();
+            if (!decrypted) {
+                core_.set_reg(0, static_cast<std::uint32_t>(inputs_read ? -1 : -22));
                 std::fprintf(stderr,
-                             "PHY6252: inferred phy_sec_decrypt CRC16 payload copy data=0x%08x size=0x%x mic=0x%04x dst=0x%08x\n",
-                             source, length, computed_mic, stack_arg1);
-                core_.set_reg(0, 0);
+                             "PHY6252: phy_sec_decrypt rejected block data=0x%08x size=0x%x (%s)\n",
+                             source, length, inputs_read ? "partition MIC mismatch" : "invalid arguments");
+            } else if (stack_arg1 != 0 &&
+                       !core_.write_memory(stack_arg1, transformed.data.data(), transformed.data.size())) {
+                core_.set_reg(0, static_cast<std::uint32_t>(-22));
             } else {
-                char message[384];
-                std::snprintf(message, sizeof message,
-                              "unimplemented PHY6252 phy_sec_decrypt at 0x%08x (r0=0x%08x r1=0x%08x r2=0x%08x r3=0x%08x sp=0x%08x stack=[0x%08x,0x%08x] mic=0x%04x crc16=0x%04x lr=0x%08x)",
-                              pc, core_.reg(0), core_.reg(1), core_.reg(2), core_.reg(3),
-                              core_.reg(13), stack_arg0, stack_arg1, stored_mic,
-                              computed_mic, core_.reg(14));
-                return {cortexm::StopReason::Fault, message};
+                if (stack_arg1 != 0 && !transformed.data.empty())
+                    core_.invalidate_code();
+                std::fprintf(stderr,
+                             "PHY6252: PHY+ partition %s data=0x%08x size=0x%x dst=0x%08x\n",
+                             phy_sec_provisioned(flash_) ? "authenticated/decrypted" : "CRC-checked/copied",
+                             source, length, stack_arg1);
+                core_.set_reg(0, 0);
             }
         } else if (address == 0x15338) {
             std::uint32_t stack_arg0 = 0, stack_arg1 = 0;
-            core_.read_memory(core_.reg(13), &stack_arg0, sizeof stack_arg0);
-            core_.read_memory(core_.reg(13) + 4, &stack_arg1, sizeof stack_arg1);
+            const bool args_read = core_.read_memory(core_.reg(13), &stack_arg0, sizeof stack_arg0) &&
+                core_.read_memory(core_.reg(13) + 4, &stack_arg1, sizeof stack_arg1);
             const std::uint32_t source = core_.reg(2), length = core_.reg(3);
             const std::uint64_t source_end = static_cast<std::uint64_t>(source) + length;
-            const std::uint64_t output_end = static_cast<std::uint64_t>(stack_arg1) + sizeof(std::uint32_t);
-            const bool observed_boot_call = core_.reg(0) == 0x1fff9440 &&
-                core_.reg(1) == 0x11002830 && stack_arg0 == 0 && length != 0 &&
-                length <= BootImage::FlashSize && source >= BootImage::FlashBase &&
-                source_end <= static_cast<std::uint64_t>(BootImage::FlashBase) + BootImage::FlashSize &&
-                stack_arg1 >= BootImage::RamBase &&
-                output_end <= static_cast<std::uint64_t>(BootImage::RamBase) + BootImage::RamSize;
+            const bool source_valid = length <= BootImage::FlashSize &&
+                ((source >= BootImage::FlashBase &&
+                  source_end <= static_cast<std::uint64_t>(BootImage::FlashBase) + BootImage::FlashSize) ||
+                 (source >= BootImage::RamBase &&
+                  source_end <= static_cast<std::uint64_t>(BootImage::RamBase) + BootImage::RamSize));
+            const std::uint64_t output_end = static_cast<std::uint64_t>(stack_arg0) + length;
+            const bool output_valid = stack_arg0 == 0 ||
+                (stack_arg0 >= BootImage::RamBase &&
+                 output_end <= static_cast<std::uint64_t>(BootImage::RamBase) + BootImage::RamSize);
+            const bool mic_valid = stack_arg1 == 0 ||
+                (stack_arg1 >= BootImage::RamBase &&
+                 static_cast<std::uint64_t>(stack_arg1) + 4 <=
+                     static_cast<std::uint64_t>(BootImage::RamBase) + BootImage::RamSize);
             std::vector<std::uint8_t> data(length);
-            if (observed_boot_call && core_.read_memory(source, data.data(), data.size())) {
-                const std::uint32_t mic = crc16_arc(data.data(), data.size());
-                if (core_.write_memory(stack_arg1, &mic, sizeof mic)) {
-                    // On the captured TS0001 boot check, the ROM entry's output matches the
-                    // record's 16-bit CRC (0xcf3f for the supplied 0x4000-byte block).
-                    // This is an inferred compatibility path, not a general crypto shim.
-                    std::fprintf(stderr,
-                                 "PHY6252: inferred phy_sec_encrypt boot MIC CRC16 data=0x%08x size=0x%x mic=0x%04x\n",
-                                 source, length, mic & 0xffffu);
-                    core_.set_reg(0, 0);
-                } else {
-                    return {cortexm::StopReason::Fault,
-                            "unimplemented PHY6252 phy_sec_encrypt output buffer"};
-                }
+            PhySecResult transformed;
+            const bool inputs_read = args_read && source_valid && output_valid && mic_valid &&
+                core_.read_memory(source, data.data(), data.size());
+            std::uint32_t previous_mic = 0xffffffffu;
+            if (stack_arg1 != 0)
+                core_.read_memory(stack_arg1, &previous_mic, sizeof previous_mic);
+            bool transformed_ok = false;
+            if (inputs_read && !phy_sec_provisioned(flash_)) {
+                phy_sec_crc_result(data, transformed);
+                transformed_ok = true;
+            } else if (inputs_read) {
+                crypto::Block key{};
+                std::array<std::uint8_t, 13> iv{};
+                transformed_ok = core_.read_memory(core_.reg(0), key.data(), key.size()) &&
+                    core_.read_memory(core_.reg(1), iv.data(), iv.size()) &&
+                    phy_sec_process(key, std::span<const std::uint8_t, 13>(iv),
+                                    data, true, transformed);
+            }
+            if (!transformed_ok ||
+                (stack_arg0 != 0 &&
+                 !core_.write_memory(stack_arg0, transformed.data.data(), transformed.data.size())) ||
+                (stack_arg1 != 0 &&
+                 !core_.write_memory(stack_arg1, transformed.mic.data(), transformed.mic.size()))) {
+                core_.set_reg(0, static_cast<std::uint32_t>(-22));
+                std::fprintf(stderr,
+                             "PHY6252: phy_sec_encrypt rejected block data=0x%08x size=0x%x\n",
+                             source, length);
             } else {
-                char message[320];
-                std::uint32_t saved_caller[5]{}, caller_mic[2]{};
-                core_.read_memory(core_.reg(13) + 12, saved_caller, sizeof saved_caller);
-                core_.read_memory(saved_caller[0] + 12, caller_mic, sizeof caller_mic);
-                std::snprintf(message, sizeof message,
-                              "unimplemented PHY6252 ROM call phy_sec_encrypt at 0x%08x (r0=0x%08x r1=0x%08x r2=0x%08x r3=0x%08x sp=0x%08x stack=[0x%08x,0x%08x] lr=0x%08x saved=[0x%08x,0x%08x,0x%08x,0x%08x,0x%08x] mic_words=[0x%08x,0x%08x])",
-                              pc, core_.reg(0), core_.reg(1), core_.reg(2), core_.reg(3),
-                              core_.reg(13), stack_arg0, stack_arg1, core_.reg(14),
-                              saved_caller[0], saved_caller[1], saved_caller[2],
-                              saved_caller[3], saved_caller[4], caller_mic[0], caller_mic[1]);
-                return {cortexm::StopReason::Fault, message};
+                if (stack_arg1 != 0)
+                    std::fprintf(stderr,
+                                 "PHY6252: PHY+ partition %s generated data=0x%08x size=0x%x mic=%02x%02x%02x%02x previous=0x%08x\n",
+                                 phy_sec_provisioned(flash_) ? "AES-CCM MIC" : "CRC16",
+                                 source, length, transformed.mic[0], transformed.mic[1],
+                                 transformed.mic[2], transformed.mic[3], previous_mic);
+                core_.set_reg(0, 0);
             }
         } else {
             char message[384];
@@ -1140,12 +1236,12 @@ void Phy6252::write(std::uint32_t address, std::uint32_t value, unsigned size) {
         write_register(address, value, size);
         return;
     }
-    unsupported_register(address, "write");
+    unsupported_register(address, "write", value, size);
 }
 
 std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
     if (size != 1 && size != 2 && size != 4) {
-        unsupported_register(address, "read");
+        unsupported_register(address, "read", 0, size);
         return 0;
     }
     const std::uint32_t aligned = address & ~3u;
@@ -1331,6 +1427,10 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
     case AonRtcCompare1:
     case AonRtcCompare2:
     case AonRtcFlag:
+    case AonSleepR0:
+    case AonSleepR0 + 4:
+    case AonSleepR0 + 8:
+    case AonSleepR0 + 0xc:
         value = control_registers_[aligned];
         break;
     case AonRtcCount:
@@ -1351,7 +1451,7 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
 
 void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigned size) {
     if (size != 1 && size != 2 && size != 4) {
-        unsupported_register(address, "write");
+        unsupported_register(address, "write", value, size);
         return;
     }
     const std::uint32_t aligned = address & ~3u;
@@ -1596,6 +1696,10 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
     case AonXtal16Control:
     case AonWakeMask0:
     case AonWakeMask1:
+    case AonSleepR0:
+    case AonSleepR0 + 4:
+    case AonSleepR0 + 8:
+    case AonSleepR0 + 0xc:
         control_registers_[aligned] = lane_write(control_registers_[aligned], value, address, size);
         if (aligned == MuxEnable || aligned == MuxAnalog || aligned == MuxPadEnable ||
             mux_select_register(aligned))
@@ -1650,7 +1754,7 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             notify_gpio(GpioMask);
         }
         else
-            unsupported_register(address, "write");
+            unsupported_register(address, "write", value, size);
         break;
     }
 }
@@ -1658,12 +1762,19 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
 void Phy6252::unsupported_register(std::uint32_t address, const char *operation,
                                   std::uint32_t value, unsigned size) {
     if (pending_fault_.empty()) {
-        char message[320];
+        std::uint32_t msp = 0, psp = 0, control = 0, ipsr = 0;
+        uc_reg_read(core_.engine(), UC_ARM_REG_MSP, &msp);
+        uc_reg_read(core_.engine(), UC_ARM_REG_PSP, &psp);
+        uc_reg_read(core_.engine(), UC_ARM_REG_CONTROL, &control);
+        uc_reg_read(core_.engine(), UC_ARM_REG_IPSR, &ipsr);
+        char message[560];
         if (size != 0) {
             std::snprintf(message, sizeof message,
-                          "unimplemented PHY6252 MMIO %s at 0x%08x value=0x%08x size=%u pc=0x%08x r0=0x%08x r1=0x%08x r2=0x%08x r3=0x%08x sp=0x%08x lr=0x%08x",
-                          operation, address, value, size, core_.pc(), core_.reg(0),
-                          core_.reg(1), core_.reg(2), core_.reg(3), core_.reg(13), core_.reg(14));
+                          "unimplemented PHY6252 MMIO %s at 0x%08x value=0x%08x size=%u pc=0x%08x last_pc=0x%08x r0=0x%08x r1=0x%08x r2=0x%08x r3=0x%08x sp=0x%08x msp=0x%08x psp=0x%08x control=0x%08x ipsr=0x%08x lr=0x%08x",
+                          operation, address, value, size, core_.pc(),
+                          core_.last_instruction_pc(), core_.reg(0),
+                          core_.reg(1), core_.reg(2), core_.reg(3), core_.reg(13),
+                          msp, psp, control, ipsr, core_.reg(14));
         } else {
             std::snprintf(message, sizeof message, "unimplemented PHY6252 MMIO %s at 0x%08x",
                           operation, address);
