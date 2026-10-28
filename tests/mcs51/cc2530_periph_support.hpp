@@ -6,6 +6,7 @@
 // core or drives the documented host API; expected values come from
 // SWRU191F, not from the implementation.
 
+#include "cc2530_table_2_3.hpp"
 #include "mcs51emu/cc2530f256.hpp"
 
 #include <cstdint>
@@ -22,6 +23,18 @@ using mcs51emu::Cc2530PowerMode;
 using mcs51emu::Cc2530RunResult;
 
 inline unsigned failures = 0;
+
+// CPU cycles of an instruction sequence given by its opcodes, from the
+// SWRU191F Table 2-3 transcription (cc2530_table_2_3.hpp), and of an
+// interrupt entry (SWRU191F 2.5.2). Expected cycle values are built from
+// these, not from the emulator.
+constexpr unsigned cycles_of(std::initializer_list<std::uint8_t> opcodes) {
+    unsigned total = 0;
+    for (const std::uint8_t opcode : opcodes)
+        total += swru191f::contract_cycles(opcode);
+    return total;
+}
+inline constexpr unsigned EntryCycles = swru191f::EntryCycles;
 
 #define CHECK(condition)                                                                       \
     do {                                                                                       \

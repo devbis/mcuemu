@@ -141,8 +141,9 @@ void test_period_compare_and_interrupt_timing() {
     CHECK_EQ(device.read_idata(0x30), 0);
     // 22.1.3: at the period the timer wraps to 0, PERF is set and, with
     // TIMER2_PERM = 1, the T2 interrupt (vector 0x53) is requested. The
-    // event is applied at the boundary at t0 + 1000; entry takes 2 cycles.
-    CHECK_EQ(run_to_pc(device, 0x0053), t0 + Period + 2);
+    // event is applied at the boundary at t0 + 1000; the entry takes
+    // EntryCycles (SWRU191F 2.5.2).
+    CHECK_EQ(run_to_pc(device, 0x0053), t0 + Period + EntryCycles);
     // ISR: flags captured (PERF | CMP1F | CMP2F) and cleared.
     run_to(device, t0 + Period + 40);
     CHECK_EQ(device.read_idata(0x30), 1);
@@ -153,7 +154,7 @@ void test_period_compare_and_interrupt_timing() {
     CHECK_EQ(device.read_sfr(T2IRQF), 0x00);
     run_to(device, t0 + Period + Cmp1);
     CHECK_EQ(device.read_sfr(T2IRQF), 0x02);
-    CHECK_EQ(run_to_pc(device, 0x0053), t0 + 2 * Period + 2);
+    CHECK_EQ(run_to_pc(device, 0x0053), t0 + 2 * Period + EntryCycles);
 }
 
 void test_period_interrupt_all_modes() {
@@ -337,7 +338,11 @@ void test_sfd_capture() {
     Cc2530F256 device;
     load(device, flash);
     const std::uint64_t t0 = run_to_pc(device, start);
-    run_to(device, t0 + 700);
+    // Stop inside the first delay loop at the first DJNZ boundary at or
+    // after t0 + 700 (Table 2-3: MOV direct,#data 3, MOV Rn,#data 2,
+    // DJNZ Rn 3), after the capture time t0 + 650.
+    constexpr unsigned Djnz = cycles_of({0xDF}), Loop = cycles_of({0x75, 0x7F});
+    run_to(device, t0 + Loop + Djnz * ((700 - Loop + Djnz - 1) / Djnz));
     // 22.1.10: the radio SFD going high captures t2tim and t2ovf.
     device.peripherals().mac_timer->sfd_capture(t0 + 650);
     run_to_pc(device, read);

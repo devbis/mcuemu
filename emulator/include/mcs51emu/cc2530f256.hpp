@@ -275,16 +275,15 @@ struct Cc2530Diagnostics {
 // SLEEPCMD.MODE), resets, a deterministic virtual-time interrupt-event queue
 // and the peripherals below (docs/cc2530.md lists them and their limits).
 //
-// Timing contract (EMU-04A-R2, see emu04a-r2-interrupt-scheduler.md):
-// registers().cycles is the virtual time base. An instruction advances it by
-// the MCS51 core's cycle table (helper.c): the classic Intel machine-cycle
-// count (1, 2 or 4) except that MOV direct,Rn (0x88-0x8F), MOV Rn,direct
-// (0xA8-0xAF), ORL/ANL C,bit and C,/bit (0x72, 0x82, 0xA0, 0xB0) and MOV
-// bit,C (0x92) take 1 instead of 2. This is a model-defined contract: it is
-// neither the classic table nor the CC2530 clock counts of SWRU191F
-// Table 2-3. An interrupt entry advances it by 2 (TI: at least 7) and counts
-// as one instruction. Time spent in a power mode advances cycles but not
-// instructions. CLKCONCMD does not change the rate.
+// Timing contract (docs/cc2530.md "Timing contract"):
+// registers().cycles is the virtual time base, one cycle per 32 MHz CPU
+// clock. An instruction advances it by its SWRU191F Table 2-3 count (MCS51
+// core cycle model UC_MCS51_CYCLE_MODEL_CC253X), the best case without flash
+// or XDATA wait states, the same count for a conditional branch taken or
+// not. An interrupt entry advances it by 7 (SWRU191F 2.5.2: one cycle to
+// detect the request plus the 6-cycle LCALL) and counts as one instruction.
+// Time spent in a power mode advances cycles but not instructions.
+// CLKCONCMD does not change the rate.
 //
 // Interrupt-delivery contract: every change to an interrupt flag, enable or
 // priority SFR, whether by firmware, host, test hook or scheduled event, goes

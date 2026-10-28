@@ -10,7 +10,10 @@
 // SP 800-38A F.2-F.5 vectors. Where the documents give no number, the test
 // states the emulator's model-defined rule it relies on (see the model
 // sources): one DMA byte transfer takes 2 clocks and a word transfer 4,
-// AES processing ends 40 clocks after the last input byte.
+// AES processing ends 40 clocks after the last input byte. CPU instruction
+// times are SWRU191F Table 2-3 (cycles_of); a CPU write takes effect at the
+// start clock of the writing instruction, and programs pad with 1-clock
+// NOPs so that their writes land at the offsets the expectations use.
 
 #include "cc2530_dma.hpp"
 #include "cc2530_periph_support.hpp"
@@ -141,9 +144,9 @@ struct Asm {
         code.insert(code.end(), bytes.begin(), bytes.end());
         return *this;
     }
-    // MOV direct,#imm (2 cycles)
+    // MOV direct,#imm (Table 2-3: 3 clocks)
     Asm &mov(std::uint8_t dir, std::uint8_t value) { return op({0x75, dir, value}); }
-    // MOV direct2,direct1 (2 cycles)
+    // MOV direct2,direct1 (Table 2-3: 4 clocks)
     Asm &copy(std::uint8_t to, std::uint8_t from) { return op({0x85, from, to}); }
     // MOV Rn,#imm
     Asm &movr(unsigned r, std::uint8_t value) {
@@ -187,7 +190,7 @@ struct Asm {
         return op({0x80, offset});
     }
     // MOV R5,#outer; L1: MOV R6,#inner; L2: MOV R7,#0; DJNZ R7,$;
-    // DJNZ R6,L2; DJNZ R5,L1 = 1 + outer * (3 + 515 * inner) clocks.
+    // DJNZ R6,L2; DJNZ R5,L1: delay_cycles(outer, inner) clocks.
     Asm &delay(std::uint8_t outer, std::uint8_t inner) {
         movr(5, outer);
         const std::uint16_t l1 = here();
@@ -206,7 +209,16 @@ struct Asm {
     }
 };
 
-constexpr std::uint64_t delay_cycles(unsigned outer, unsigned inner) { return 1 + outer * (3 + 515 * inner); }
+// SWRU191F Table 2-3 instruction times the expectations are built from.
+constexpr unsigned MovDirImm = cycles_of({0x75}); // MOV direct,#data: 3
+constexpr unsigned MovxWrite = cycles_of({0xf0}); // MOVX @DPTR,A: 4
+
+// Asm::delay(): MOV Rn,#data 2 and DJNZ Rn,rel 3 clocks (Table 2-3), so
+// 2 + outer * (5 + 773 * inner) clocks.
+constexpr std::uint64_t delay_cycles(unsigned outer, unsigned inner) {
+    const std::uint64_t mov = cycles_of({0x7d}), djnz = cycles_of({0xdf});
+    return mov + outer * (mov + inner * (mov + 256 * djnz + djnz) + djnz);
+}
 
 void place(Flash &flash, const Asm &code) { flash.at(code.origin).op(code.code); }
 
@@ -248,8 +260,8 @@ Flash base_program(const Asm &main) {
                          0xd0, 0xe0,         // POP ACC
                          0x32});             // RETI
 
-    // aes_in: R2 bytes from @R0 to ENCDI, then wait 61 clocks (> the
-    // model-defined AES latency of 40 clocks).
+    // aes_in: R2 bytes from @R0 to ENCDI, then wait 92 clocks (MOV Rn,#data
+    // 2 + 30 x DJNZ 3, Table 2-3; > the model-defined AES latency of 40).
     Asm in(AesIn);
     in.op({0xea, 0xfc}); // MOV A,R2; MOV R4,A
     const std::uint16_t in_loop = in.here();
@@ -396,7 +408,7 @@ void test_dma_manual_block_timing() {
     Cc2530F256 device;
     load(device, base_program(main));
     const std::uint64_t t = run_to_pc(device, arm);
-    run_to(device, t + 2);
+    run_to(device, t + MovDirImm); // DMAREQ written at +3
     expect(device.read_sfr(DMAARM), 0x01, "DMAARM while configuring");
     run_to(device, t + 8);
     expect(device.read_sfr(DMAREQ), 0x01, "DMAREQ kept during the 9-clock fetch");
@@ -665,7 +677,9 @@ void test_dma_repeated_modes() {
         d.tmode = RepeatedBlock;
         main.descriptor(0, d).point_descriptors();
         const std::uint16_t arm = main.here();
-        main.mov(DMAARM, 0x01).mov(DMAREQ, 0x01).nops(16).mov(DMAREQ, 0x01).nops(80).halt();
+        // The second DMAREQ write at +20.
+        main.mov(DMAARM, 0x01).mov(DMAREQ, 0x01).nops(20 - 2 * MovDirImm).mov(DMAREQ, 0x01);
+        main.nops(80).halt();
 
         Cc2530F256 device;
         load(device, base_program(main));
@@ -681,7 +695,7 @@ void test_dma_repeated_modes() {
         expect(device.read_sfr(DMAIRQ), 0x01, "DMAIF0 after the first block");
         expect(device.read_sfr(DMAARM), 0x01, "repeated block stays armed");
         device.write_sfr(DMAIRQ, 0x00);
-        run_to(device, t + 22);
+        run_to(device, t + 20 + MovDirImm);
         expect(device.read_sfr(DMAREQ), 0x01, "DMAREQ written at +20 waits for the re-fetch");
         run_to(device, t + 26);
         expect(device.read_sfr(DMAREQ), 0x00, "re-fetch ends at +26");
@@ -833,7 +847,7 @@ void test_dma_priority_and_round_robin() {
         assured.priority = PrioAssured;
         main.descriptor(0, low).descriptor(1, high).descriptor(2, assured).point_descriptors();
         const std::uint16_t arm = main.here();
-        main.mov(DMAARM, 0x07).nops(28).mov(DMAREQ, 0x07).nops(60).halt();
+        main.mov(DMAARM, 0x07).nops(30 - MovDirImm).mov(DMAREQ, 0x07).nops(60).halt(); // DMAREQ at +30
 
         Cc2530F256 device;
         load(device, base_program(main));
@@ -841,19 +855,22 @@ void test_dma_priority_and_round_robin() {
         write_xdata(device, 0x0210, {0xb0, 0xb1, 0xb2});
         write_xdata(device, 0x0220, {0xc0, 0xc1, 0xc2});
         const std::uint64_t t = run_to_pc(device, arm);
-        expect_bytes(sample(device, t + 32, 9), {0xb0, 0xb1, 0xb2, 0xc0, 0xc1, 0xc2, 0xa0, 0xa1, 0xa2});
+        // Slots end at +32, +34, ...; sampled one clock later, after the
+        // 3-clock DMAREQ write.
+        expect_bytes(sample(device, t + 33, 9), {0xb0, 0xb1, 0xb2, 0xc0, 0xc1, 0xc2, 0xa0, 0xa1, 0xa2});
     }
     {
         Asm main(0x0100);
         main.mov(SP, 0x30);
         Desc low = desc(0x0200, 0x0300, 4);
         low.destinc = Inc0;
-        Desc high = desc(0x0210, 0x0300, 3);
+        Desc high = desc(0x0210, 0x0301, 3);
         high.destinc = Inc0;
         high.priority = PrioHigh;
         main.descriptor(0, low).descriptor(1, high).point_descriptors();
         const std::uint16_t arm = main.here();
-        main.mov(DMAARM, 0x03).nops(18).mov(DMAREQ, 0x01).nops(1).mov(DMAREQ, 0x02).nops(40).halt();
+        // DMAREQ0 at +20, DMAREQ1 at +23.
+        main.mov(DMAARM, 0x03).nops(20 - MovDirImm).mov(DMAREQ, 0x01).mov(DMAREQ, 0x02).nops(40).halt();
 
         Cc2530F256 device;
         load(device, base_program(main));
@@ -861,10 +878,21 @@ void test_dma_priority_and_round_robin() {
         write_xdata(device, 0x0210, {0xb0, 0xb1, 0xb2});
         const std::uint64_t t = run_to_pc(device, arm);
         // DMAREQ1 is written at t+23 during A1's slot (t+22..t+24); the
-        // high-priority channel takes over at the next arbitration.
-        expect_bytes(sample(device, t + 22, 1), {0xa0});
-        expect_bytes(sample(device, t + 25, 1), {0xa1});
-        expect_bytes(sample(device, t + 26, 5), {0xb0, 0xb1, 0xb2, 0xa2, 0xa3});
+        // high-priority channel takes over at the next arbitration. The
+        // 3-clock DMAREQ1 write (Table 2-3) leaves no instruction boundary
+        // while A1's byte is the last one moved, so the channels write
+        // separate bytes (low 0x0300, high 0x0301) and each sample reads
+        // both: a0, a1, then b0-b2, then a2, a3.
+        const auto both = [&device](std::uint64_t at) {
+            run_to(device, at);
+            return xdata(device, 0x0300, 2);
+        };
+        expect_bytes(both(t + 23), {0xa0, 0x00});
+        expect_bytes(both(t + 26), {0xa1, 0xb0});
+        expect_bytes(both(t + 28), {0xa1, 0xb1});
+        expect_bytes(both(t + 30), {0xa1, 0xb2});
+        expect_bytes(both(t + 32), {0xa2, 0xb2});
+        expect_bytes(both(t + 34), {0xa3, 0xb2});
     }
     {
         Asm main(0x0100);
@@ -875,14 +903,15 @@ void test_dma_priority_and_round_robin() {
         second.destinc = Inc0;
         main.descriptor(0, first).descriptor(3, second).point_descriptors();
         const std::uint16_t arm = main.here();
-        main.mov(DMAARM, 0x09).nops(18).mov(DMAREQ, 0x09).nops(40).halt();
+        main.mov(DMAARM, 0x09).nops(20 - MovDirImm).mov(DMAREQ, 0x09).nops(40).halt(); // DMAREQ at +20
 
         Cc2530F256 device;
         load(device, base_program(main));
         write_xdata(device, 0x0200, {0xd0, 0xd1, 0xd2});
         write_xdata(device, 0x0230, {0xa0, 0xa1, 0xa2});
         const std::uint64_t t = run_to_pc(device, arm);
-        expect_bytes(sample(device, t + 22, 6), {0xd0, 0xa0, 0xd1, 0xa1, 0xd2, 0xa2});
+        // Slots end at +22, +24, ...; sampled one clock later.
+        expect_bytes(sample(device, t + 23, 6), {0xd0, 0xa0, 0xd1, 0xa1, 0xd2, 0xa2});
     }
 }
 
@@ -898,10 +927,13 @@ void test_dma_abort() {
     d1.irqmask = true;
     main.descriptor(0, d0).descriptor(1, d1).point_descriptors();
     const std::uint16_t arm_a = main.here();
-    main.mov(DMAARM, 0x01).mov(DMAREQ, 0x01).nops(10).mov(DMAARM, 0x81).nops(20);
+    // ABORT at +14.
+    main.mov(DMAARM, 0x01).mov(DMAREQ, 0x01).nops(14 - 2 * MovDirImm).mov(DMAARM, 0x81).nops(20);
     main.copy(0x40, DMAARM).copy(0x41, DMAIRQ);
     const std::uint16_t arm_b = main.here();
-    main.mov(DMAARM, 0x02).mov(DMAREQ, 0x02).mov(DMAARM, 0x82).nops(20).mov(DMAARM, 0x02).nops(60);
+    // DMAREQ at +3, ABORT at +6 (before ready at +9), rearm at +26.
+    main.mov(DMAARM, 0x02).mov(DMAREQ, 0x02).mov(DMAARM, 0x82).nops(26 - 3 * MovDirImm);
+    main.mov(DMAARM, 0x02).nops(60);
     const std::uint16_t end = main.here();
     main.halt();
 
@@ -912,20 +944,20 @@ void test_dma_abort() {
     const std::uint64_t t = run_to_pc(device, arm_a);
     run_to(device, t + 13);
     expect_bytes(xdata(device, 0x0300, 3), {1, 2, 0});
-    run_to(device, t + 16); // ABORT written at +14, the slot ending at +15 is cancelled
+    run_to(device, t + 14 + MovDirImm); // ABORT written at +14, the slot ending at +15 is cancelled
     expect(device.read_sfr(DMAARM), 0x00, "aborted channel disarmed");
     run_to(device, t + 30);
     expect_bytes(xdata(device, 0x0300, 3), {1, 2, 0});
     expect(device.read_sfr(DMAIRQ), 0x00, "no DMAIRQ flag after abort");
 
     const std::uint64_t tb = run_to_pc(device, arm_b);
-    run_to(device, tb + 6);
+    run_to(device, tb + 3 * MovDirImm); // the ABORT write (+6) has executed
     expect(device.read_sfr(DMAARM), 0x00, "aborted before it was ready");
     expect(device.read_sfr(DMAREQ), 0x02, "DMAREQ not cleared by disarming");
     run_to(device, tb + 25);
     expect(device.peek_xdata(0x0310), 0x00, "no transfer while disarmed");
     expect(device.read_sfr(DMAREQ), 0x02, "DMAREQ still pending");
-    run_to(device, tb + 28);
+    run_to(device, tb + 26 + MovDirImm);
     expect(device.read_sfr(DMAARM), 0x02, "rearmed at +26");
     run_to(device, tb + 35);
     expect(device.read_sfr(DMAREQ), 0x00, "pending DMAREQ served at ready (+35)");
@@ -1022,7 +1054,10 @@ void test_dma_halts_in_pm1() {
     Asm main(0x0100);
     main.mov(SP, 0x30).mov(IEN0, 0xa0).mov(SLEEPCMD, 0x05);
     main.descriptor(0, desc(0x0200, 0x0300, 4)).point_descriptors();
-    main.mov(DMAARM, 0x01).mov(DMAREQ, 0x01).mov(PCON, 0x01).nops(1);
+    // DMAREQ first: it stays set until a transfer starts (8.1, 8.8), and
+    // with 3-clock MOVs (Table 2-3) PM1 then begins at the boundary after
+    // the PCON write (+9), before the channel armed at +3 is ready (+12).
+    main.mov(DMAREQ, 0x01).mov(DMAARM, 0x01).mov(PCON, 0x01).nops(1);
     const std::uint16_t end = main.here();
     main.nops(40).halt();
 
@@ -1047,21 +1082,28 @@ void test_dma_halts_in_pm1() {
     expect(device.read_sfr(DMAIRQ), 0x01, "complete after wake-up");
 }
 
-// A PREV chain with a DMA interrupt is identical in fast, step and trace runs.
+// A PREV chain with two DMA interrupts is identical in fast, step and trace
+// runs. The 6-byte block of channel 1 (12 clocks, no interrupt) separates
+// the two interrupting completions: with Table 2-3 timing the ISR clears
+// IRCON.DMAIF no earlier than 15 clocks after channel 0 completes (entry 7, LJMP 4,
+// PUSH 4), so channel 2's completion requests a second interrupt instead of
+// merging into the first.
 void test_dma_run_mode_equivalence() {
     Asm main(0x0100);
     main.mov(SP, 0x30).mov(IEN1, 0x01).mov(IEN0, 0x80);
     Desc d0 = desc(0x0200, 0x0300, 3);
     d0.irqmask = true;
-    Desc d1 = desc(0x0200, 0x0310, 3);
+    Desc d1 = desc(0x0200, 0x0330, 6);
     d1.trig = TrigPrev;
-    d1.word = true;
-    d1.irqmask = true;
-    Desc d2 = desc(0x0200, 0x0320, 2);
-    d2.tmode = RepeatedSingle;
+    Desc d2 = desc(0x0200, 0x0310, 3);
     d2.trig = TrigPrev;
-    main.descriptor(0, d0).descriptor(1, d1).descriptor(2, d2).point_descriptors();
-    main.mov(DMAARM, 0x07).mov(DMAREQ, 0x01);
+    d2.word = true;
+    d2.irqmask = true;
+    Desc d3 = desc(0x0200, 0x0320, 2);
+    d3.tmode = RepeatedSingle;
+    d3.trig = TrigPrev;
+    main.descriptor(0, d0).descriptor(1, d1).descriptor(2, d2).descriptor(3, d3);
+    main.point_descriptors().mov(DMAARM, 0x0f).mov(DMAREQ, 0x01);
     const std::uint16_t loop = main.here();
     main.op({0x05, 0x50}).sjmp(loop); // INC 0x50; SJMP loop
     const Flash flash = base_program(main);
@@ -1070,6 +1112,7 @@ void test_dma_run_mode_equivalence() {
         [](Cc2530F256 &device) { write_xdata(device, 0x0200, {1, 2, 3, 4, 5, 6}); },
         [](Cc2530F256 &device, Mode) {
             expect_bytes(xdata(device, 0x0300, 3), {1, 2, 3});
+            expect_bytes(xdata(device, 0x0330, 6), {1, 2, 3, 4, 5, 6});
             expect_bytes(xdata(device, 0x0310, 6), {1, 2, 3, 4, 5, 6});
             expect_bytes(xdata(device, 0x0320, 2), {1, 0});
             expect(device.read_idata(DmaIsrCount), 2, "two DMA interrupts");
@@ -1109,7 +1152,7 @@ void test_flash_erase_from_sram() {
     code.dptr(FCTL).op({0x74, 0x05});
     const std::uint16_t erase = code.here();
     code.op({0xf0}); // MOVX @DPTR,A: FCTL.ERASE = 1
-    code.delay(5, 248).nops(3000);
+    code.delay(5, 165).nops(3000);
     code.dptr(0xa800).op({0xe4, 0x93, 0xf5, 0x40, 0xe0, 0xf5, 0x41});
     code.xread_to(FCTL, 0x44);
     const std::uint16_t end = code.here();
@@ -1121,9 +1164,9 @@ void test_flash_erase_from_sram() {
     load(device, flash);
     place_sram(device, code);
     const std::uint64_t t = run_to_pc(device, erase);
-    run_to(device, t + 2);
+    run_to(device, t + MovxWrite);
     expect(device.peek_xdata(FCTL), 0x85, "BUSY | CM=01 | ERASE");
-    const std::uint64_t sled = t + 2 + delay_cycles(5, 248);
+    const std::uint64_t sled = t + MovxWrite + delay_cycles(5, 165);
     CHECK(sled < t + EraseCycles - 1);
     run_to(device, t + EraseCycles - 1);
     expect(device.peek_xdata(FCTL), 0x85, "still erasing at 20 ms - 1 clock");
@@ -1167,7 +1210,8 @@ void test_flash_erase_stalls_cpu_from_flash() {
         const std::uint64_t t = run_to_pc(device, erase);
         const std::uint64_t stalls = device.diagnostics().cpu_stall_cycles;
         expect(run_to_pc(device, next), t + EraseCycles, "next instruction after 20 ms");
-        expect(device.diagnostics().cpu_stall_cycles - stalls, EraseCycles - 2, "stalled clocks");
+        expect(device.diagnostics().cpu_stall_cycles - stalls, EraseCycles - MovxWrite,
+               "stalled clocks");
         settle(device, 20);
         expect(device.read_idata(0x44), 0x04, "FCTL after the stall");
         expect(device.read_idata(0x40), 0xff, "erased byte via MOVC");
@@ -1224,10 +1268,11 @@ void test_flash_word_writes_from_sram() {
     load(device, flash);
     place_sram(device, code);
     const std::uint64_t tw = run_to_pc(device, write);
-    run_to(device, tw + 2);
+    run_to(device, tw + MovxWrite);
     expect(device.peek_xdata(FCTL), 0x86, "BUSY | CM=01 | WRITE");
     const std::uint64_t t = run_to_pc(device, fourth);
-    run_to(device, t + 17);
+    // After the fourth byte's MOVX and five MOV A,#data; MOVX @DPTR,A pairs.
+    run_to(device, t + MovxWrite + 5 * cycles_of({0x74, 0xf0}));
     expect(device.peek_xdata(FCTL), 0xc6, "FULL after the second word");
     run_to(device, t + WordCycles - 1);
     expect(device.peek_xdata(FCTL), 0xc6, "first word in progress");
@@ -1301,7 +1346,8 @@ void test_flash_dma_write() {
         // Bytes at +2..+8 (word 0 starts at +8), +10..+16 (FULL), word 1
         // from +648 to +1288.
         expect(run_to_pc(device, next), t + 8 + 2 * WordCycles, "stalled for both words");
-        expect(device.diagnostics().cpu_stall_cycles - stalls, 6 + 2 * WordCycles, "stall clocks");
+        expect(device.diagnostics().cpu_stall_cycles - stalls, 8 + 2 * WordCycles - MovxWrite,
+               "stall clocks");
         expect_bytes(flash_bytes(device, 0x3800, 12),
                      {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0xff, 0xff, 0xff, 0xff});
         expect(device.read_sfr(DMAIRQ), 0x01, "DMA channel 0 done");
@@ -1383,7 +1429,7 @@ void test_flash_run_mode_equivalence() {
             expect_bytes(flash_bytes(device, 0x3000, 0x800), filled(0x800, 0xff));
             expect(device.read_idata(0x44), 0x04, "FCTL after the erase");
             expect(device.read_idata(0x40), 0xff, "erased byte via MOVC");
-            expect(device.diagnostics().cpu_stall_cycles, EraseCycles - 2, "stall clocks");
+            expect(device.diagnostics().cpu_stall_cycles, EraseCycles - MovxWrite, "stall clocks");
         },
         "flash erase");
 }
@@ -1452,23 +1498,24 @@ void test_aes_ecb_cpu() {
     Cc2530F256 device;
     load(device, base_program(aes_ecb_program(false, key_load, start, end)));
     expect(device.read_sfr(ENCCS), 0x08, "ENCCS reset value (RDY)");
-    // MOV ENCCS at tk, 16 x MOV ENCDI from tk+2; the last byte at tk+32.
+    // MOV ENCCS at tk, 16 x MOV ENCDI from tk+3; the last byte at tk+48.
+    constexpr unsigned LastByte = 16 * MovDirImm;
     const std::uint64_t tk = run_to_pc(device, key_load);
-    run_to(device, tk + 2);
+    run_to(device, tk + MovDirImm);
     expect(device.read_sfr(ENCCS), 0x04, "load key: CMD = 10, RDY = 0");
-    run_to(device, tk + 32 + 39);
+    run_to(device, tk + LastByte + 39);
     expect(device.read_sfr(ENCCS), 0x04, "key load in progress");
     expect(device.read_sfr(S0CON) & 0x03, 0, "no key-load interrupt before completion");
-    run_to(device, tk + 32 + 40);
+    run_to(device, tk + LastByte + 40);
     expect(device.read_sfr(ENCCS), 0x0c, "key loaded");
     expect(device.read_sfr(S0CON) & 0x03, 0x03, "key load: ENCIF_1 | ENCIF_0");
     const std::uint64_t ts = run_to_pc(device, start);
-    run_to(device, ts + 2);
+    run_to(device, ts + MovDirImm);
     expect(device.read_sfr(ENCCS), 0x40, "ECB encrypt, RDY = 0");
-    run_to(device, ts + 32 + 39);
+    run_to(device, ts + LastByte + 39);
     expect(device.read_sfr(ENCCS), 0x40, "processing");
     expect(device.read_sfr(S0CON) & 0x03, 0, "no interrupt yet");
-    run_to(device, ts + 32 + 40);
+    run_to(device, ts + LastByte + 40);
     expect(device.read_sfr(ENCCS), 0x48, "block done");
     expect(device.read_sfr(S0CON) & 0x03, 0x03, "ENCIF_1 | ENCIF_0");
     expect(device.read_sfr(ENCDO), FipsCipher[0], "first output byte");

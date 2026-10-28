@@ -72,7 +72,7 @@ constexpr std::uint8_t Scratch = 0x30, ClearEnc = 0x38, ClearRf = 0x39, PostIdle
                        AfterIdle = 0x3d, StackStart = 0x1f;
 constexpr std::uint64_t Forever = std::numeric_limits<std::uint64_t>::max();
 
-// Every handler starts with a 14-cycle, 13-instruction log entry:
+// Every handler starts with a 32-cycle (Table 2-3), 13-instruction log entry:
 // [0x80 | source, return PC high, return PC low, logged register].
 constexpr std::size_t LogInstructions = 2 + 8 + 3;
 
@@ -97,10 +97,12 @@ struct Bench {
     std::array<unsigned, 18> isr_instructions{}; // entry counts as one (R1-F4)
     Placed bank3;
 
+    // Reset LJMP, then the main sequence; from loop_index on, SJMP $ repeats.
     std::uint64_t main_cycle(std::size_t i) const {
+        const std::uint64_t start = ljmp(MainOrigin).cycles;
         if (i < loop_index)
-            return 2 + main.offset[i];
-        return 2 + main.offset[loop_index] + 2 * (i - loop_index);
+            return start + main.offset[i];
+        return start + main.offset[loop_index] + sjmp_self().cycles * (i - loop_index);
     }
     std::uint16_t main_pc(std::size_t i) const { return main.pc[std::min(i, loop_index)]; }
     std::size_t first_boundary(std::size_t from, std::uint64_t t) const {
@@ -109,9 +111,10 @@ struct Bench {
             ++i;
         return i;
     }
-    // Start cycle of handler instruction j of an ISR entered at `entry`.
+    // Start cycle of handler instruction j of an ISR entered at `entry`
+    // (the entry, then the vector's LJMP).
     std::uint64_t handler_cycle(unsigned source, std::uint64_t entry, std::size_t j) const {
-        return entry + 4 + handler[source].offset[j];
+        return entry + EntryCycles + ljmp(HandlerOrigin).cycles + handler[source].offset[j];
     }
 };
 
@@ -146,7 +149,7 @@ Bench build(const BenchSpec &spec) {
                              handler_code(k, it == spec.handlers.end() ? HandlerSpec{} : it->second));
         if (b.handler[k].end > address + HandlerStride)
             throw std::logic_error("handler too long");
-        b.isr_cycles[k] = 2 + 2 + b.handler[k].total;
+        b.isr_cycles[k] = EntryCycles + ljmp(address).cycles + b.handler[k].total;
         b.isr_instructions[k] = 2 + static_cast<unsigned>(b.handler[k].pc.size());
     }
     std::vector<Ins> code{mov_imm(SP, StackStart), mov_rn_imm(1, 0x40), mov_imm(ClearEnc, 0xfc),
@@ -300,7 +303,7 @@ bool throws(const std::function<void()> &f) {
 
 // ---------------------------------------------------------------- Gate A
 
-// A1: an event that arrives while the CPU executes 1-, 2- and 4-cycle
+// A1: an event that arrives while the CPU executes 1-, 3-, 4- and 5-cycle
 // instructions, none of which writes an SFR, is taken at the first
 // instruction boundary at which cycles >= its time, in every mode.
 void test_async_event_without_sfr_writes() {
@@ -394,7 +397,7 @@ void test_event_in_banked_code() {
     spec.handlers[SrcT1].logged = FMAP;
     const Bench b = build(spec);
     const std::size_t call = b.main.find(lcall(BankLogical).bytes);
-    const std::uint64_t bank_start = b.main_cycle(call) + 2;
+    const std::uint64_t bank_start = b.main_cycle(call) + lcall(BankLogical).cycles;
     const std::uint64_t ret_end = bank_start + b.bank3.total;
     const std::uint64_t limit = b.main_cycle(b.loop_index) + b.bank3.total + 80;
     for (std::uint64_t t = bank_start; t <= ret_end; ++t) {
@@ -445,10 +448,21 @@ void test_same_time_events() {
                 CHECK(d.next_event_cycle() == t);
                 CHECK(d.scheduled_event_count() == 4);
             });
-            // The first ISR still sees the other source's flag pending.
+            // The first ISR still sees the other source's flag pending. The
+            // disabled T4 flag (t + 40) is in a handler's logged IRCON value
+            // if its read (log_direct's MOV A,direct) starts at or after
+            // t + 40; the second ISR is entered after RETI and one main
+            // instruction (Table 2-3 timing: the second handler's read).
+            const std::uint64_t entry2 = b.main_cycle(e + 1) + b.isr_cycles[first];
+            const auto t4_seen = [&](unsigned source, std::uint64_t entry) {
+                return b.handler_cycle(source, entry, LogInstructions - 3) >= t + 40
+                           ? Sources[SrcT4].flag_mask
+                           : std::uint8_t{0};
+            };
             expect_log(out,
-                       {{first, b.main_pc(e), Sources[second].flag_mask},
-                        {second, b.main_pc(e + 1), 0x00}},
+                       {{first, b.main_pc(e),
+                         static_cast<std::uint8_t>(Sources[second].flag_mask | t4_seen(first, t))},
+                        {second, b.main_pc(e + 1), t4_seen(second, entry2)}},
                        ctx);
             expect_final(out, b, b.isr_cycles[SrcT1] + b.isr_cycles[SrcT3],
                          b.isr_instructions[SrcT1] + b.isr_instructions[SrcT3], limit, ctx);
@@ -498,7 +512,7 @@ void test_event_api_contract() {
     const Cc2530RunResult r = d.run(1);
     CHECK(r.instructions == 1);
     CHECK(r.pc == vector_of(SrcT1));
-    CHECK(d.registers().cycles == x + 2);
+    CHECK(d.registers().cycles == x + EntryCycles);
     CHECK(d.registers().interrupt_levels == 0x01);
     d.run(1000, x + 60);
     CHECK(decode(irq_log(d)) ==
@@ -562,7 +576,8 @@ void test_enable_and_priority_writes() {
     spec.body = repeat(nop(), 4);
     spec.handlers[SrcT1].extra = {nop(), mov_imm(IP0, 0x08), nop(), mul_ab(), nop()};
     const Bench b = build(spec);
-    const std::uint64_t limit = b.main_cycle(b.loop_index) + 100;
+    // Past both ISRs (58 + 47 cycles under Table 2-3) after the loop start.
+    const std::uint64_t limit = b.main_cycle(b.loop_index) + 160;
     for (const Mode mode : AllModes) {
         const std::string ctx = context("A7", mode, "IP0 raise in ISR");
         const Outcome out = execute(b, mode, limit);
@@ -811,7 +826,8 @@ void test_flags_during_isr() {
         const Bench b = build(spec);
         const std::size_t e1 = b.body_index + 1;
         const std::uint64_t entry1 = b.main_cycle(e1);
-        const std::uint64_t limit = b.main_cycle(b.loop_index) + 160;
+        // Past the three ISRs (66 + 55 + 55 cycles under Table 2-3).
+        const std::uint64_t limit = b.main_cycle(b.loop_index) + 240;
         for (const Mode mode : AllModes) {
             const std::string ctx = context("B4", mode, "behind T1 level 3");
             const Outcome out = execute(b, mode, limit, [&](Cc2530F256 &d) {
@@ -934,7 +950,7 @@ IdleBench idle_bench(BenchSpec spec, bool violate = false) {
     IdleBench ib{build(spec)};
     ib.p = ib.b.main.find(idle_write().bytes);
     ib.c0 = ib.b.main_cycle(ib.p);
-    ib.c1 = ib.c0 + 2;
+    ib.c1 = ib.c0 + idle_write().cycles;
     return ib;
 }
 
@@ -1111,12 +1127,14 @@ void test_idle_request_pending_at_entry() {
         const std::size_t e1 = b.body_index + 1;
         const std::uint64_t entry1 = b.main_cycle(e1);
         const std::size_t hp = h.find(idle_write().bytes);
-        const std::uint64_t h_c1 = b.handler_cycle(SrcT1, entry1, hp) + 2;
+        const std::uint64_t h_c1 = b.handler_cycle(SrcT1, entry1, hp) + idle_write().cycles;
         const std::uint64_t limit = b.main_cycle(b.loop_index) + 160;
+        // The later request comes after four SJMP $ iterations' worth of idle.
+        const std::uint64_t later = 4 * sjmp_self().cycles;
         Outcome outs[2][3];
         for (const bool before : {true, false}) {
             const std::uint64_t t3 =
-                before ? b.handler_cycle(SrcT1, entry1, LogInstructions) : h_c1 + 10;
+                before ? b.handler_cycle(SrcT1, entry1, LogInstructions) : h_c1 + later;
             for (const Mode mode : AllModes) {
                 const std::string ctx = context(
                     "C4b", mode,
@@ -1130,7 +1148,7 @@ void test_idle_request_pending_at_entry() {
                 if (t3_enabled) {
                     expect_log(out, {{SrcT1, b.main_pc(e1), 0}, {SrcT3, b.main_pc(e1 + 1), 1}},
                                ctx);
-                    const std::uint64_t idle = before ? 0 : 10;
+                    const std::uint64_t idle = before ? 0 : later;
                     expect_final(out, b, idle + b.isr_cycles[SrcT1] + b.isr_cycles[SrcT3],
                                  b.isr_instructions[SrcT1] + b.isr_instructions[SrcT3], limit,
                                  ctx);
@@ -1140,20 +1158,20 @@ void test_idle_request_pending_at_entry() {
                     CHECK_IN(out.sleeping && out.in_interrupt, ctx);
                     CHECK_IN(out.regs.pc == h.pc[hp + 1], ctx);
                     CHECK_IN(out.sfr[IRCON] == 0x08, ctx);
-                    expect_idle_diag(out, 1, 0, 0, before ? 0 : 10, ctx);
+                    expect_idle_diag(out, 1, 0, 0, before ? 0 : later, ctx);
                 }
                 outs[before][static_cast<int>(mode)] = out;
             }
         }
         // Same instruction stream whatever the order: equal IDATA (logs,
         // counters, stack) and instruction counts. With T3 enabled both runs
-        // stop at the same cycle limit, so the later request's 10 idle cycles
-        // replace exactly five 2-cycle SJMP $ iterations; with T3 disabled
-        // both runs stop asleep after the same instructions.
+        // stop at the same cycle limit, so the later request's idle cycles
+        // replace exactly four SJMP $ iterations; with T3 disabled both runs
+        // stop asleep after the same instructions.
         for (int m = 0; m < 3; ++m) {
             CHECK(outs[0][m].idata == outs[1][m].idata);
             CHECK(outs[1][m].regs.instructions ==
-                  outs[0][m].regs.instructions + (t3_enabled ? 10 / 2 : 0));
+                  outs[0][m].regs.instructions + (t3_enabled ? 4 : 0));
         }
     }
 }
@@ -1171,13 +1189,14 @@ void test_idle_multiple_requests() {
         std::vector<Entry> want;
     };
     const std::uint64_t w = ib.c1 + 7;
+    const std::uint64_t post_end = w + inc_dir(PostIdle).cycles; // post-IDLE INC 0x3c
     const Case cases[] = {
         // Together: T3 (level 1) first, T1 after T3's RETI and INC 0x3d.
         {w, w, {{SrcT3, b.main_pc(ib.p + 2), 1}, {SrcT1, b.main_pc(ib.p + 3), 1}}},
         // T3 at the end of the post-IDLE instruction: both pending there.
-        {w, w + 1, {{SrcT3, b.main_pc(ib.p + 2), 1}, {SrcT1, b.main_pc(ib.p + 3), 1}}},
+        {w, post_end, {{SrcT3, b.main_pc(ib.p + 2), 1}, {SrcT1, b.main_pc(ib.p + 3), 1}}},
         // T3 after T1's entry started: preempts at T1's vector instruction.
-        {w, w + 2, {{SrcT3, vector_of(SrcT1), 1}, {SrcT1, b.main_pc(ib.p + 2), 1}}},
+        {w, post_end + 1, {{SrcT3, vector_of(SrcT1), 1}, {SrcT1, b.main_pc(ib.p + 2), 1}}},
     };
     for (const Case &c : cases) {
         for (const Mode mode : AllModes) {
@@ -1237,7 +1256,7 @@ void test_idle_wake_then_preempt() {
     const IdleBench ib = idle_bench(spec);
     const Bench &b = ib.b;
     const std::uint64_t w = ib.c1 + 5;
-    const std::uint64_t entry1 = w + 1;
+    const std::uint64_t entry1 = w + inc_dir(PostIdle).cycles; // after the post-IDLE INC
     const std::uint64_t limit = b.main_cycle(b.loop_index) + 200;
     for (std::size_t j = LogInstructions; j < LogInstructions + 5; ++j) {
         const std::uint64_t t3 = b.handler_cycle(SrcT1, entry1, j) + 1;
@@ -1326,7 +1345,7 @@ void test_idle_post_clr_ea() {
         spec.handlers[SrcT1].logged = AfterIdle;
         const Bench b = build(spec);
         const std::size_t p = b.main.find(idle_write().bytes);
-        const std::uint64_t c1 = b.main_cycle(p) + 2;
+        const std::uint64_t c1 = b.main_cycle(p) + idle_write().cycles;
         for (const std::uint64_t d : {1u, 7u}) {
             const std::uint64_t limit = b.main_cycle(b.loop_index) + d + 80;
             for (const Mode mode : AllModes) {
@@ -1359,11 +1378,13 @@ void test_idle_loop_and_reset() {
     BenchSpec spec;
     spec.setup = {mov_imm(IEN1, 0x02), setb(EA_BIT)};
     // L: MOV PCON,#1 / INC 0x3c / SJMP L
-    spec.body = {nop(), idle_pad(), idle_write(), inc_dir(PostIdle), {{0x80, 0xf9}, 2}};
+    const Ins sjmp_l = op({0x80, 0xf9});
+    spec.body = {nop(), idle_pad(), idle_write(), inc_dir(PostIdle), sjmp_l};
     const Bench b = build(spec);
     const std::size_t p = b.main.find(idle_write().bytes);
-    const std::uint64_t c1 = b.main_cycle(p) + 2;
-    const std::uint64_t awake = 1 + b.isr_cycles[SrcT1] + 2 + 2; // INC, ISR, SJMP, PCON
+    const std::uint64_t c1 = b.main_cycle(p) + idle_write().cycles;
+    const std::uint64_t awake = inc_dir(PostIdle).cycles + b.isr_cycles[SrcT1] + sjmp_l.cycles +
+                                idle_write().cycles; // INC, ISR, SJMP, PCON
     const std::uint64_t events[] = {c1 + 10, c1 + 100, c1 + 200};
     for (const Mode mode : AllModes) {
         const std::string ctx = context("C12", mode, "loop");
@@ -1408,11 +1429,20 @@ void test_idle_loop_and_reset() {
     }
 }
 
-// T0: the engine's per-opcode cycle count equals the documented MCUEMU
-// timing contract (contract_cycles, written from the Intel MCS-51 table and
-// the documented exception list). Each opcode executes once from reset with
-// harmless operands (direct 0x30, bit 0x30, rel 0, DPTR 0).
+// T0: the engine's per-opcode cycle count equals SWRU191F Table 2-3
+// (contract_cycles: the datasheet transcription in cc2530_table_2_3.hpp,
+// which covers every defined opcode exactly once). Each opcode executes once
+// from reset with harmless operands (direct 0x30, bit 0x30, rel 0, DPTR 0),
+// so conditional branches are checked on one path; the table has one count
+// for both.
 void test_cycle_contract() {
+    for (unsigned opcode = 0; opcode < 0x100; ++opcode) {
+        unsigned rows = 0;
+        for (const Table23Row &row : table_2_3)
+            rows += table_2_3_covers(row, static_cast<std::uint8_t>(opcode)) ? 1u : 0u;
+        CHECK_IN(rows == (opcode == 0xa5 ? 0u : 1u),
+                 "T0 Table 2-3 rows for opcode " + std::to_string(opcode));
+    }
     for (unsigned opcode = 0; opcode < 0x100; ++opcode) {
         if (opcode == 0xa5)
             continue; // reserved: rejected as an invalid instruction
@@ -1436,12 +1466,54 @@ void test_cycle_contract() {
     }
 }
 
+// T0b: an interrupt entry costs EntryCycles (SWRU191F 2.5.2: 1 detect + 6
+// LCALL cycles) and one instruction, pushes the return address, and starts
+// at the first boundary after the request: from main code and, preempting,
+// from inside an ISR, in every mode.
+void test_interrupt_entry_cost() {
+    BenchSpec spec;
+    spec.setup = {mov_imm(IP0, 0x08), mov_imm(IEN1, 0x0a), setb(EA_BIT)};
+    // ORL IRCON,#T1IF makes T1 pending: the entry follows at the next boundary.
+    spec.body = {nop(), orl_imm(IRCON, 0x02), mul_ab(), nop()};
+    // T3 (level 1) raised inside the T1 ISR preempts at the next boundary.
+    spec.handlers[SrcT1].extra = {orl_imm(IRCON, 0x08), nop()};
+    const Bench b = build(spec);
+    const std::size_t e = b.body_index + 2;
+    const std::size_t raise = LogInstructions; // handler index of ORL IRCON,#T3IF
+    for (const Mode mode : AllModes) {
+        const std::string ctx = context("T0b", mode, "");
+        Cc2530F256 d;
+        load(d, b.flash);
+        std::ostringstream sink;
+        const Cc2530RunResult first = run_to_vector(d, mode, vector_of(SrcT1), sink);
+        CHECK_IN(first.error.empty(), ctx + first.error);
+        CHECK_IN(first.pc == vector_of(SrcT1), ctx);
+        CHECK_IN(d.registers().cycles == b.main_cycle(e) + EntryCycles,
+                 ctx + " cycles=" + std::to_string(d.registers().cycles));
+        CHECK_IN(d.registers().instructions == 1 + e + 1, ctx);
+        CHECK_IN(d.registers().sp == StackStart + 2, ctx);
+        CHECK_IN(d.read_idata(StackStart + 1) == lo(b.main_pc(e)) &&
+                     d.read_idata(StackStart + 2) == hi(b.main_pc(e)),
+                 ctx);
+        const std::uint64_t entry1 = b.main_cycle(e);
+        const Cc2530RunResult second = run_to_vector(d, mode, vector_of(SrcT3), sink);
+        CHECK_IN(second.error.empty(), ctx + second.error);
+        CHECK_IN(d.registers().cycles ==
+                     b.handler_cycle(SrcT1, entry1, raise + 1) + EntryCycles,
+                 ctx + " nested cycles=" + std::to_string(d.registers().cycles));
+        CHECK_IN(d.registers().instructions == 1 + e + 2 + (raise + 1) + 1, ctx);
+        CHECK_IN(d.registers().sp == StackStart + 4, ctx);
+        CHECK_IN(d.registers().interrupt_levels == 0x03, ctx);
+    }
+}
+
 } // namespace
 
 int main() {
     using Test = void (*)();
     const std::pair<const char *, Test> tests[] = {
         {"T0 cycle contract per opcode", test_cycle_contract},
+        {"T0b interrupt entry cost", test_interrupt_entry_cost},
         {"A1 async event without SFR writes", test_async_event_without_sfr_writes},
         {"A2/A3 event inside ISR", test_event_inside_isr},
         {"A4 event in banked code", test_event_in_banked_code},

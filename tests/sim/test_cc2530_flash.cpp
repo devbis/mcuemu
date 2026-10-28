@@ -208,10 +208,13 @@ void test_cc2530_flash_power_cut_log() {
         seen = idata(mcu, 0x40);
         CHECK(flash_byte(mcu, 0x3000) == (seen == 0 ? 0xff : seen));
         const std::string text = read_text(log);
-        // The entry is logged at the cut: 20 cycles of boot code, then the
-        // erase ran until cycle 320000 (10 ms at 32 MHz).
+        // The entry is logged at the cut: 34 cycles of boot code before the
+        // erasing MOVX (SWRU191F Table 2-3: LJMP 4, MOV direct,#data 3,
+        // MOV DPTR 3, CLR A 1, MOVC 3, MOV direct,A 3, JNZ 3, MOV DPTR 3,
+        // MOV A,#data 2, MOVX 4, MOV DPTR 3, MOV A,#data 2), then the erase
+        // ran until cycle 320000 (10 ms at 32 MHz).
         CHECK(contains(text, "time_ns=10000000 cycle=320000 op=erase page=6 address=0x03000 "
-                             "outcome=partial cut=power-cut elapsed=319980"));
+                             "outcome=partial cut=power-cut elapsed=319966"));
         CHECK(contains(text, "cycle=320000 event=power-cut count=1"));
         CHECK(contains(text, "time_ns=10000000 cycle=320000 event=power-cut"));
         CHECK(count_of(text, "outcome=completed") == (seen == 0 ? 1u : 0u));

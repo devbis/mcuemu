@@ -1061,11 +1061,13 @@ void test_interrupts_through_vectors() {
     run_to(device, t);
     device.write_sfr(RFST, IsTxOn);
     // 23.1: RF interrupt (vector 0x83) when an unmasked flag is set; the
-    // CPU enters the ISR two cycles after the flag (LCALL to the vector).
+    // CPU enters the ISR EntryCycles after the flag (SWRU191F 2.5.2: one
+    // polling cycle plus the LCALL to the vector; the sled has a boundary
+    // every cycle).
     const std::uint64_t sfd = t + Turn + Shr;
-    CHECK_EQ(run_to_pc(device, 0x0083), sfd + 2);
+    CHECK_EQ(run_to_pc(device, 0x0083), sfd + EntryCycles);
     const std::uint64_t end = sfd + (1 + len) * Octet;
-    CHECK_EQ(run_to_pc(device, 0x0083), end + 2);
+    CHECK_EQ(run_to_pc(device, 0x0083), end + EntryCycles);
     run_until(device, end + 200);
     CHECK_EQ(device.read_idata(0x30), 2);
     CHECK_EQ(device.read_idata(0x31), F0Sfd);
@@ -1083,7 +1085,7 @@ void test_interrupts_through_vectors() {
     device.write_sfr(RFST, IsRfOff);
     CHECK_EQ(device.read_sfr(RFERRF), ErrStrobe);
     CHECK_EQ(device.read_sfr(TCON) & 0x02, 0x02);
-    CHECK_EQ(run_to_pc(device, 0x0003), err + 2);
+    CHECK_EQ(run_to_pc(device, 0x0003), err + EntryCycles);
     CHECK_EQ(device.read_sfr(TCON) & 0x02, 0x00);
     run_until(device, err + 100);
     CHECK_EQ(device.read_idata(0x33), 1);

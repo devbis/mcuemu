@@ -891,8 +891,8 @@ int run_image(const std::string &path, std::uint64_t horizon) {
 // ------------------------------------------------------------ image audit
 // --audit: per-step checks of a firmware image that do not depend on its
 // expected results (those are in fw/tools/e4fw.py):
-//  * timing contract (cc2530_r2_support.hpp contract_cycles; interrupt entry
-//    = 2 cycles, 1 instruction, SP + 2);
+//  * timing contract (cc2530_r2_support.hpp: contract_cycles, the SWRU191F
+//    Table 2-3 counts; interrupt entry = EntryCycles (7), 1 instruction, SP + 2);
 //  * exact peak SP over every instruction/entry boundary, the spare bytes
 //    below the guard and the guard bytes at the end (--guard ADDR:VALUE,
 //    --min-headroom N);
@@ -984,7 +984,8 @@ void audit_image(const std::string &path, std::uint64_t horizon, const AuditOpti
         bool ok;
         if (entry) {
             ++entries;
-            ok = dc == 2 && di == 1 && after.sp == static_cast<std::uint8_t>(before.sp + 2);
+            ok = dc == r2::EntryCycles && di == 1 &&
+                 after.sp == static_cast<std::uint8_t>(before.sp + 2);
         } else {
             ok = dc == r2::contract_cycles(op) && di == 1;
         }

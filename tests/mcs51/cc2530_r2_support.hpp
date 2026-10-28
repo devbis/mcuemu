@@ -1,12 +1,13 @@
 // Shared helpers for the EMU-04A-R2 CC2530 interrupt-scheduler tests.
 //
 // Programs are hand-encoded. Each instruction carries its cycle count under
-// the documented MCUEMU timing contract (contract_cycles below, written from
-// the Intel MCS-51 table plus the documented exception, not read from the
-// emulator), so expected boundary cycles are computed independently of the
-// model under test.
+// the documented CC2530 timing contract (contract_cycles from
+// cc2530_table_2_3.hpp, transcribed from SWRU191F Table 2-3, not read from
+// the emulator), so expected boundary cycles are computed independently of
+// the model under test.
 #pragma once
 
+#include "cc2530_table_2_3.hpp"
 #include "mcs51emu/cc2530f256.hpp"
 
 #include <cstdint>
@@ -59,49 +60,14 @@ constexpr std::uint16_t vector_of(unsigned source) {
 inline std::uint8_t hi(std::uint16_t v) { return static_cast<std::uint8_t>(v >> 8); }
 inline std::uint8_t lo(std::uint16_t v) { return static_cast<std::uint8_t>(v); }
 
-// MCUEMU MCS-51 engine timing contract (docs/cc2530.md "Timing contract"):
-// the Intel MCS-51 machine-cycle table (12 oscillator periods = 1 cycle,
-// 24 = 2, 48 = 4) with one documented exception. Written here from the
-// Intel instruction-set table, not read from the emulator;
-// test_cc2530f256_r2's T0 checks the engine against it for every opcode.
-inline unsigned intel_cycles(std::uint8_t op) {
-    if (op == 0xa4 || op == 0x84) // MUL AB, DIV AB
-        return 4;
-    if ((op & 0x1fu) == 0x01u || (op & 0x1fu) == 0x11u) // AJMP, ACALL
-        return 2;
-    if ((op >= 0x88 && op <= 0x8f) ||  // MOV direct,Rn
-        (op >= 0xa8 && op <= 0xaf) ||  // MOV Rn,direct
-        (op >= 0xb4 && op <= 0xbf) ||  // CJNE
-        (op >= 0xd8 && op <= 0xdf))    // DJNZ Rn,rel
-        return 2;
-    switch (op) {
-    case 0x02: case 0x12: case 0x22: case 0x32: case 0x73: case 0x80: // jumps/calls
-    case 0x10: case 0x20: case 0x30: case 0x40: case 0x50: case 0x60: case 0x70:
-    case 0x43: case 0x53: case 0x63:             // ORL/ANL/XRL direct,#data
-    case 0x72: case 0x82: case 0xa0: case 0xb0:  // ORL/ANL C,bit and C,/bit
-    case 0x92:                                   // MOV bit,C
-    case 0x75: case 0x85: case 0x86: case 0x87:  // MOV direct,#data/direct/@Ri
-    case 0x83: case 0x93:                        // MOVC
-    case 0x90: case 0xa3:                        // MOV DPTR,#data16; INC DPTR
-    case 0xa6: case 0xa7:                        // MOV @Ri,direct
-    case 0xc0: case 0xd0: case 0xd5:             // PUSH, POP, DJNZ direct
-    case 0xe0: case 0xe2: case 0xe3: case 0xf0: case 0xf2: case 0xf3: // MOVX
-        return 2;
-    default:
-        return 1;
-    }
-}
-// The documented exception: the engine counts 1 cycle for these seven
-// 2-cycle Intel groups (MOV direct,Rn; MOV Rn,direct; ORL C,bit; ANL C,bit;
-// ORL C,/bit; ANL C,/bit; MOV bit,C). SWRU191F Table 2-3 gives 2-4 CC2530
-// clocks for them; neither table is matched for these opcodes.
-inline bool engine_one_cycle_exception(std::uint8_t op) {
-    return (op >= 0x88 && op <= 0x8f) || (op >= 0xa8 && op <= 0xaf) || op == 0x72 ||
-           op == 0x82 || op == 0xa0 || op == 0xb0 || op == 0x92;
-}
-inline unsigned contract_cycles(std::uint8_t op) {
-    return engine_one_cycle_exception(op) ? 1u : intel_cycles(op);
-}
+using swru191f::AcallLow;
+using swru191f::AjmpLow;
+using swru191f::contract_cycles;
+using swru191f::EntryCycles;
+using swru191f::Table23Row;
+using swru191f::table_2_3;
+using swru191f::table_2_3_covers;
+using swru191f::table_2_3_row;
 
 struct Ins {
     std::vector<std::uint8_t> bytes;

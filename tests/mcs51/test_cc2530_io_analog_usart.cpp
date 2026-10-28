@@ -144,19 +144,24 @@ void check_events(const std::vector<PadEvent> &actual, const std::vector<PadEven
 // inputs get the pull of PxINP/P2INP.PDUPx (P1_0/P1_1 have none); reading
 // Px returns the pin levels, read-modify-write instructions use the latch.
 // The pin listener reports every drive change at the start cycle of the
-// instruction that caused it.
+// instruction that caused it. Start cycles follow SWRU191F Table 2-3:
+// MOV direct,#data 3, MOV A,direct 2, MOV direct,A 3, ANL direct,#data 4.
 void test_gpio_direction_pulls_and_listener() {
+    constexpr unsigned MovDirImm = cycles_of({0x75});
+    constexpr std::uint64_t TRead = 6 * MovDirImm;                        // 18
+    constexpr std::uint64_t TAnl = TRead + cycles_of({0xe5, 0xf5});       // 23
+    constexpr std::uint64_t TDir = TAnl + cycles_of({0x53});              // 27
     Flash flash;
     flash.at(0x0000).op({0x75, P1DIR, 0x0c,  // t=0  P1_2, P1_3 outputs (latch 1)
-                         0x75, P1, 0xf3,     // t=2  latch bits 3:2 = 0
-                         0x75, P2INP, 0x40,  // t=4  PDUP1: port 1 pulldowns
-                         0x75, P1INP, 0x80,  // t=6  MDP1_7: P1_7 3-state
-                         0x75, P0INP, 0x01,  // t=8  MDP0_0: P0_0 3-state
-                         0x75, P2INP, 0x61,  // t=10 PDUP0+PDUP1, MDP2_0
-                         0xe5, P1,           // t=12 MOV A,P1 (pin levels)
-                         0xf5, 0x30,         // t=13 MOV 0x30,A
-                         0x53, P1, 0xff,     // t=14 ANL P1,#0xFF (latch read)
-                         0x75, P1DIR, 0x1c,  // t=16 P1_4 output: drives latch bit 4
+                         0x75, P1, 0xf3,     // t=3  latch bits 3:2 = 0
+                         0x75, P2INP, 0x40,  // t=6  PDUP1: port 1 pulldowns
+                         0x75, P1INP, 0x80,  // t=9  MDP1_7: P1_7 3-state
+                         0x75, P0INP, 0x01,  // t=12 MDP0_0: P0_0 3-state
+                         0x75, P2INP, 0x61,  // t=15 PDUP0+PDUP1, MDP2_0
+                         0xe5, P1,           // t=18 MOV A,P1 (pin levels)
+                         0xf5, 0x30,         // t=20 MOV 0x30,A
+                         0x53, P1, 0xff,     // t=23 ANL P1,#0xFF (latch read)
+                         0x75, P1DIR, 0x1c,  // t=27 P1_4 output: drives latch bit 4
                          0x80, 0xfe});
 
     Cc2530F256 device;
@@ -179,28 +184,30 @@ void test_gpio_direction_pulls_and_listener() {
     record_pads(device, events);
     const Cc2530RunResult result = device.run(10);
     CHECK(result.error.empty());
-    CHECK_EQ(cycles(device), 18u);
+    CHECK_EQ(cycles(device), TDir + MovDirImm); // 10 instructions: 30
 
+    constexpr std::uint64_t M = MovDirImm;
     std::vector<PadEvent> expected = {
-        {1, 2, Drive::High, 0},     {1, 3, Drive::High, 0},     {1, 2, Drive::Low, 2},
-        {1, 3, Drive::Low, 2},      {1, 4, Drive::PullDown, 4}, {1, 5, Drive::PullDown, 4},
-        {1, 6, Drive::PullDown, 4}, {1, 7, Drive::PullDown, 4}, {1, 7, Drive::HiZ, 6},
-        {0, 0, Drive::HiZ, 8}};
+        {1, 2, Drive::High, 0},         {1, 3, Drive::High, 0},
+        {1, 2, Drive::Low, M},          {1, 3, Drive::Low, M},
+        {1, 4, Drive::PullDown, 2 * M}, {1, 5, Drive::PullDown, 2 * M},
+        {1, 6, Drive::PullDown, 2 * M}, {1, 7, Drive::PullDown, 2 * M},
+        {1, 7, Drive::HiZ, 3 * M},      {0, 0, Drive::HiZ, 4 * M}};
     for (unsigned pin = 1; pin < 8; ++pin)
-        expected.push_back({0, pin, Drive::PullDown, 10});
-    expected.push_back({2, 0, Drive::HiZ, 10});
+        expected.push_back({0, pin, Drive::PullDown, 5 * M});
+    expected.push_back({2, 0, Drive::HiZ, 5 * M});
     // Only if ANL read the latch (bit 4 = 1) does P1_4 drive high.
-    expected.push_back({1, 4, Drive::High, 16});
+    expected.push_back({1, 4, Drive::High, TDir});
     check_events(events, expected, "gpio");
 
     // P1: P1_0/P1_1/P1_7 floating (1), P1_2/P1_3 low, P1_5/P1_6 pulled down,
-    // P1_4 driven high; at t=12 P1_4 was still pulled down.
+    // P1_4 driven high; at t=18 P1_4 was still pulled down.
     CHECK_EQ(device.read_idata(0x30), 0x83);
     CHECK_EQ(device.read_sfr(P1), 0x93);
     CHECK_EQ(device.read_sfr(P0), 0x01);
     CHECK_EQ(device.read_sfr(P2), 0x1f); // P2_1-P2_4 still pull up (PDUP2 = 0)
     // 7.4: edges on outputs and pulls set the flags whatever P1IEN is:
-    // P1_7 rose at t=6 (pulldown -> 3-state), P1_4 at t=16 (output high).
+    // P1_7 rose at t=9 (pulldown -> 3-state), P1_4 at t=27 (output high).
     CHECK_EQ(device.read_sfr(P1IFG), 0x90);
     CHECK_EQ(device.read_sfr(IRCON2) & IRCON2_P1IF, 0);
 
