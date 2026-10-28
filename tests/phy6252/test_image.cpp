@@ -616,6 +616,8 @@ int main() {
     CHECK(chip.read(0x40031c00, 1) == sizeof(rx_frame) + 2);
     for (std::size_t i = 0; i < sizeof rx_frame; ++i)
         CHECK(chip.read(0x40031c01 + static_cast<std::uint32_t>(i), 1) == rx_frame[i]);
+    CHECK(chip.read(0x40031c01 + sizeof rx_frame, 1) == 0x7b);
+    CHECK(chip.read(0x40031c02 + sizeof rx_frame, 1) == 0xa8);
     CHECK(static_cast<std::int8_t>(chip.read(0x400300e4, 4) >> 24) == -50);
     chip.write(0x40031f00, 0x1fff0a4a, 4);
     CHECK(chip.read(0x40031f00, 4) == 0x1fff0a4a);

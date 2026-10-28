@@ -182,6 +182,18 @@ std::uint32_t lane_write(std::uint32_t old, std::uint32_t value,
     return (old & ~mask) | ((value << shift) & mask);
 }
 
+std::uint16_t ieee802154_fcs(std::span<const std::uint8_t> payload) {
+    // The radio validates the received frame and exposes its FCS in the FIFO;
+    // VirtualAir intentionally carries only the MAC bytes between devices.
+    std::uint16_t crc = 0;
+    for (const std::uint8_t byte : payload) {
+        crc ^= byte;
+        for (unsigned bit = 0; bit < 8; ++bit)
+            crc = static_cast<std::uint16_t>((crc & 1u) ? (crc >> 1) ^ 0x8408u : crc >> 1);
+    }
+    return crc;
+}
+
 struct PhySecResult {
     std::vector<std::uint8_t> data;
     std::array<std::uint8_t, 4> mic{};
@@ -2122,6 +2134,9 @@ void Phy6252::receive_radio_frame(const mcuemu::RadioFrame &frame) {
     rx_fifo_.fill(0);
     rx_fifo_[0] = static_cast<std::uint8_t>(frame.payload.size() + 2);
     std::copy(frame.payload.begin(), frame.payload.end(), rx_fifo_.begin() + 1);
+    const std::uint16_t fcs = ieee802154_fcs(frame.payload);
+    rx_fifo_[frame.payload.size() + 1] = static_cast<std::uint8_t>(fcs);
+    rx_fifo_[frame.payload.size() + 2] = static_cast<std::uint8_t>(fcs >> 8);
     rx_fifo_read_ = 0;
     radio_rx_rssi_ = static_cast<std::int8_t>(std::clamp(frame.rssi_dbm, -127, 0));
     ll_registers_[RadioLlBase + 0x10] |= RadioIrqMd | RadioIrqCok;

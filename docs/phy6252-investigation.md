@@ -66,13 +66,15 @@ from frames on the selected channel over the driver's 128 us measurement
 window. The executed Zephyr driver performs MAC address filtering in its RX
 handler and sends ACKs by writing an ACK frame to the TX FIFO after its
 192-us turnaround wait; the emulator supplies the FIFO, IRQ and timed TX path
-used by that code. In the 10-second network run, the pcap contained 47 MAC ACK
+used by that code. On RX, the model computes and appends the little-endian
+CRC-16/KERMIT FCS to the FIFO bytes, matching the reported length; the medium
+continues to carry MAC payloads without an FCS. Outgoing FIFO FCS bytes are
+stripped at that boundary and are not validated, and the medium does not model
+corrupted frames. In the 10-second network run, the pcap contained 47 MAC ACK
 frames; 46 of 47 ACK-request frames had a same-sequence ACK within 3 ms. The
-measured ACK starts were 186–220 us after the preceding data PPDU ended. The
-medium carries frames without FCS, and the model does not compute or validate
-the FIFO's FCS bytes. Register values and timing come from the experimental
-Zephyr driver, adapted from an unverified PHY6222 implementation; they remain
-unverified on silicon.
+measured ACK starts were 186–220 us after the preceding data PPDU ended.
+Register values and timing come from the experimental Zephyr driver, adapted
+from an unverified PHY6222 implementation; they remain unverified on silicon.
 
 ## ROM calls and known gaps
 
