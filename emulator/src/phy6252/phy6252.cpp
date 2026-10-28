@@ -118,8 +118,12 @@ constexpr std::uint32_t RadioRxFifoSize = 0x800;
 constexpr std::uint32_t RadioBasebandMemoryEnd = RadioRxFifo + RadioRxFifoSize;
 constexpr unsigned RadioIrq = 4;
 constexpr std::uint32_t RadioIrqMd = 1u << 0;
-constexpr std::uint32_t RadioIrqCok = 1u << 1;
-constexpr std::uint32_t RadioIrqMask = 0x1f;
+constexpr std::uint32_t RadioIrqCok = 1u << 10;
+constexpr std::uint32_t RadioIrqMask = 0x3fffu;
+constexpr std::uint32_t RadioModeStx = 0x00;
+constexpr std::uint32_t RadioModeSrx = 0x01;
+constexpr std::uint32_t RadioModeTrx = 0x10;
+constexpr std::uint32_t RadioModeRtx = 0x12;
 constexpr std::uint32_t RomLlIrqHandler = 0x4e25;
 constexpr std::uint32_t RomGpioIrqHandler = 0x112d;
 constexpr std::uint32_t RomTimerIrqDispatch = 0x17ff1; // Private host trap; no exported ROM symbol.
@@ -382,10 +386,7 @@ void Phy6252::reset() {
     timer_irq_dispatch_warning_logged_.fill(false);
     ll_context_warning_logged_ = false;
     ll_rx_timeout_warning_logged_ = false;
-    ble_srx_warning_logged_ = false;
-    ble_settle_warning_logged_ = false;
-    ble_fifo_warning_logged_ = false;
-    ble_mode_warning_logged_ = false;
+    ll_settle_warning_logged_ = false;
     rf_sample_e8_warning_logged_ = false;
     heap_start_ = heap_size_ = 0;
     random_state_ = 0x6d2b79f5u;
@@ -541,50 +542,62 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                 write_register(base, static_cast<std::uint32_t>(time) * 4u, 4);
                 write_register(base + 0x08, TimerEnable | TimerUserMode, 4);
             }
+        } else if (address == 0x10adc) {
+            // ll_hw_clr_irq() writes the SDK's 14-bit IRQ mask to the W1C
+            // status register (same sequence as phy_hw_go() in PHY+).
+            write_register(RadioLlBase + 0x14, 0x3fffu, 4);
+        } else if (address == 0x10cf8 || address == 0x11420) {
+            // Both exported entries start the mode configured in LL_HW+0x04.
+            write_register(RadioLlBase, 1, 4);
+        } else if (address == 0x11174) {
+            // ll_hw_set_irq(mask) maps to LL_HW+0x0c, as the SDK's PHY+
+            // implementation documents with its direct register setup.
+            write_register(RadioLlBase + 0x0c, core_.reg(0), 4);
+        } else if (address == 0x10bbc) {
+            // ll_hw_get_irq_status() returns LL_HW+0x10, whose bit layout is
+            // listed in ll_hw_drv.h (MD=0, COK=10, RTO=2, and so on).
+            core_.set_reg(0, ll_registers_[RadioLlBase + 0x10]);
+        } else if (address == 0x11264 || address == 0x112a4 ||
+                   address == 0x112b8 || address == 0x113c8) {
+            // These generic PHY helpers select the modes declared in
+            // ll_hw_drv.h. PHY+ uses them for Zigbee as well as BLE.
+            const std::uint32_t mode = address == 0x11264 ? RadioModeRtx :
+                address == 0x112a4 ? RadioModeSrx :
+                address == 0x112b8 ? RadioModeStx : RadioModeTrx;
+            ll_registers_[RadioLlBase + 0x04] = mode;
+        } else if (address == 0x110b0) {
+            rx_fifo_.fill(0);
+            rx_fifo_read_ = 0;
+        } else if (address == 0x110e8) {
+            tx_fifo_.clear();
         } else if (address == 0x11278 || address == 0x11284) {
             // These SDK entries are ll_hw_set_rx_timeout() and
             // ll_hw_set_rx_timeout_1st(), each taking a uint32_t.
-            // Their BLE receive-timeout register effect is outside the 802.15.4 model.
+            // The timeout register and its clock unit are not documented in
+            // the available SDK headers, so retain an explicit diagnostic.
             if (!ll_rx_timeout_warning_logged_) {
                 std::fprintf(stderr,
-                             "PHY6252: BLE ll_hw_set_rx_timeout entry 0x%05x reached; RF timeout effect is not modeled\n",
-                             address);
+                             "PHY6252: ll_hw_set_rx_timeout entry 0x%05x reached (ticks=%u); timeout effect is not modeled\n",
+                             address, core_.reg(0));
                 ll_rx_timeout_warning_logged_ = true;
             }
-        } else if (address == 0x112a4) {
-            // SDK ll_hw_set_srx() selects BLE receive mode; it has no
-            // equivalent in this model's IEEE 802.15.4 radio.
-            if (!ble_srx_warning_logged_) {
-                std::fprintf(stderr,
-                             "PHY6252: BLE ll_hw_set_srx reached; BLE RF mode is not modeled\n");
-                ble_srx_warning_logged_ = true;
-            }
         } else if (address == 0x113dc) {
-            // SDK ll_hw_set_trx_settle(tmBb, tmAfe, tmPll) configures BLE
-            // turnaround timing, which is distinct from the 802.15.4 MAC path.
-            if (!ble_settle_warning_logged_) {
+            // The SDK exposes three settle values, but the available sources
+            // do not identify their backing registers or clock units.
+            if (!ll_settle_warning_logged_) {
                 std::fprintf(stderr,
-                             "PHY6252: BLE ll_hw_set_trx_settle reached; BLE timing is not modeled\n");
-                ble_settle_warning_logged_ = true;
-            }
-        } else if (address == 0x110b0 || address == 0x110e8) {
-            // SDK ll_hw_rst_rfifo()/ll_hw_rst_tfifo() reset BLE controller
-            // FIFOs, which are separate from the modeled 802.15.4 FIFOs.
-            if (!ble_fifo_warning_logged_) {
-                std::fprintf(stderr,
-                             "PHY6252: BLE ll_hw_rst_%s reached; BLE FIFO state is not modeled\n",
-                             address == 0x110b0 ? "rfifo" : "tfifo");
-                ble_fifo_warning_logged_ = true;
+                             "PHY6252: ll_hw_set_trx_settle reached (bb=%u afe=%u pll=%u); timing effect is not modeled\n",
+                             core_.reg(0), core_.reg(1), core_.reg(2));
+                ll_settle_warning_logged_ = true;
             }
         } else if (address == 0x10cdc) {
-            // The SDK exports ll_hw_get_tr_mode but omits its prototype in
-            // this header. With no BLE operation active, report idle and log.
-            if (!ble_mode_warning_logged_) {
-                std::fprintf(stderr,
-                             "PHY6252: BLE ll_hw_get_tr_mode reached; returning idle (BLE RF state is not modeled)\n");
-                ble_mode_warning_logged_ = true;
-            }
-            core_.set_reg(0, 0);
+            // Return the current LL_HW operation mode; the symbol is exported
+            // by the SDK ROM map but its declaration is omitted from headers.
+            core_.set_reg(0, ll_registers_[RadioLlBase + 0x04]);
+        } else if (address == 0x15cc8) {
+            // timer.h wraps fine-time deltas at BASE_TIME_UNITS. Core cycles
+            // are the only exposed 16 MHz clock in this model.
+            core_.set_reg(0, static_cast<std::uint32_t>(core_.cycles()) & 0x3fffffu);
         } else if (address == 0xace0) {
             // The SDK names this entry but omits its prototype. The simple
             // block/buffer path is only a test fixture; TS0001 passes more

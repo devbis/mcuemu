@@ -138,8 +138,18 @@ faults. `__aeabi_uread4` performs an unaligned little-endian 32-bit read, and
 the observed `LL_Rand` call returns success and fills the requested 1..255
 bytes with deterministic xorshift output. This is not cryptographic
 randomness. The observed `rtc_get_counter` call returns the model's AON RTC count.
-Several observed `ll_hw_*` BLE setup/FIFO calls are logged no-ops, and
-`ll_hw_get_tr_mode` returns idle. They do not model BLE state or radio effects.
+The PHY62 SDK places `ll_hw_*` declarations under its BLE controller, but the
+PHY+ example also uses those helpers for Zigbee. The model implements the
+observed mode selections (`STX`, `SRX`, `TRX`, `RTX`), IRQ status/mask/clear,
+go/trigger, FIFO reset, `ll_hw_get_tr_mode`, and `read_current_fine_time`
+against the modeled baseband registers and FIFOs. IRQ status bits follow the
+SDK header (`MD` bit 0, `COK` bit 10). Fine time is inferred from the 16 MHz
+core cycle count with the SDK's `BASE_TIME_UNITS` wrap. These operations do not
+establish Zigbee stack compatibility. The SDK exposes RX timeout and settle
+helpers, but the
+available headers/example do not identify their backing registers or clock
+units, so those calls remain logged with their arguments and have no timing
+effect in the model.
 The SDK's `gpio_sel[pin / 4]` accesses are served from the inferred register
 window `0x40003818..0x4000382c`; AON wake-source reads at `0x4000f0b0` and
 `0x4000f0b4` return zero without generating wake events. These are code-driven

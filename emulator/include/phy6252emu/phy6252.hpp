@@ -78,10 +78,7 @@ private:
     std::array<bool, 6> timer_irq_dispatch_warning_logged_{};
     bool ll_context_warning_logged_{false};
     bool ll_rx_timeout_warning_logged_{false};
-    bool ble_srx_warning_logged_{false};
-    bool ble_settle_warning_logged_{false};
-    bool ble_fifo_warning_logged_{false};
-    bool ble_mode_warning_logged_{false};
+    bool ll_settle_warning_logged_{false};
     bool rf_sample_e8_warning_logged_{false};
     std::uint32_t heap_start_{0}, heap_size_{0};
     std::uint32_t random_state_{0x6d2b79f5};

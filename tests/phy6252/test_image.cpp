@@ -148,6 +148,72 @@ int main() {
     CHECK(rom_test_chip.read(0x40001010, 4) == 1);
     CHECK(rom_test_chip.read(0x4000100c, 4) == 1); // EOI clears Timer1 pending
     CHECK(rom_test_chip.read(0x40001010, 4) == 0);
+    auto invoke_radio_rom = [&](std::uint32_t address, std::uint32_t arg0 = 0) {
+        rom_test_chip.core().set_reg(0, arg0);
+        rom_test_chip.core().set_reg(14, 0x11010109);
+        rom_test_chip.core().set_reg(15, address);
+        CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 64).reason ==
+              cortexm::StopReason::Deadline);
+    };
+    invoke_radio_rom(0x112a4); // ll_hw_set_srx
+    CHECK(rom_test_chip.read(0x40031004, 4) == 1);
+    invoke_radio_rom(0x10cdc); // ll_hw_get_tr_mode
+    CHECK(rom_test_chip.core().reg(0) == 1);
+    invoke_radio_rom(0x112b8); // ll_hw_set_stx
+    CHECK(rom_test_chip.read(0x40031004, 4) == 0);
+    invoke_radio_rom(0x113c8); // ll_hw_set_trx
+    CHECK(rom_test_chip.read(0x40031004, 4) == 0x10);
+    invoke_radio_rom(0x11264); // ll_hw_set_rtx
+    CHECK(rom_test_chip.read(0x40031004, 4) == 0x12);
+    invoke_radio_rom(0x11174, 1); // ll_hw_set_irq
+    CHECK(rom_test_chip.read(0x4003100c, 4) == 1);
+    rom_test_chip.write(0x40031400, 0x78563412, 4);
+    invoke_radio_rom(0x110e8); // ll_hw_rst_tfifo
+    CHECK(rom_test_chip.read(0x40031400, 4) == 0);
+    rom_test_chip.write(0x40031c00, 0x78563412, 4);
+    invoke_radio_rom(0x110b0); // ll_hw_rst_rfifo
+    CHECK(rom_test_chip.read(0x40031c00, 4) == 0);
+
+    mcuemu::VirtualAir phy_air;
+    rom_test_chip.connect_radio(phy_air, "phy6252-rom-test");
+    rom_test_chip.write(0x40031400, 5, 1); // PHR: three payload bytes and FCS
+    rom_test_chip.write(0x40031401, 0x01, 1);
+    rom_test_chip.write(0x40031402, 0x00, 1);
+    rom_test_chip.write(0x40031403, 0x5a, 1);
+    invoke_radio_rom(0x112b8); // ll_hw_set_stx
+    invoke_radio_rom(0x10cf8); // ll_hw_go
+    CHECK(phy_air.frames().size() == 1);
+    if (!phy_air.frames().empty()) {
+        CHECK(phy_air.frames()[0].payload == std::vector<std::uint8_t>({0x01, 0x00, 0x5a}));
+        const std::uint64_t tx_done = rom_test_chip.core().ns_to_cycles(phy_air.frames()[0].end_ns);
+        CHECK(rom_test_chip.run(tx_done + 64).reason == cortexm::StopReason::Deadline);
+    }
+    CHECK((rom_test_chip.read(0x40031010, 4) & 1u) != 0);
+    invoke_radio_rom(0x10adc); // ll_hw_clr_irq
+    CHECK(rom_test_chip.read(0x40031010, 4) == 0);
+
+    invoke_radio_rom(0x112a4); // ll_hw_set_srx
+    invoke_radio_rom(0x11420); // ll_hw_trigger
+    CHECK(rom_test_chip.radio_receiving());
+    const std::uint64_t phy_rx_start = rom_test_chip.core().cycles_to_ns(
+        rom_test_chip.core().cycles()) + 1000;
+    const std::uint64_t phy_rx_id = phy_air.transmit(
+        "coordinator", {}, mcuemu::RadioProtocol::Zigbee802154, 11, phy_rx_start,
+        {0x01, 0x00, 0xa5});
+    const auto phy_rx_frame = std::find_if(phy_air.frames().begin(), phy_air.frames().end(),
+        [phy_rx_id](const mcuemu::RadioFrame &frame) { return frame.id == phy_rx_id; });
+    CHECK(phy_rx_frame != phy_air.frames().end());
+    if (phy_rx_frame != phy_air.frames().end()) {
+        const std::uint64_t rx_done = rom_test_chip.core().ns_to_cycles(phy_rx_frame->end_ns + 20000);
+        CHECK(rom_test_chip.run(rx_done + 64).reason == cortexm::StopReason::Deadline);
+    }
+    const std::uint32_t radio_irq_status = rom_test_chip.read(0x40031010, 4);
+    CHECK((radio_irq_status & 1u) != 0); // LIRQ_MD
+    CHECK((radio_irq_status & (1u << 10)) != 0); // LIRQ_COK
+    invoke_radio_rom(0x10bbc); // ll_hw_get_irq_status
+    CHECK(rom_test_chip.core().reg(0) == radio_irq_status);
+    rom_test_chip.write(0x40031000, 0, 4); // PHY_ABORT stops the receive operation
+    CHECK(!rom_test_chip.radio_receiving());
     Phy6252 irq_chip;
     irq_chip.load_firmware(image);
     irq_chip.reset();
@@ -621,7 +687,8 @@ int main() {
         const std::uint64_t rx_done = chip.core().ns_to_cycles(rx_it->end_ns + 20000);
         CHECK(chip.run(rx_done + 100).reason == cortexm::StopReason::Deadline);
     }
-    CHECK((chip.read(0x40031010, 4) & 3) == 3);
+    CHECK((chip.read(0x40031010, 4) & ((1u << 0) | (1u << 10))) ==
+          ((1u << 0) | (1u << 10)));
     CHECK(chip.read(0x40031c00, 1) == sizeof(rx_frame) + 2);
     for (std::size_t i = 0; i < sizeof rx_frame; ++i)
         CHECK(chip.read(0x40031c01 + static_cast<std::uint32_t>(i), 1) == rx_frame[i]);
@@ -798,7 +865,7 @@ int main() {
     invoke_rom(0x110b0, 0, 0, 0, chip.core().cycles() + 8);
     invoke_rom(0x110e8, 0, 0, 0, chip.core().cycles() + 8);
     invoke_rom(0x10cdc, 0, 0, 0, chip.core().cycles() + 8);
-    CHECK(chip.core().reg(0) == 0);
+    CHECK(chip.core().reg(0) == 1); // ll_hw_get_tr_mode returns SRX selected above
     chip.reset();
     CHECK((chip.read(0x4000f024, 4) & 1u) != 0);
     chip.core().advance_to(chip.core().cycles() + 16000);
