@@ -278,16 +278,19 @@ For a separate first-boot probe, a temporary copy of the TS0001 dump had its
 `Device started for the first time` with network state 0. Holding GPIO8 from
 1 s to 8 s reports `KEY 1 longPress` and `zb bdb devNetOpt = 0`; with the
 supplied NVM contents, the same input reports option 7. In the erased-NVM
-case, the firmware reads RF register `0x400300e8` after a Timer1 callback. The
-model samples shared-air energy at that access. In a timing probe, a gateway
-beacon request on channel 11 ended 120 us before the read and the model returned
-about -41 dBm. The TS0001 still made no subsequent LL TX/RX start and wrote no
-frame to its TX FIFO. With the supplied NVM image, the long-press BDB request
-also produced no TS0001 frame. The erased-NVM run restarts the image at about
-8.0 s and continues without a CPU fault. This narrows the visible gap to the
-commissioning-to-LMAC path after its initial RSSI sample; the exact firmware,
-ROM or stack event contract remains unknown. Keep the cleared-NVM image outside
-the repository with the other local test inputs.
+case, the `devNetOpt = 0` path selects channel 11 (`0x400300b4 = 5`), arms
+Timer1 with `set_timer(..., 1512)`, then its callback writes `0x70ee5763` to RF
+register `0x4003004c` and reads `0x400300e4` and `0x400300e8`. The PHY+ SDK
+example names `0x4003004c` as the syncword register; that register's hardware
+effect is not verified here. The model samples shared-air energy at the `0xe8`
+read. In a timing probe, a gateway beacon request on channel 11 ended 120 us
+before the read and the model returned about -41 dBm. No LL control start or TX
+FIFO write follows this callback before the image restarts at about 8.0 s. With
+the supplied NVM image, the long-press BDB request also produced no TS0001
+frame. Both runs continue without a CPU fault. This narrows the visible gap to
+the commissioning-to-LMAC path after its initial RSSI sample; the exact
+firmware, ROM or stack event contract remains unknown. Keep the cleared-NVM
+image outside the repository with the other local test inputs.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
