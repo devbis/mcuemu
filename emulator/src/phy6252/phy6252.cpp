@@ -105,6 +105,10 @@ constexpr std::uint32_t AonWakeSource1 = 0x4000f0b4;
 constexpr std::uint32_t RadioClockControl = 0x4000f040;
 constexpr std::uint32_t RadioClockConfig = 0x4000f044;
 constexpr std::uint32_t AonEfuseConfig = 0x4000f054;
+constexpr std::uint32_t RfTpCal0 = 0x1fff0a44;
+constexpr std::uint32_t RfTpCal1 = 0x1fff0a45;
+constexpr std::uint8_t ObservedRfTpCal0 = 0x2b;
+constexpr std::uint8_t ObservedRfTpCal1 = 0x23;
 constexpr std::uint32_t AonEfuseProgram0 = 0x4000f140;
 constexpr std::uint32_t AonEfuseProgram1 = 0x4000f144;
 constexpr std::uint32_t AonXtal16Control = 0x4000f0bc;
@@ -354,6 +358,11 @@ void Phy6252::reset() {
         std::memcpy(vector_alias_ + vector * sizeof handler, &handler, sizeof handler);
     }
     std::copy(boot_ram_.begin(), boot_ram_.end(), ram_);
+    // The board ROM's RF startup calibration runs before the image's reset
+    // entry. Direct image boot skips it; these two outputs are observed in
+    // the supplied PHY6252 TS0001 boot log and at the SDK ROM data symbols.
+    ram_[RfTpCal0 - BootImage::RamBase] = ObservedRfTpCal0;
+    ram_[RfTpCal1 - BootImage::RamBase] = ObservedRfTpCal1;
     lcr_ = ier_ = dll_ = dlm_ = mcr_ = scratch_ = 0;
     rx_.clear();
     tx_.clear();

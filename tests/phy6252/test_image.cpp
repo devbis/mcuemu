@@ -86,6 +86,10 @@ int main() {
     Phy6252 chip;
     chip.load_firmware(image);
     chip.reset();
+    std::array<std::uint8_t, 2> rf_tp_cal{};
+    CHECK(chip.core().read_memory(0x1fff0a44, rf_tp_cal.data(), rf_tp_cal.size()));
+    CHECK(rf_tp_cal[0] == 0x2b); // ROM-owned g_rfPhyTpCal0
+    CHECK(rf_tp_cal[1] == 0x23); // ROM-owned g_rfPhyTpCal1
     std::uint32_t vtor_value = 0x1fff8b00, handler_vector = 0;
     CHECK(chip.core().write_memory(0xe000ed08, &vtor_value, sizeof vtor_value));
     CHECK(chip.core().read_memory(0xe000ed08, &vtor_value, sizeof vtor_value));

@@ -56,6 +56,13 @@ software-triggered memory copy used with SPIF remapping; other channels and
 request sources are not modeled. The ADC and a complete clock tree are not
 implemented.
 
+Direct image boot skips the ROM's earlier RF initialization. The SDK symbol
+table places `g_rfPhyTpCal0` and `g_rfPhyTpCal1` at `0x1fff0a44` and
+`0x1fff0a45`; reset seeds them to `0x2b` and `0x23`, matching the supplied
+TS0001 UART log. This restores the observed board startup state, but does not
+model the analog calibration routine or establish values for the 2 Mbps
+calibration globals.
+
 The experimental Zephyr radio driver uses RF registers at `0x40030000`, link
 layer registers at `0x40031000`, and TX/RX FIFOs at `0x40031400` and
 `0x40031c00`. The model handles its observed RF/LL register set, adds or strips
@@ -94,14 +101,15 @@ sequence: stop, select user mode, load `4 * time`, then enable the one-shot
 timer. TS0001 calls it for Timer1 with `time=1512` while entering network
 setup. This inferred ROM behavior is covered by a Timer1 expiry test.
 
-The SDK exports `efuse_read` but has no public prototype. Its simple
-`(block, buffer)` path only remains as a test fixture; firmware-observed calls
-are logged and leave memory unchanged. For block 1, TS0001 passes a stack
-address in `r1`, `0x60` in `r2`, and a Thumb code address in `r3`; a block 3
-call passes a stack address, `0x1fff0100`, and `0x10`. The actual call ABI and
-data layout remain unresolved, and the UART still prints `tpCap[00 00]`
-instead of the user's `tpCap[2b 23]`. The remaining calibration bytes have not
-been recovered, so eFuse compatibility is not established.
+The SDK exports `efuse_read` but has no public prototype, and the 512 KiB flash
+dump does not contain the separate eFuse contents. In the observed TS0001
+caller, `r0` is the block and `r1` is a stack output buffer; `r2` and `r3` are
+not initialized at that call site. The model logs these firmware reads and
+leaves the unavailable block data unchanged. A simple `(block, buffer)` write
+remains only as a unit-test fixture, not as evidence of the device's eFuse
+contents. RF calibration values printed as `tpCap` are restored from the
+separate ROM-owned globals described above; raw eFuse compatibility remains
+unverified.
 
 Two calls are deliberately visible limitations. The image reaches unexported
 ROM entry `0xa2e0`, inside the SDK symbol range for `ble_crc24_gen`; its body is
