@@ -257,6 +257,14 @@ reported values still differ: `power report time = 4744` (reference 3288),
 TS0001 relay support until it starts, joins and exchanges Zigbee traffic in a
 captured network scenario.
 
+There is also a likely network-identity mismatch in this probe: the TS0001
+startup log prints `0x87DB` in its restored-network fields, while the sampleGW
+data frames carry MAC PAN ID `0xA75C` (wire bytes `5c a7`). The log field is
+inferred to be the stored PAN ID. This can explain why the saved TS0001 state
+does not attach to this gateway, but it does not explain the absence of any
+outbound frame during first-boot commissioning; that radio path remains
+unverified.
+
 The reusable `examples/phy6252-ts0001.yaml` probe also reproduces the reference
 short key1 press on GPIO8 and key-level transitions on GPIO3. It does not print
 the reference relay `On`/`Off` reports, and the paired pcap remains identical
