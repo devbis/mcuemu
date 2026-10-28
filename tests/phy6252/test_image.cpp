@@ -86,6 +86,14 @@ int main() {
     Phy6252 chip;
     chip.load_firmware(image);
     chip.reset();
+    std::uint32_t vtor_value = 0x1fff8b00, handler_vector = 0;
+    CHECK(chip.core().write_memory(0xe000ed08, &vtor_value, sizeof vtor_value));
+    CHECK(chip.core().read_memory(0xe000ed08, &vtor_value, sizeof vtor_value));
+    CHECK(vtor_value == 0);
+    CHECK(chip.core().read_memory(0x0c, &handler_vector, sizeof handler_vector));
+    CHECK(handler_vector == 0x28f1);
+    CHECK(chip.core().read_memory(0x38, &handler_vector, sizeof handler_vector));
+    CHECK(handler_vector == 0x84cd);
     const std::uint32_t vector_word = 0x11010109;
     std::uint32_t vector_readback = 0;
     CHECK(chip.core().write_memory(0, &vector_word, sizeof vector_word));

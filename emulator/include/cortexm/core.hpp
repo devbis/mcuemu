@@ -51,6 +51,7 @@ public:
         std::uint32_t clock_hz{64000000};
         unsigned irq_count{48};       // external interrupt lines
         unsigned priority_bits{3};
+        bool vtor_present{true};
         bool track_last_instruction_pc{false};
     };
 

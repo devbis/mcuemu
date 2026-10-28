@@ -325,6 +325,8 @@ struct Core::Impl final : Bus {
     std::uint32_t read(std::uint32_t address, unsigned size) override {
         if (address >= ScsBase && address < ScsBase + 0x1000) {
             const std::uint32_t offset = address - ScsBase;
+            if (!core.config_.vtor_present && (offset & ~3u) == 0xd08)
+                return 0;
             if (offset >= 0x10 && offset < 0x20)
                 return systick_read(offset);
             std::uint32_t value = 0;
@@ -356,6 +358,8 @@ struct Core::Impl final : Bus {
     void write(std::uint32_t address, std::uint32_t value, unsigned size) override {
         if (address >= ScsBase && address < ScsBase + 0x1000) {
             const std::uint32_t offset = address - ScsBase;
+            if (!core.config_.vtor_present && (offset & ~3u) == 0xd08)
+                return;
             if (offset >= 0x10 && offset < 0x20) {
                 systick_write(offset, value);
                 return;
@@ -488,7 +492,7 @@ void Core::reset(std::uint32_t vector_table) {
     sleeping_ = false;
     std::uint32_t vector[2] = {0, 0};
     read_memory(vector_table, vector, sizeof vector);
-    if (vector_table != 0)
+    if (vector_table != 0 && config_.vtor_present)
         uc_arm_nvic(uc_, UC_ARM_NVIC_SCS_WRITE, 0xd08, &vector_table, 4);
     std::uint32_t sp = vector[0];
     std::uint32_t pc = vector[1] & ~1u;
@@ -510,7 +514,7 @@ void Core::request_reset() {
 }
 
 void Core::set_vtor(std::uint32_t address) {
-    if (uc_)
+    if (uc_ && config_.vtor_present)
         uc_arm_nvic(uc_, UC_ARM_NVIC_SCS_WRITE, 0xd08, &address, 4);
 }
 

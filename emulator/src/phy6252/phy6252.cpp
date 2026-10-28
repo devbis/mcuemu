@@ -11,6 +11,7 @@
 #include <limits>
 #include <span>
 #include <stdexcept>
+#include <utility>
 
 namespace phy6252emu {
 namespace {
@@ -20,10 +21,14 @@ cortexm::Core::Config config() {
     c.clock_hz = 16000000;
     c.irq_count = 32;
     c.priority_bits = 2;
+    c.vtor_present = false;
     c.track_last_instruction_pc = true;
     return c;
 }
 constexpr std::uint32_t RomSize = 0x18000, UartBase = 0x40004000;
+constexpr std::uint32_t RomNmiHandler = 0x8481;
+constexpr std::uint32_t RomHardFaultHandler = 0x28f1;
+constexpr std::uint32_t RomPendSvHandler = 0x84cd;
 constexpr std::uint32_t TimerBase = 0x40001000;
 constexpr std::uint32_t WatchdogBase = 0x40002000;
 constexpr std::uint32_t WatchdogControl = WatchdogBase;
@@ -303,6 +308,11 @@ void Phy6252::reset() {
     if (!run_address_)
         throw std::runtime_error("PHY6252 firmware has not been loaded");
     std::fill_n(vector_alias_, 0x100, 0);
+    const std::array<std::pair<unsigned, std::uint32_t>, 3> rom_vectors = {{
+        {2, RomNmiHandler}, {3, RomHardFaultHandler}, {14, RomPendSvHandler},
+    }};
+    for (const auto &[index, handler] : rom_vectors)
+        std::memcpy(vector_alias_ + index * sizeof(std::uint32_t), &handler, sizeof handler);
     std::copy(boot_ram_.begin(), boot_ram_.end(), ram_);
     lcr_ = ier_ = dll_ = dlm_ = mcr_ = scratch_ = 0;
     rx_.clear();
@@ -366,6 +376,30 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
         auto result = core_.run(until_cycle);
         const auto pc = core_.pc();
         if (result.reason == cortexm::StopReason::Reset && !pending_fault_.empty()) {
+            std::uint32_t vtor = 0;
+            std::array<std::uint32_t, 16> vectors{};
+            const bool have_vector_table = core_.read_memory(0xe000ed08, &vtor, sizeof vtor) &&
+                vtor >= BootImage::RamBase &&
+                static_cast<std::uint64_t>(vtor) + sizeof vectors <=
+                    static_cast<std::uint64_t>(BootImage::RamBase) + BootImage::RamSize &&
+                core_.read_memory(vtor, vectors.data(), sizeof vectors);
+            if (have_vector_table) {
+                char context[192];
+                std::snprintf(context, sizeof context,
+                              " VTOR=0x%08x initial_sp=0x%08x hardfault=0x%08x pendsv=0x%08x",
+                              vtor, vectors[0], vectors[3], vectors[14]);
+                pending_fault_ += context;
+            } else if (core_.read_memory(0xe000ed08, &vtor, sizeof vtor)) {
+                char context[40];
+                std::snprintf(context, sizeof context, " VTOR=0x%08x", vtor);
+                pending_fault_ += context;
+            }
+            if (const std::uint8_t *handler = core_.host_pointer(pc & ~1u, 4)) {
+                char context[48];
+                std::snprintf(context, sizeof context, " handler_bytes=%02x%02x%02x%02x",
+                              handler[0], handler[1], handler[2], handler[3]);
+                pending_fault_ += context;
+            }
             result.reason = cortexm::StopReason::Fault;
             result.message = std::move(pending_fault_);
             pending_fault_.clear();
@@ -884,11 +918,21 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
         } else {
             char message[384];
             std::uint32_t stack_args[2]{};
+            std::uint32_t msp = 0, psp = 0, control = 0, ipsr = 0;
             core_.read_memory(core_.reg(13), stack_args, sizeof stack_args);
+            uc_reg_read(core_.engine(), UC_ARM_REG_MSP, &msp);
+            uc_reg_read(core_.engine(), UC_ARM_REG_PSP, &psp);
+            uc_reg_read(core_.engine(), UC_ARM_REG_CONTROL, &control);
+            uc_reg_read(core_.engine(), UC_ARM_REG_IPSR, &ipsr);
+            const char *symbol = address == (RomPendSvHandler & ~1u) ? "PendSV_Handler at " :
+                                 address == (RomNmiHandler & ~1u) ? "NMI_Handler at " :
+                                 address == (RomHardFaultHandler & ~1u) ? "HardFault_Handler at " :
+                                 nullptr;
             std::snprintf(message, sizeof message,
-                          "unimplemented PHY6252 ROM call 0x%08x (r0=0x%08x r1=0x%08x r2=0x%08x r3=0x%08x sp=0x%08x stack=[0x%08x,0x%08x] lr=0x%08x)",
-                          pc, core_.reg(0), core_.reg(1), core_.reg(2), core_.reg(3),
-                          core_.reg(13), stack_args[0], stack_args[1], core_.reg(14));
+                          "unimplemented PHY6252 ROM call %s0x%08x (r0=0x%08x r1=0x%08x r2=0x%08x r3=0x%08x sp=0x%08x msp=0x%08x psp=0x%08x control=0x%08x ipsr=0x%08x stack=[0x%08x,0x%08x] lr=0x%08x)",
+                          symbol ? symbol : "", pc, core_.reg(0), core_.reg(1), core_.reg(2), core_.reg(3),
+                          core_.reg(13), msp, psp, control, ipsr,
+                          stack_args[0], stack_args[1], core_.reg(14));
             return {cortexm::StopReason::Fault, message};
         }
         if (rom_branch)

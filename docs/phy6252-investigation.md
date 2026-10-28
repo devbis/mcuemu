@@ -128,26 +128,26 @@ window `0x40003818..0x4000382c`; AON wake-source reads at `0x4000f0b0` and
 compatibility observations, not hardware-verified peripheral contracts.
 
 The TS0001 image fills an LL extension/table area at `0x40031e00..0x40031ffc`,
-inside the modeled 2 KiB RX FIFO range. Its RF effect is unknown. After the
-300 ms RF startup wait, the current run reaches PCR setup and pends PendSV from
-`0x1fff66e6` by writing `0x10000000` to `ICSR`. Immediately before that write,
-the core is in Thread mode with `CONTROL=2`, `MSP=0x1fffce40` and
-`PSP=0x1fffe270`, both inside SRAM. During the following exception path, the
-run faults on a word write at `0x400313e0`, with `MSP=0x40031400`,
-`PSP=0x1fffe250`, `IPSR=3` (HardFault), `PC=0x1fffdd00` and
-`LR=0xfffffff1`. The PSP has moved down by one basic exception frame, while the
-MSP is now the TX FIFO base. The attempted write lies below the modeled 2 KiB
-TX FIFO and is not mapped as memory. This narrows the failure to the exception
-or HardFault transition; the source of the changed MSP remains unresolved.
-The model reads VTOR as `0x1fff8b00`, while the SDK's PHY6222 device header
-declares no VTOR. PHY6252 MMIO faults report the current and last instruction
-addresses and both stack banks to support further tracing. The run has not printed
-`Stack Init`, has not started Zigbee radio traffic, and has not joined a
-coordinator. The user-supplied device log reaches `Stack Init`, restores network
-state 12 and emits Tuya reports, but that is evidence about the hardware image,
-not this emulator run. A separate Cortex-M0 regression case that pends PendSV
-from Thread mode on PSP with a valid vector table passes and keeps its exception
-frame on PSP; this failure is specific to the TS0001 path or its vector state.
+inside the modeled 2 KiB RX FIFO range. Its RF effect is unknown. The PHY6222
+SDK header declares `__VTOR_PRESENT` as zero, and its vector source provides only
+the initial SP and reset entry. The model therefore ignores VTOR reads/writes
+and initializes NMI, HardFault and PendSV entries in the low vector alias from
+the SDK's `bb_rom_sym_m0` addresses. This fixed-vector mapping is inferred:
+the ROM image and its full vector table are not included in the SDK.
+
+After the 300 ms RF startup wait, TS0001 reaches PCR setup and pends PendSV from
+`0x1fff66e6` by writing `0x10000000` to `ICSR`. Before the write, the core is in
+Thread mode with `CONTROL=2`, `MSP=0x1fffce40` and `PSP=0x1fffe270`, both inside
+SRAM. With the absent VTOR modeled, exception dispatch reaches the SDK symbol
+`PendSV_Handler` at `0x000084cd` (the emulator's instruction address is
+`0x000084cc`). Its body is not present in the SDK, so the emulator reports the
+unimplemented ROM entry with registers, stack banks, `CONTROL` and `IPSR` rather
+than assuming a context-switch implementation. The prior `VTOR=0x1fff8b00`
+emulation selected an invalid RAM vector table and caused a misleading
+HardFault at `0x1fffdd00`; that is not the current failure. The model has not
+printed `Stack Init`, emitted Zigbee radio traffic, or joined a coordinator.
+A separate Cortex-M0 regression case that pends PendSV from Thread mode on PSP
+with a valid vector table passes and keeps its exception frame on PSP.
 
 ## Firmware evidence
 
@@ -164,7 +164,7 @@ The user-supplied TS0001 log shows startup through `Stack Init`,
 reports. The emulator passes three observed CRC-checked copy blocks and prints
 configuration through `rfClk`; it reports `tpCap[00 00]` instead of the
 reference log's `tpCap[2b 23]`, omits `OS NVM Start Addr` and `Stack Init`, then
-stops on the exception stack write described above. The image's runtime
+stops at the unimplemented ROM `PendSV_Handler`. The image's runtime
 Zigbee-stack location and its ability to join or exchange frames therefore
 remain undetermined. Do not claim TS0001 relay support until it starts, joins,
 and exchanges Zigbee traffic in a captured network scenario.
