@@ -571,6 +571,11 @@ Cc2530F256::Cc2530F256()
         const std::uint8_t post_reti_rule = 1;
         check_error(uc_reg_write(engine, UC_MCS51_REG_POST_RETI_RULE, &post_reti_rule),
                     "enable the post-RETI instruction rule");
+        // SWRU191F Table 2-3 per-opcode clock counts and the 2.5.2 interrupt
+        // entry (1 detect + 6 LCALL cycles); see "Timing contract" above.
+        const std::uint8_t cycle_model = UC_MCS51_CYCLE_MODEL_CC253X;
+        check_error(uc_reg_write(engine, UC_MCS51_REG_CYCLE_MODEL, &cycle_model),
+                    "select the CC253x cycle model");
         // SLEEPSTA.CLK32K follows the 32 kHz clock.
         sfr_special_read_[SfrSleepsta] = 1;
         create_peripherals();

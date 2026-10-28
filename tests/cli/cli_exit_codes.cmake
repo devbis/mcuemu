@@ -31,11 +31,12 @@ expect_run(1 "fault" sim "${WORK}/fault.yaml" --for 10us)
 expect_run(0 "sleeping" sim "${WORK}/sleep.yaml" --for 10us)
 expect_run(2 "TLSR8258F512, TLSR8258F1K, CA51F253L3, CC2530F256 or NRF52840"
            run --model NOSUCHMCU --firmware "${WORK}/fault.hex")
-# INC 0x30; SJMP 0x0000: arrives at 0x0000 every two instructions.
+# INC 0x30; SJMP 0x0000: arrives at 0x0000 every two instructions, i.e. every
+# 3 + 3 = 6 cycles (SWRU191F Table 2-3: INC direct 3, SJMP 3).
 file(WRITE "${WORK}/loop.hex" ":04000000053080FC4B\n:00000001FF\n")
 expect_run(0 "until-pc-hits: 3" run --model CC2530F256 --firmware "${WORK}/loop.hex"
            --steps 100 --until-pc 0 --hits 3)
-expect_run(0 "hit: 2 instructions=4 cycles=6 pc=0x0000" run --model CC2530F256
+expect_run(0 "hit: 2 instructions=4 cycles=12 pc=0x0000" run --model CC2530F256
            --firmware "${WORK}/loop.hex" --steps 100 --until-pc 0 --hits 3 --report-hits)
 expect_run(2 "--hits, --report-hits and --write-xdata need --until-pc"
            run --model CC2530F256 --firmware "${WORK}/loop.hex" --hits 2)

@@ -229,8 +229,10 @@ The CC2530F256 model swaps the code the interpreter fetches from by
 repointing `UC_MCS51_REG_FAST_MEMORY` on FMAP/XMAP writes (no TB flush is
 needed because the interpreter decodes the bytes itself). It delivers every
 interrupt through `UC_MCS51_REG_IRQ_VECTOR` and turns the core's built-in
-Timer0 interrupt off (`UC_MCS51_REG_TIMER0_INTERRUPT = 0`); new core registers
-must default to the classic behaviour so CA51F253L3 stays unchanged. Details
+Timer0 interrupt off (`UC_MCS51_REG_TIMER0_INTERRUPT = 0`), and selects the
+TI cycle model (`UC_MCS51_REG_CYCLE_MODEL`: SWRU191F Table 2-3 counts, 7-cycle
+interrupt entry); new core registers must default to the classic behaviour so
+CA51F253L3 stays unchanged. Details
 in `docs/cc2530.md`.
 
 ### System layer (`emulator/src/sim/`)
@@ -340,10 +342,11 @@ Profile with `sample <pid> 3 -file out.txt` rather than guessing. What mattered:
 ## Known limitations
 
 - No BLE at register level; CA51 has no GPIO/ADC/radio; no TLS on the control API.
-- CC2530F256: not cycle accurate (the shared MCS-51 cycle table, 2-cycle
-  interrupt entry); the debug interface does not check DC/DD electrical
-  timing and DEBUG_INSTR takes no virtual time; a flash operation cut by a
-  reset or power cut is abandoned by default, and the opt-in partial/complete
+- CC2530F256: instruction timing is SWRU191F Table 2-3 best case (no flash
+  wait states, prefetch or cache; interrupt entry is always the 7-cycle
+  minimum); the debug interface does not check DC/DD electrical timing and
+  DEBUG_INSTR takes no virtual time; a flash operation cut by a reset or
+  power cut is abandoned by default, and the opt-in partial/complete
   outcomes and the 6.2.2 `nondeterministic` policy are model-defined fault
   injection, not measured behaviour. Full list in `docs/cc2530.md`
   ("Not modeled", "Flash fault injection").

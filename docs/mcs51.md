@@ -100,12 +100,18 @@ posted vector and the levels in progress; all-zero levels are the classic
 single in-service latch), `UC_MCS51_REG_POST_RETI_RULE` and
 `UC_MCS51_REG_INTERRUPT_INHIBIT` (one instruction after RETI before the next
 interrupt; off by default) and `UC_MCS51_REG_DPS_SFR`/`DPL1_SFR`/`DPH1_SFR`
-(a second data pointer selected by DPS bit 0; off by default).
+(a second data pointer selected by DPS bit 0; off by default) and
+`UC_MCS51_REG_CYCLE_MODEL` (the cycle table and interrupt-entry cost;
+classic by default).
 
-The core's cycle table (`helper.c`) is the classic Intel machine-cycle count
-except that `MOV direct,Rn`, `MOV Rn,direct`, `ORL/ANL C,bit`, `ORL/ANL
-C,/bit` and `MOV bit,C` take 1 cycle instead of 2; all MCS51 SoC models
-(and CA51F253L3 Timer0/UART1 timing) share this table.
+The core's default cycle table (`helper.c`, `UC_MCS51_CYCLE_MODEL_CLASSIC`)
+is the classic Intel machine-cycle count except that `MOV direct,Rn`,
+`MOV Rn,direct`, `ORL/ANL C,bit`, `ORL/ANL C,/bit` and `MOV bit,C` take 1
+cycle instead of 2, and an interrupt entry takes 2 cycles; CA51F253L3
+Timer0/UART1 timing uses it. `UC_MCS51_CYCLE_MODEL_CC253X` replaces it with
+the per-opcode counts of TI SWRU191F Table 2-3 and a 7-cycle interrupt entry
+(the CC2530F256 model selects it). Both execution paths charge the same
+counts.
 
 The backend's instruction execution is based on the classic 8051 instruction
 set. Enhanced or vendor-specific opcodes should be added only after identifying

@@ -11,10 +11,12 @@
 //    k at W + k * p (Model-defined anchor, see cc2530_timers.cpp).
 //  * Timer 1 tick = 32 MHz >> CLKCONSTA.TICKSPD, then T1CTL.DIV
 //    (SWRU191F 9.1); reset TICKSPD = 1 gives 2 cycles per tick.
-//  * An event at time E is applied at the first instruction boundary B >= E;
-//    the ISR's first instruction executes at B + 2 (LCALL to the vector).
-//    In the 0xFF sled (MOV R7,A, 1 cycle) every cycle is a boundary; in a
-//    SJMP $ loop first reached at L, boundaries are at L + 2k.
+//  * Instruction cycles are SWRU191F Table 2-3 counts (cycles_of). An event
+//    at time E is applied at the first instruction boundary B >= E; the
+//    ISR's first instruction executes at B + EntryCycles (7, SWRU191F 2.5.2).
+//    Unwritten flash in these programs is a NOP sled (NOP, 1 cycle), so
+//    every cycle there is a boundary; in a SJMP $ loop (3 cycles) first
+//    reached at L, boundaries are at L + 3k.
 //  * The 32 kHz clock: one period = 976.5625 cycles, CLK32K low in the first
 //    half of each period, so period j starts at ceil(j * 15625 / 16) and its
 //    rising edge is at ceil((2j + 1) * 15625 / 32).
@@ -22,6 +24,7 @@
 #include "cc2530_periph_support.hpp"
 #include "cc2530_timers.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <initializer_list>
 #include <iostream>
@@ -71,10 +74,12 @@ constexpr unsigned PmIndex2 = 3, PmIndex3 = 4; // Cc2530PowerMode Pm2, Pm3
 constexpr unsigned CauseWatchdog = 2;          // Cc2530ResetCause::Watchdog
 
 // Flash image: LJMP 0x0100 at the reset vector; main at 0x0100 starts with
-// MOV SP,#0x30. Unwritten flash is 0xFF (MOV R7,A: a 1-cycle sled).
+// MOV SP,#0x30. Unwritten flash is 0x00 (NOP: a 1-cycle sled; erased flash,
+// 0xFF = MOV R7,A, takes 2 cycles in Table 2-3).
 struct Program {
     Flash flash;
     Program() {
+        std::fill(flash.bytes.begin(), flash.bytes.end(), std::uint8_t{0x00});
         flash.at(0).op({0x02, 0x01, 0x00});
         flash.at(0x0100).op(mov_dir_imm(SP, 0x30));
     }
@@ -162,8 +167,9 @@ bool at(Cc2530F256 &d, std::uint64_t cycle, const char *what) {
     return true;
 }
 
+constexpr unsigned Sjmp = cycles_of({0x80}), Nop = cycles_of({0x00});
 std::uint64_t loop_boundary(std::uint64_t loop, std::uint64_t event) {
-    return event <= loop ? loop : loop + 2 * ((event - loop + 1) / 2);
+    return event <= loop ? loop : loop + Sjmp * ((event - loop + Sjmp - 1) / Sjmp);
 }
 std::uint64_t lf_ticks(std::uint64_t cycles) { return cycles * 16 / 15625; }
 std::uint64_t period_start(std::uint64_t j) { return (j * 15625 + 15) / 16; }
@@ -190,7 +196,7 @@ struct Edge {
 
 // Checks each edge's output level one cycle before (W + tick * period - 1)
 // and at (W + tick * period) the edge. Edges must be sorted by tick and the
-// CPU must be in the 1-cycle sled at those times.
+// CPU must be in the 1-cycle NOP sled at those times.
 template <class Output>
 void check_edges(Cc2530F256 &d, std::uint64_t w, std::uint64_t period,
                  const std::vector<Edge> &edges, Output output, const char *what) {
@@ -298,16 +304,17 @@ void test_t1_modulo_compare_isr() {
     load(d, p.flash);
     const std::uint64_t W = run_to(d, w, 1000, "t1 modulo start");
     // Compare at count 100 (tick 100), then 0..100 again: tick 201.
-    CHECK_EQ(run_to(d, VT1, W + 1000, "t1 modulo 1st"), W + 202);
+    CHECK_EQ(run_to(d, VT1, W + 1000, "t1 modulo 1st"), W + 200 + EntryCycles);
     CHECK_EQ(d.read_sfr(T1STAT), 0x01);
     CHECK_EQ(d.read_sfr(IRCON) & IrconT1if, 0); // cleared on vector entry
     CHECK_EQ(TimersTestAccess::t1(t1(d), 0), 1u);
     CHECK(t1(d).output(0)); // CMP 000: set on compare
-    CHECK_EQ(run_to(d, VT1, W + 1000, "t1 modulo 2nd"), W + 404);
+    CHECK_EQ(run_to(d, VT1, W + 1000, "t1 modulo 2nd"), W + 402 + EntryCycles);
     CHECK_EQ(d.read_idata(0x60), 1);
     CHECK_EQ(d.read_sfr(T1STAT), 0x01); // no OVFIF in modulo mode below 0xFFFF
     CHECK_EQ(TimersTestAccess::t1(t1(d), 0), 2u);
-    CHECK_EQ(d.read_sfr(T1CNTL), 0); // tick 202: wrapped past T1CC0
+    // Wrapped past T1CC0 at tick 202; the vector is reached at tick 204.
+    CHECK_EQ(d.read_sfr(T1CNTL), (402 + EntryCycles) / 2 - 202);
     CHECK_EQ(d.diagnostics().stale_interrupt_posts, 0u);
 }
 
@@ -369,7 +376,8 @@ void test_t1_free_running_latch() {
     CHECK_EQ(d.read_idata(0x44), lo(static_cast<std::uint16_t>((R3 - X) / 2)));
     // Overflow 0xFFFF -> 0x0000 at tick 65536 after the T1CNTL write
     // (Model-defined: OVFIF on the step to 0x0000).
-    CHECK_EQ(run_to(d, VT1, X + 140000, "t1 overflow"), loop_boundary(L, X + 131072) + 2);
+    CHECK_EQ(run_to(d, VT1, X + 140000, "t1 overflow"),
+             loop_boundary(L, X + 131072) + EntryCycles);
     CHECK_EQ(d.read_sfr(T1STAT), 0x20); // ISR has not run yet
     CHECK_EQ(d.read_sfr(IRCON) & IrconT1if, 0);
     run_to(d, lay.l, X + 140000, "t1 overflow return");
@@ -398,13 +406,13 @@ void test_t1_up_down() {
         CHECK_EQ(d.read_sfr(T1CNTL), 30); // tick 50: 80 - 50
     check_edges(d, W, 2, {{1, 70, false}, {2, 70, true}}, out, "updown down");
     // OVFIF when the count reaches 0 (tick 80); T1OVFIM = 1 by reset.
-    CHECK_EQ(run_to(d, VT1, W + 1000, "updown ovf"), W + 162);
+    CHECK_EQ(run_to(d, VT1, W + 1000, "updown ovf"), W + 160 + EntryCycles);
     check_edges(d, W, 2, {{1, 90, true}, {2, 90, false}}, out, "updown up 2");
     CHECK_EQ(d.read_idata(0x50), 0x26);
     CHECK_EQ(d.read_sfr(T1STAT), 0x06);
     // Channel flags remain but their IM = 0: no re-assertion (9.10).
     CHECK_EQ(d.read_sfr(IRCON) & IrconT1if, 0);
-    CHECK_EQ(run_to(d, VT1, W + 1000, "updown ovf 2"), W + 322);
+    CHECK_EQ(run_to(d, VT1, W + 1000, "updown ovf 2"), W + 320 + EntryCycles);
 }
 
 // SWRU191F 9.8 / Table 9-1: every compare output mode on all five channels.
@@ -627,8 +635,9 @@ void test_tickspd() {
         const std::uint64_t W = run_to(d, w, 2000, "tickspd w");
         CHECK_EQ(d.read_sfr(CLKCONSTA), 0xd9);
         const std::uint64_t W3 = run_to(d, w3, 2000, "tickspd w3");
-        CHECK_EQ(run_to(d, VT1, W + 4000, "tickspd t1"), W + 402);    // 50 ticks of 8 cycles
-        CHECK_EQ(run_to(d, VT3, W3 + 4000, "tickspd t3"), W3 + 2050); // 256 ticks of 8
+        // 50 ticks of 8 cycles; 256 ticks of 8.
+        CHECK_EQ(run_to(d, VT1, W + 4000, "tickspd t1"), W + 400 + EntryCycles);
+        CHECK_EQ(run_to(d, VT3, W3 + 4000, "tickspd t3"), W3 + 2048 + EntryCycles);
     }
     {
         Program p;
@@ -649,7 +658,7 @@ void test_tickspd() {
             CHECK_EQ(d.read_sfr(T1CNTL), 20);
         if (at(d, W + 48, "tickspd 48"))
             CHECK_EQ(d.read_sfr(T1CNTL), 21);
-        CHECK_EQ(run_to(d, VT1, W + 2000, "tickspd change t1"), W + 40 + 80 * 8 + 2);
+        CHECK_EQ(run_to(d, VT1, W + 2000, "tickspd change t1"), W + 40 + 80 * 8 + EntryCycles);
     }
 }
 
@@ -709,14 +718,14 @@ void test_t34_overflow_isr() {
         Cc2530F256 d;
         load(d, p.flash);
         const std::uint64_t W = run_to(d, w, 2000, "t3 ovf w");
-        CHECK_EQ(run_to(d, VT3, W + 2000, "t3 ovf 1"), W + 514); // 256 ticks of 2
+        CHECK_EQ(run_to(d, VT3, W + 2000, "t3 ovf 1"), W + 512 + EntryCycles); // 256 ticks of 2
         CHECK_EQ(d.read_sfr(TIMIF), 0x41);
         CHECK_EQ(d.read_sfr(IRCON) & IrconT3if, 0); // cleared on vector entry
         if (at(d, W + 600, "t3 ovf isr done")) {
             CHECK_EQ(d.read_sfr(TIMIF), 0x40);
             CHECK_EQ(d.read_idata(0x60), 1);
         }
-        CHECK_EQ(run_to(d, VT3, W + 2000, "t3 ovf 2"), W + 1026);
+        CHECK_EQ(run_to(d, VT3, W + 2000, "t3 ovf 2"), W + 1024 + EntryCycles);
     }
     {
         Program p;
@@ -729,7 +738,7 @@ void test_t34_overflow_isr() {
         const std::uint64_t W = run_to(d, w, 2000, "t4 ovf w");
         if (at(d, W + 8000, "t4 count"))
             CHECK_EQ(d.read_sfr(T4CNT), 250); // 8000 / 32
-        CHECK_EQ(run_to(d, VT4, W + 20000, "t4 ovf"), W + 8194);
+        CHECK_EQ(run_to(d, VT4, W + 20000, "t4 ovf"), W + 8192 + EntryCycles);
         CHECK_EQ(d.read_sfr(TIMIF), 0x48);
     }
 }
@@ -752,7 +761,7 @@ void test_t34_modes() {
                                   std::pair{99u, 1}})
             if (at(d, W + t, "t4 down"))
                 CHECK_EQ(d.read_sfr(T4CNT), v);
-        CHECK_EQ(run_to(d, VT4, W + 2000, "t4 down ovf"), W + 102);
+        CHECK_EQ(run_to(d, VT4, W + 2000, "t4 down ovf"), W + 100 + EntryCycles);
         if (at(d, W + 2000, "t4 down halted")) {
             CHECK_EQ(d.read_sfr(T4CNT), 0);
             CHECK_EQ(d.read_idata(0x61), 1);
@@ -927,8 +936,9 @@ void test_st_wake_from_pm2() {
         CHECK_EQ(d.read_sfr(IRCON) & IrconStif, 0);
         CHECK_EQ(st(d).count(), 10u);
     }
-    // Wake at 10254, NOP after the PCON write, then LCALL to the vector.
-    CHECK_EQ(run_to(d, VSt, 20000, "st pm2 vector"), 10257u);
+    // Wake at 10254, NOP after the PCON write, then the interrupt entry.
+    const std::uint64_t V = rising_edge(10) + Nop + EntryCycles;
+    CHECK_EQ(run_to(d, VSt, 20000, "st pm2 vector"), V);
     CHECK(d.read_sfr(IRCON) & IrconStif); // STIF is not cleared by hardware
     CHECK_EQ(TimersTestAccess::st(st(d)), 1u);
     CHECK_EQ(st(d).count(), 10u);
@@ -937,7 +947,7 @@ void test_st_wake_from_pm2() {
     CHECK_EQ(diag.power_mode_entries_by_mode[PmIndex2], 1u);
     const std::uint64_t d2 = diag.power_mode_cycles_by_mode[PmIndex2];
     CHECK(d2 > 10000);
-    CHECK_EQ(d.read_sfr(T1CNTL), lo(static_cast<std::uint16_t>((10257 - d2 - W) / 2)));
+    CHECK_EQ(d.read_sfr(T1CNTL), lo(static_cast<std::uint16_t>((V - d2 - W) / 2)));
     // SWRU191F 11.1: after PM2, ST0 is valid only after the next positive
     // 32 kHz edge (edge 11 at 11231). Model-defined: until then it shows the
     // count at the PM2 entry (0).
@@ -975,7 +985,7 @@ void test_st_pm3() {
         CHECK_EQ(d.read_sfr(IRCON) & IrconStif, 0);
     }
     d.schedule_interrupt_flag_for_test(250000, 13); // P0IF wakes PM3
-    CHECK_EQ(run_to(d, VP0, 300000, "st pm3 p0"), 250003u);
+    CHECK_EQ(run_to(d, VP0, 300000, "st pm3 p0"), 250000u + Nop + EntryCycles);
     const std::uint64_t d3 = d.diagnostics().power_mode_cycles_by_mode[PmIndex3];
     const std::uint64_t base = lf_ticks(250000 - d3);
     CHECK_EQ(base, c0);
@@ -983,7 +993,7 @@ void test_st_pm3() {
     const std::uint64_t L = run_to(d, ls, 300000, "st pm3 loop");
     CHECK_EQ(d.read_idata(0x60), 1);
     CHECK_EQ(run_to(d, VSt, 300000, "st pm3 compare"),
-             loop_boundary(L, rising_edge(base + 10) + d3) + 2);
+             loop_boundary(L, rising_edge(base + 10) + d3) + EntryCycles);
     CHECK_EQ(st(d).count(), 10u);
     CHECK_EQ(TimersTestAccess::st(st(d)), 1u);
 }
@@ -1020,7 +1030,7 @@ void test_st_load_and_latch() {
     CHECK_EQ(d.read_sfr(STLOAD), 0x01);
     const std::uint64_t L = run_to(d, ls, 2000, "st load loop");
     // Compare value 0x000123 = 291: rising edge 291 at 284668.
-    CHECK_EQ(run_to(d, VSt, 400000, "st load compare"), loop_boundary(L, 284668) + 2);
+    CHECK_EQ(run_to(d, VSt, 400000, "st load compare"), loop_boundary(L, 284668) + EntryCycles);
     CHECK_EQ(TimersTestAccess::st(st(d)), 1u);
     run_until(d, 500000);
     const std::uint64_t t = now(d);
@@ -1155,12 +1165,12 @@ void test_wdt_timer_mode() {
     Cc2530F256 d;
     load(d, p.flash);
     const std::uint64_t L = run_to(d, l, 2000, "wdt timer loop");
-    CHECK_EQ(run_to(d, VWdt, 70000, "wdt timer 1"), loop_boundary(L, 62500) + 2);
+    CHECK_EQ(run_to(d, VWdt, 70000, "wdt timer 1"), loop_boundary(L, 62500) + EntryCycles);
     CHECK(d.read_sfr(IRCON2) & Ircon2Wdtif); // cleared by the ISR, not on entry
     const std::uint64_t L2 = run_to(d, l, 70000, "wdt timer loop 2");
     CHECK_EQ(d.read_idata(0x60), 1);
     CHECK_EQ(d.read_sfr(IRCON2) & Ircon2Wdtif, 0);
-    CHECK_EQ(run_to(d, VWdt, 130000, "wdt timer 2"), loop_boundary(L2, 125000) + 2);
+    CHECK_EQ(run_to(d, VWdt, 130000, "wdt timer 2"), loop_boundary(L2, 125000) + EntryCycles);
     CHECK_EQ(d.diagnostics().resets_by_cause[CauseWatchdog], 0u);
 }
 
@@ -1204,7 +1214,7 @@ void test_wdt_locks() {
         const std::uint64_t T = period_start(lf_ticks(Xc) + 64);
         CHECK(T != 125000);
         const std::uint64_t B = loop_boundary(L2, T);
-        if (at(d, B - 2, "wdt lock b before"))
+        if (at(d, B - Sjmp, "wdt lock b before"))
             CHECK_EQ(d.read_sfr(IRCON2) & Ircon2Wdtif, 0);
         if (at(d, B, "wdt lock b after"))
             CHECK(d.read_sfr(IRCON2) & Ircon2Wdtif);
@@ -1247,7 +1257,8 @@ void test_wdt_frozen_in_pm2() {
         CHECK(d.power_mode() == Cc2530PowerMode::Pm2);
         CHECK_EQ(d.diagnostics().resets_by_cause[CauseWatchdog], 0u);
     }
-    CHECK_EQ(run_to(d, VSt, 120000, "wdt pm2 st"), 98148u); // rising edge 100 + 3
+    // Rising edge 100, the NOP after the PCON write, the interrupt entry.
+    CHECK_EQ(run_to(d, VSt, 120000, "wdt pm2 st"), rising_edge(100) + Nop + EntryCycles);
     const std::uint64_t d2 = d.diagnostics().power_mode_cycles_by_mode[PmIndex2];
     const std::uint64_t before = lf_ticks(98145 - d2) - lf_ticks(W);
     const std::uint64_t L = run_to(d, l, 120000, "wdt pm2 loop");
