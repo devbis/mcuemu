@@ -135,6 +135,19 @@ int main() {
     rom_test_chip.core().set_reg(15, 0x0f74); // ARM runtime __aeabi_uread4 entry
     CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 16).reason == cortexm::StopReason::Deadline);
     CHECK(rom_test_chip.core().reg(0) == 0x78563412);
+    rom_test_chip.core().set_reg(0, 0x40001000); // AP_TIM1
+    rom_test_chip.core().set_reg(1, 2); // set_timer() receives microseconds
+    rom_test_chip.core().set_reg(14, 0x11010109);
+    rom_test_chip.core().set_reg(15, 0x16c2c);
+    CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 8).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(rom_test_chip.read(0x40001000, 4) == 8); // 4 MHz timer count per us
+    CHECK(rom_test_chip.read(0x40001008, 4) == 3); // enabled one-shot
+    CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 32).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(rom_test_chip.read(0x40001010, 4) == 1);
+    CHECK(rom_test_chip.read(0x4000100c, 4) == 1); // EOI clears Timer1 pending
+    CHECK(rom_test_chip.read(0x40001010, 4) == 0);
     Phy6252 irq_chip;
     irq_chip.load_firmware(image);
     irq_chip.reset();
@@ -203,6 +216,39 @@ int main() {
     CHECK(timer_irq_chip.core().read_memory(0x1fff2300, &irq_marker, sizeof irq_marker));
     CHECK(irq_marker == 7);
     CHECK(timer_irq_chip.read(0x40001074, 4) == 0);
+
+    Phy6252 timer1_irq_chip;
+    timer1_irq_chip.load_firmware(image);
+    timer1_irq_chip.reset();
+    CHECK(timer1_irq_chip.run(100).reason == cortexm::StopReason::Deadline);
+    CHECK(timer1_irq_chip.core().write_memory(0x1fff03d0, &timer_irq_callback,
+                                               sizeof timer_irq_callback)); // V20_IRQ_HANDLER
+    const std::array<std::uint8_t, 20> timer1_irq_handler = {
+        0x07, 0x20, // movs r0, #7
+        0x02, 0x49, // ldr r1, [pc, #8] ; marker address
+        0x08, 0x60, // str r0, [r1]
+        0x02, 0x49, // ldr r1, [pc, #8] ; Timer1 EOI
+        0x08, 0x68, // ldr r0, [r1] ; SDK clears EOI by reading it
+        0x70, 0x47, // bx lr
+        0x00, 0x23, 0xff, 0x1f, // 0x1fff2300 marker
+        0x0c, 0x10, 0x00, 0x40, // 0x4000100c Timer1 EOI
+    };
+    CHECK(timer1_irq_chip.core().write_memory(0x1fff2200, timer1_irq_handler.data(),
+                                               timer1_irq_handler.size()));
+    const std::uint32_t enable_timer1_irq = 1u << 20;
+    CHECK(timer1_irq_chip.core().write_memory(0xe000e100, &enable_timer1_irq,
+                                               sizeof enable_timer1_irq));
+    timer1_irq_chip.core().set_reg(0, 0x40001000); // AP_TIM1
+    timer1_irq_chip.core().set_reg(1, 1);
+    timer1_irq_chip.core().set_reg(14, 0x11010109);
+    timer1_irq_chip.core().set_reg(15, 0x16c2c);
+    CHECK(timer1_irq_chip.run(timer1_irq_chip.core().cycles() + 8).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(timer1_irq_chip.run(timer1_irq_chip.core().cycles() + 100).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(timer1_irq_chip.core().read_memory(0x1fff2300, &irq_marker, sizeof irq_marker));
+    CHECK(irq_marker == 7);
+    CHECK(timer1_irq_chip.read(0x40001010, 4) == 0);
 
     const std::uint32_t fifo_probe = 0x11030000;
     auto *fifo_probe_code = chip.core().host_pointer(fifo_probe, 6);

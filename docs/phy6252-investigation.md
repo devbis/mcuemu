@@ -36,11 +36,12 @@ memory-map guarantees.
 
 UART0 supports polling byte input/output, without interrupt or bit timing.
 GPIO0..GPIO22 support data, direction, input, AON pulls and basic edge/level
-interrupts; alternate pad functions are not modeled. Timer5 and Timer6 use the
-observed DesignWare register layout, use four core cycles per tick (4 MHz on
-the Zephyr path at 16 MHz), and provide down-counting, one-shot alarms and IRQs
-24/25. Their current-count registers are writable, as required by the SDK timer
-stop path. The AON RTC counter advances at 32.768 kHz when `RTCCTL.RUN` is set;
+interrupts; alternate pad functions are not modeled. Timer1..Timer6 share the
+SDK's AP_TIM register layout, use four core cycles per tick, and provide
+down-counting, one-shot alarms and IRQs 20..25. The 4 MHz rate is observed in
+the SDK Timer5/6 driver and applied to Timer1..Timer4 by inference. Their
+current-count registers are writable, as required by the SDK timer stop path.
+The AON RTC counter advances at 32.768 kHz when `RTCCTL.RUN` is set;
 direct image boot starts it in the state inferred for the skipped ROM board-init
 path. The AON RTC clock-select, control, compare and flag registers are stored,
 but compare events and IRQ generation are not. The four retained AON sleep
@@ -79,11 +80,17 @@ Implemented ROM entries include clock setup/query, IRQ critical-section
 helpers, eFuse read, AES-128 block encryption, OSAL heap and memory functions,
 `log_printf`, the ARM runtime memory/string functions,
 `__ARM_common_switch8`, `spif_config`, `spif_cmd`, `spif_rddata`,
-`spif_write`, `spif_write_dma`, and sector erase. Both write calls share the
-SDK's `(address, RAM source, byte count)` contract and program flash with NOR
+`spif_write`, `spif_write_dma`, sector erase, and `set_timer`. Both flash write
+calls share the SDK's `(address, RAM source, byte count)` contract and program flash with NOR
 1-to-0 semantics. SPIF command completion is synchronous; status reads report
 WIP clear. Flash timing, write protection, page limits and most opcodes are not
 modeled. Invalid arguments return `-EINVAL`.
+
+The SDK declares ROM `set_timer(AP_TIM_TypeDef *, int)` at `0x16c2c`, but its
+body is not included. The model follows the SDK `hal_timer_set_loadtimer()`
+sequence: stop, select user mode, load `4 * time`, then enable the one-shot
+timer. TS0001 calls it for Timer1 with `time=1512` while entering network
+setup. This inferred ROM behavior is covered by a Timer1 expiry test.
 
 The eFuse shim covers only block 1 and supplies RF cap bytes `0x2b,0x23` from
 the user's sample log, with zeros for the remaining six bytes. The current
@@ -159,14 +166,13 @@ false interrupt in that interval. The callback slots are inferred from the
 SDK header aliases and observed image accesses; the dispatch behavior is not
 hardware-verified.
 
-The SDK's `timer.c` installs `hal_TIMER5_IRQHandler` and
-`hal_TIMER6_IRQHandler` in `JUMP_FUNCTION(TIM5_IRQ_HANDLER)` and
-`JUMP_FUNCTION(TIM6_IRQ_HANDLER)` before enabling IRQs 24 and 25. Its
-`jump_function.h` gives these V24/V25 slots as 248 and 249. The ROM vector
-bodies are not exported, so the model uses a private host trap for these two
-vectors and dispatches the registered callback. This inferred vector path is
-tested with a synthetic Timer6 callback; real firmware reaches it without the
-previous invalid-state fault.
+The SDK assigns Timer1..Timer6 to IRQs 20..25 and `jump_function.h` maps their
+callbacks to `JUMP_FUNCTION` slots 244..249. The SDK `timer.c` specifically
+installs the Timer5/6 callbacks before enabling those IRQs. Since ROM vector
+bodies are unavailable, the model uses a private host trap for the six vectors
+and dispatches the registered callback. Timer1 and Timer6 dispatch are tested
+with synthetic handlers; real TS0001 reaches the Timer1 callback without a
+CPU fault.
 
 The supplied run prints `Stack Init`, initializes the Zigbee stack, creates the
 application tasks and prints `zb_app_task_init`. The GPIO callback now runs and
@@ -205,6 +211,16 @@ frames: 15 coordinator beacon requests and 3 coordinator broadcast data
 frames; no association response or TS0001 transmission was captured. Join and
 relay commands remain unverified. Do not claim TS0001 relay support until it
 starts, joins, and exchanges Zigbee traffic in a captured network scenario.
+
+For a separate first-boot probe, a temporary copy of the TS0001 dump had its
+`0x6000`-byte NVM range at `0x11079000` erased. The image reported
+`Device started for the first time` with network state 0. A long press on
+GPIO8 reached ROM `set_timer` for Timer1, dispatched its registered callback,
+and read RF register `0x400300e8`; the model returns the virtual-air RSSI
+sample there because this SDK package does not document the register. The
+image then ran through a 15 s simulation without a CPU fault, but still sent
+no Zigbee frames. The cleared-NVM copy and all other firmware images remain
+external test inputs.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables

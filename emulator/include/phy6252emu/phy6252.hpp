@@ -75,13 +75,14 @@ private:
     bool ll_rand_warning_logged_{false};
     bool baseband_irq_dispatch_warning_logged_{false};
     bool gpio_irq_dispatch_warning_logged_{false};
-    std::array<bool, 2> timer_irq_dispatch_warning_logged_{};
+    std::array<bool, 6> timer_irq_dispatch_warning_logged_{};
     bool ll_context_warning_logged_{false};
     bool ll_rx_timeout_warning_logged_{false};
     bool ble_srx_warning_logged_{false};
     bool ble_settle_warning_logged_{false};
     bool ble_fifo_warning_logged_{false};
     bool ble_mode_warning_logged_{false};
+    bool rf_sample_e8_warning_logged_{false};
     std::uint32_t heap_start_{0}, heap_size_{0};
     std::uint32_t random_state_{0x6d2b79f5};
     std::map<std::uint32_t, std::uint32_t> free_heap_blocks_;
@@ -92,7 +93,7 @@ private:
         bool interrupt_pending{false};
         std::uint64_t last_cycle{0}, cycle_remainder{0};
     };
-    std::array<TimerState, 2> timers_{};
+    std::array<TimerState, 6> timers_{};
     std::uint32_t gpio_data_{0}, gpio_direction_{0};
     std::uint32_t gpio_interrupt_enable_{0}, gpio_interrupt_mask_{0x007fffff};
     std::uint32_t gpio_interrupt_type_{0}, gpio_interrupt_polarity_{0};

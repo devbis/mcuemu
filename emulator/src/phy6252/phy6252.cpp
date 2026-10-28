@@ -30,12 +30,12 @@ constexpr std::uint32_t RomNmiHandler = 0x8481;
 constexpr std::uint32_t RomHardFaultHandler = 0x28f1;
 constexpr std::uint32_t RomPendSvHandler = 0x84cd;
 constexpr std::uint32_t TimerBase = 0x40001000;
+constexpr unsigned TimerCount = 6;
+constexpr std::uint32_t TimerRegisterStride = 0x14;
 constexpr std::uint32_t WatchdogBase = 0x40002000;
 constexpr std::uint32_t WatchdogControl = WatchdogBase;
 constexpr std::uint32_t WatchdogTimeout = WatchdogBase + 0x04;
 constexpr std::uint32_t WatchdogIrq = 10;
-constexpr std::uint32_t Timer5Base = TimerBase + 0x50;
-constexpr std::uint32_t Timer6Base = TimerBase + 0x64;
 constexpr std::uint32_t GpioBase = 0x40008000;
 constexpr std::uint32_t DmaBase = 0x40010000;
 constexpr std::uint32_t DmaChannel3Sar = DmaBase + 0x108;
@@ -126,8 +126,7 @@ constexpr std::uint32_t RomTimerIrqDispatch = 0x17ff1; // Private host trap; no 
 constexpr std::uint32_t JumpTableBase = BootImage::RamBase;
 constexpr std::uint32_t BasebandIrqJumpSlot = 228;
 constexpr std::uint32_t GpioIrqJumpSlot = 240;
-constexpr std::uint32_t Timer5IrqJumpSlot = 248;
-constexpr std::uint32_t Timer6IrqJumpSlot = 249;
+constexpr std::uint32_t Timer1IrqJumpSlot = 244;
 constexpr std::uint64_t RadioPollCycles = 256; // 16 us at the 16 MHz core clock
 constexpr std::uint32_t GpioMask = 0x007fffff;
 constexpr std::uint32_t TimerEnable = 1u << 0;
@@ -150,7 +149,7 @@ bool phy_rf_register(std::uint32_t offset) {
     case 0x00: case 0x0c: case 0x40: case 0x48: case 0x4c:
     case 0x80: case 0x90: case 0x94: case 0xb0: case 0xb4: case 0xb8:
     case 0xcc: case 0xd0: case 0xd4: case 0xd8: case 0xdc: case 0xe0:
-    case 0xe4: case 0x104: case 0x108: case 0x10c:
+    case 0xe4: case 0xe8: case 0x104: case 0x108: case 0x10c:
         return true;
     default:
         return false;
@@ -256,15 +255,17 @@ void phy_sec_crc_result(std::span<const std::uint8_t> input, PhySecResult &resul
 }
 
 int timer_index(std::uint32_t aligned) {
-    if (aligned >= Timer5Base && aligned <= Timer5Base + 0x10)
-        return 0;
-    if (aligned >= Timer6Base && aligned <= Timer6Base + 0x10)
-        return 1;
-    return -1;
+    if (aligned < TimerBase)
+        return -1;
+    const std::uint32_t offset = aligned - TimerBase;
+    const unsigned timer = offset / TimerRegisterStride;
+    if (timer >= TimerCount || offset % TimerRegisterStride > 0x10)
+        return -1;
+    return static_cast<int>(timer);
 }
 
 std::uint32_t timer_base(unsigned timer) {
-    return timer == 0 ? Timer5Base : Timer6Base;
+    return TimerBase + timer * TimerRegisterStride;
 }
 }
 
@@ -321,12 +322,16 @@ void Phy6252::reset() {
     }};
     for (const auto &[index, handler] : rom_vectors)
         std::memcpy(vector_alias_ + index * sizeof(std::uint32_t), &handler, sizeof handler);
-    const std::array<std::pair<unsigned, std::uint32_t>, 4> irq_vectors = {{
+    const std::array<std::pair<unsigned, std::uint32_t>, 2> irq_vectors = {{
         {16 + 4, RomLlIrqHandler}, {16 + 16, RomGpioIrqHandler},
-        {16 + 24, RomTimerIrqDispatch}, {16 + 25, RomTimerIrqDispatch},
     }};
     for (const auto &[index, handler] : irq_vectors)
         std::memcpy(vector_alias_ + index * sizeof(std::uint32_t), &handler, sizeof handler);
+    for (unsigned timer = 0; timer < TimerCount; ++timer) {
+        const std::uint32_t handler = RomTimerIrqDispatch;
+        const unsigned vector = 16 + 20 + timer;
+        std::memcpy(vector_alias_ + vector * sizeof handler, &handler, sizeof handler);
+    }
     std::copy(boot_ram_.begin(), boot_ram_.end(), ram_);
     lcr_ = ier_ = dll_ = dlm_ = mcr_ = scratch_ = 0;
     rx_.clear();
@@ -369,6 +374,7 @@ void Phy6252::reset() {
     ble_settle_warning_logged_ = false;
     ble_fifo_warning_logged_ = false;
     ble_mode_warning_logged_ = false;
+    rf_sample_e8_warning_logged_ = false;
     heap_start_ = heap_size_ = 0;
     random_state_ = 0x6d2b79f5u;
     free_heap_blocks_.clear();
@@ -503,6 +509,26 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
         } else if (address == 0x16b14) {
             // SDK ROM rtc_get_counter() exposes the AON 32.768 kHz counter.
             core_.set_reg(0, rtc_count(core_.cycles_to_ns(core_.cycles())));
+        } else if (address == 0x16c2c) {
+            // SDK declares set_timer(AP_TIM_TypeDef *, int). The exported body
+            // is absent; match the load/control sequence in timer.c's
+            // hal_timer_set_loadtimer() for the observed Timer1 call path.
+            const std::uint32_t base = core_.reg(0);
+            const std::int32_t time = static_cast<std::int32_t>(core_.reg(1));
+            const int timer = timer_index(base);
+            if (timer < 0 || base != timer_base(static_cast<unsigned>(timer)) ||
+                time > std::numeric_limits<std::int32_t>::max() / 4) {
+                char message[160];
+                std::snprintf(message, sizeof message,
+                              "invalid PHY6252 set_timer(base=0x%08x, time=%d)", base, time);
+                return {cortexm::StopReason::Fault, message};
+            }
+            write_register(base + 0x08, 0, 4);
+            if (time > 0) {
+                write_register(base + 0x08, TimerUserMode, 4);
+                write_register(base, static_cast<std::uint32_t>(time) * 4u, 4);
+                write_register(base + 0x08, TimerEnable | TimerUserMode, 4);
+            }
         } else if (address == 0x11278 || address == 0x11284) {
             // These SDK entries are ll_hw_set_rx_timeout() and
             // ll_hw_set_rx_timeout_1st(), each taking a uint32_t.
@@ -832,12 +858,11 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             std::uint32_t ipsr = 0;
             uc_reg_read(core_.engine(), UC_ARM_REG_IPSR, &ipsr);
             const unsigned irq = ipsr >= 16 ? ipsr - 16 : 0;
-            const bool timer5 = irq == 24;
-            const bool timer6 = irq == 25;
-            if (!timer5 && !timer6)
+            if (irq < 20 || irq >= 20 + TimerCount)
                 return {cortexm::StopReason::Fault,
-                        "PHY6252 internal timer IRQ dispatch reached outside IRQ24/IRQ25"};
-            const std::uint32_t slot = timer5 ? Timer5IrqJumpSlot : Timer6IrqJumpSlot;
+                        "PHY6252 internal timer IRQ dispatch reached outside IRQ20..IRQ25"};
+            const unsigned timer = irq - 20;
+            const std::uint32_t slot = Timer1IrqJumpSlot + timer;
             const std::uint32_t jump_address = JumpTableBase + slot * sizeof(std::uint32_t);
             std::uint32_t handler = 0;
             const bool have_handler = core_.read_memory(jump_address, &handler, sizeof handler);
@@ -851,14 +876,14 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                 char message[160];
                 std::snprintf(message, sizeof message,
                               "PHY6252 Timer%u IRQ has no valid JUMP_FUNCTION(%u) callback (0x%08x)",
-                              timer5 ? 5 : 6, slot, handler);
+                              timer + 1, slot, handler);
                 return {cortexm::StopReason::Fault, message};
             }
-            bool &logged = timer_irq_dispatch_warning_logged_[timer5 ? 0 : 1];
+            bool &logged = timer_irq_dispatch_warning_logged_[timer];
             if (!logged) {
                 std::fprintf(stderr,
                              "PHY6252: Timer%u IRQ dispatches JUMP_FUNCTION(%u)=0x%08x (inferred ROM vector)\n",
-                             timer5 ? 5 : 6, slot, handler);
+                             timer + 1, slot, handler);
                 logged = true;
             }
             core_.set_reg(15, handler_address);
@@ -1344,7 +1369,7 @@ std::uint32_t Phy6252::read(std::uint32_t address, unsigned size) {
     }
     if (address >= RadioTxFifo && address < RadioTxFifo + RadioTxFifoSize) {
         if (size != 1 && size != 2 && size != 4) {
-            unsupported_register(address, "read");
+            unsupported_register(address, "read", 0, size);
             return 0;
         }
         std::uint32_t value = 0;
@@ -1357,7 +1382,7 @@ std::uint32_t Phy6252::read(std::uint32_t address, unsigned size) {
     }
     if (address >= RadioRxFifo && address < RadioRxFifo + RadioRxFifoSize) {
         if (size != 1 && size != 2 && size != 4) {
-            unsupported_register(address, "read");
+            unsupported_register(address, "read", 0, size);
             return 0;
         }
         std::uint32_t value = 0;
@@ -1383,7 +1408,7 @@ std::uint32_t Phy6252::read(std::uint32_t address, unsigned size) {
         (address >= 0x40003000 && address < 0x40004000) ||
         (address >= 0x4000f000 && address < 0x40010000))
         return read_register(address, size);
-    unsupported_register(address, "read");
+    unsupported_register(address, "read", 0, size);
     return 0;
 }
 
@@ -1471,7 +1496,7 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
             break;
         case 0x10: value = state.interrupt_pending ? 1u : 0u; break;
         default:
-            unsupported_register(address, "read");
+            unsupported_register(address, "read", 0, size);
             return 0;
         }
         return lane_read(value, address, size);
@@ -1489,7 +1514,7 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
         case 0x4c: value = gpio_interrupt_status_; break;
         case 0x50: value = gpio_input_data(); break;
         default:
-            unsupported_register(address, "read");
+            unsupported_register(address, "read", 0, size);
             return 0;
         }
         return lane_read(value, address, size);
@@ -1506,7 +1531,7 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
         else if (aligned == DmaConfig)
             value = control_registers_[aligned];
         else {
-            unsupported_register(address, "read");
+            unsupported_register(address, "read", 0, size);
             return 0;
         }
         return lane_read(value, address, size);
@@ -1552,7 +1577,7 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
             core_.set_irq_line(WatchdogIrq, false);
             break;
         default:
-            unsupported_register(address, "read");
+            unsupported_register(address, "read", 0, size);
             return 0;
         }
         return lane_read(value, address, size);
@@ -1560,10 +1585,15 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
     if (aligned >= RadioRfBase && aligned < RadioRfBase + 0x1000) {
         const std::uint32_t offset = aligned - RadioRfBase;
         if (!phy_rf_register(offset)) {
-            unsupported_register(address, "read");
+            unsupported_register(address, "read", 0, size);
             return 0;
         }
-        if (offset == 0xe4) {
+        if (offset == 0xe4 || offset == 0xe8) {
+            if (offset == 0xe8 && !rf_sample_e8_warning_logged_) {
+                std::fprintf(stderr,
+                             "PHY6252: RF register 0x400300e8 is read by TS0001 calibration code; returning the virtual-air RSSI sample (inferred)\n");
+                rf_sample_e8_warning_logged_ = true;
+            }
             const std::int8_t rssi = radio_rx_rssi_ > -100 ? radio_rx_rssi_ :
                                      radio_energy_dbm(core_.cycles_to_ns(core_.cycles()));
             value = rf_registers_[aligned] & 0x00ffffffu;
@@ -1578,7 +1608,7 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
     if (aligned >= RadioLlBase && aligned < RadioLlBase + 0x1000) {
         const std::uint32_t offset = aligned - RadioLlBase;
         if (!phy_ll_register(offset)) {
-            unsupported_register(address, "read");
+            unsupported_register(address, "read", 0, size);
             return 0;
         }
         if (offset == 0x00)
@@ -1652,7 +1682,7 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
         else if (aligned >= AonPullBase && aligned <= AonPullEnd && ((aligned - AonPullBase) % 4) == 0)
             value = control_registers_[aligned];
         else {
-            unsupported_register(address, "read");
+            unsupported_register(address, "read", 0, size);
             return 0;
         }
     }
@@ -2235,7 +2265,7 @@ void Phy6252::sync_timer(unsigned timer, std::uint64_t now) {
 
 void Phy6252::update_timer_irq(unsigned timer) {
     const TimerState &state = timers_[timer];
-    const unsigned irq = timer == 0 ? 24 : 25;
+    const unsigned irq = 20 + timer;
     const bool asserted = state.interrupt_pending && (state.control & TimerInterruptMask) == 0;
     core_.set_irq_line(irq, asserted);
 }
