@@ -257,6 +257,21 @@ int main() {
     // SDK and PB-03F Zephyr expose RTO at bits 2 and 3 respectively.
     rom_test_chip.write(0x40031014, 1u << 3, 4);
     CHECK(rom_test_chip.read(0x40031010, 4) == 0);
+
+    Phy6252 cca_chip;
+    cca_chip.load_firmware(image);
+    cca_chip.reset();
+    CHECK(cca_chip.run(100).reason == cortexm::StopReason::Deadline);
+    mcuemu::VirtualAir cca_air;
+    cca_chip.connect_radio(cca_air, "cca-probe");
+    const std::uint64_t cca_sample_ns = cca_chip.core().cycles_to_ns(
+        cca_chip.core().cycles());
+    cca_air.transmit("cca-peer", {}, mcuemu::RadioProtocol::Zigbee802154, 11,
+                     cca_sample_ns - 1000, {0x01, 0x00, 0x33});
+    const std::int8_t cca_rssi = static_cast<std::int8_t>(
+        cca_chip.read(0x400300e4, 4) >> 24);
+    CHECK(cca_rssi == -50); // ideal shared-air propagation sample used by CCA
+
     Phy6252 irq_chip;
     irq_chip.load_firmware(image);
     irq_chip.reset();

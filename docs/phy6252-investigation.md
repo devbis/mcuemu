@@ -155,6 +155,10 @@ timeout parameter `rxTimeOutUs`, so the model treats it as microseconds and comp
 a receive with `RTO` when no frame arrives. Settle timing remains unmodeled
 because the available sources do not identify its backing registers or clock
 units. These operations do not establish Zigbee stack compatibility.
+The Zephyr PHY driver samples `RF+0xe4` after its 128 us CCA settling delay;
+the model returns the strongest shared-air signal at that time. Zephyr performs
+frame filtering in software, and its ISR constructs requested ACKs in the TX
+FIFO; its successful coordinator capture contains ACK frames from this path.
 The SDK's `gpio_sel[pin / 4]` accesses are served from the inferred register
 window `0x40003818..0x4000382c`; AON wake-source reads at `0x4000f0b0` and
 `0x4000f0b4` return zero without generating wake events. These are code-driven
