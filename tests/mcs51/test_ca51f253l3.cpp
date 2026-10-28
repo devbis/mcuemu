@@ -645,6 +645,115 @@ void test_ca51_run_stops_at_the_cycle_limit() {
     std::filesystem::remove(path);
 }
 
+// The classic MCS-51 core timing the CA51F253L3 keeps (UC_MCS51_REG_CYCLE_MODEL
+// left at its default, docs/mcs51.md): the Intel MCS-51 machine-cycle table
+// (12 oscillator periods = 1 cycle, 24 = 2, 48 = 4), written here from the
+// Intel instruction-set table rather than read from the engine, except for
+// the seven 2-cycle groups the engine has always counted as 1 cycle.
+unsigned classic_cycles(std::uint8_t op) {
+    if ((op >= 0x88 && op <= 0x8f) || // MOV direct,Rn
+        (op >= 0xa8 && op <= 0xaf) || // MOV Rn,direct
+        op == 0x72 || op == 0x82 || op == 0xa0 || op == 0xb0 || // ORL/ANL C,bit and C,/bit
+        op == 0x92)                                              // MOV bit,C
+        return 1;
+    if (op == 0xa4 || op == 0x84) // MUL AB, DIV AB
+        return 4;
+    if ((op & 0x1fu) == 0x01u || (op & 0x1fu) == 0x11u) // AJMP, ACALL
+        return 2;
+    if ((op >= 0xb4 && op <= 0xbf) || // CJNE
+        (op >= 0xd8 && op <= 0xdf))   // DJNZ Rn,rel
+        return 2;
+    switch (op) {
+    case 0x02: case 0x12: case 0x22: case 0x32: case 0x73: case 0x80: // jumps/calls
+    case 0x10: case 0x20: case 0x30: case 0x40: case 0x50: case 0x60: case 0x70:
+    case 0x43: case 0x53: case 0x63:             // ORL/ANL/XRL direct,#data
+    case 0x75: case 0x85: case 0x86: case 0x87:  // MOV direct,#data/direct/@Ri
+    case 0x83: case 0x93:                        // MOVC
+    case 0x90: case 0xa3:                        // MOV DPTR,#data16; INC DPTR
+    case 0xa6: case 0xa7:                        // MOV @Ri,direct
+    case 0xc0: case 0xd0: case 0xd5:             // PUSH, POP, DJNZ direct
+    case 0xe0: case 0xe2: case 0xe3: case 0xf0: case 0xf2: case 0xf3: // MOVX
+        return 2;
+    default:
+        return 1;
+    }
+}
+
+// The CC2530 selects the SWRU191F Table 2-3 cycle model in the shared core;
+// the CA51F253L3 must keep the classic counts for every opcode on both the
+// fast path and the per-instruction hook (trace) path.
+void test_ca51_keeps_the_classic_cycle_table() {
+    const auto path = temp_file("mcs51-cycle-table.bin");
+    for (unsigned opcode = 0; opcode < 0x100; ++opcode) {
+        if (opcode == 0xa5)
+            continue; // reserved
+        // A NOP first: an image starting with ':' (0x3a) would load as Intel HEX.
+        std::array<std::uint8_t, 0x100> program{};
+        program[1] = static_cast<std::uint8_t>(opcode);
+        program[2] = 0x30; // direct/bit 0x30, rel/immediate 0
+        write_binary(path, program.data(), program.size());
+        for (const bool traced : {false, true}) {
+            mcs51emu::Ca51F253L3 device;
+            device.load_firmware(path.string());
+            std::ostringstream trace;
+            if (traced)
+                device.set_trace(&trace);
+            const mcs51emu::RunResult nop = device.run(1);
+            const mcs51emu::RunResult run = device.run(1);
+            const bool ok = nop.error.empty() && nop.cycles == 1 && run.error.empty() &&
+                            run.instructions == 1 &&
+                            run.cycles - nop.cycles ==
+                                classic_cycles(static_cast<std::uint8_t>(opcode));
+            if (!ok)
+                std::cerr << "opcode 0x" << std::hex << opcode << std::dec
+                          << (traced ? " traced" : " fast") << ": "
+                          << run.cycles - nop.cycles << " cycles, expected "
+                          << classic_cycles(static_cast<std::uint8_t>(opcode)) << ' '
+                          << run.error << '\n';
+            CHECK(ok);
+        }
+    }
+    std::filesystem::remove(path);
+}
+
+// The classic interrupt entry stays 2 cycles and one counted instruction on
+// the CA51F253L3 (the CC2530 model uses 7, SWRU191F 2.5.2).
+void test_ca51_interrupt_entry_takes_two_cycles() {
+    const auto path = temp_file("mcs51-entry-cost.bin");
+    std::array<std::uint8_t, 16> program{};
+    program[0x01] = 0x80;
+    program[0x02] = 0xfe; // SJMP $
+    program[0x0b] = 0x32; // Timer0 vector: RETI
+    write_binary(path, program.data(), program.size());
+    for (const bool traced : {false, true}) {
+        mcs51emu::Ca51F253L3 device;
+        device.load_firmware(path.string());
+        std::ostringstream trace;
+        if (traced)
+            device.set_trace(&trace);
+        device.write_sfr(0x89, 0x01); // Timer0 mode 1
+        device.write_sfr(0x8c, 0xff);
+        device.write_sfr(0x8a, 0xfe);
+        device.write_sfr(0x88, 0x10); // Timer0 run
+        device.write_sfr(0xa8, 0x82); // EA and ET0
+        std::uint64_t before = 0;
+        mcs51emu::RunResult step;
+        for (int i = 0; i < 100; ++i) {
+            before = device.run(0).cycles;
+            step = device.run(1);
+            if (step.pc == 0x000b)
+                break;
+        }
+        CHECK(step.error.empty());
+        CHECK(step.pc == 0x000b);
+        CHECK(step.instructions == 1);
+        CHECK(step.cycles - before == 2);
+        CHECK(device.read_sfr(0x81) == 0x09);
+        CHECK(device.read_idata(0x08) == 0x01 && device.read_idata(0x09) == 0x00);
+    }
+    std::filesystem::remove(path);
+}
+
 } // namespace
 
 int main() {
@@ -666,6 +775,8 @@ int main() {
     test_ca51_fast_run_matches_per_instruction_hook();
     test_ca51_uart1_stream_sends_a_frame_per_baud_period();
     test_ca51_run_stops_at_the_cycle_limit();
+    test_ca51_keeps_the_classic_cycle_table();
+    test_ca51_interrupt_entry_takes_two_cycles();
     if (failures != 0) {
         std::cerr << failures << " MCS-51 check(s) failed\n";
         return 1;
