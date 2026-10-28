@@ -102,13 +102,16 @@ timer. TS0001 calls it for Timer1 with `time=1512` while entering network
 setup. This inferred ROM behavior is covered by a Timer1 expiry test.
 
 The SDK exports `efuse_read` but has no public prototype, and the 512 KiB flash
-dump does not contain the separate eFuse contents. In the observed TS0001
-caller, `r0` is the block and `r1` is a stack output buffer; `r2` and `r3` are
-not initialized at that call site. The model logs these firmware reads and
-leaves the unavailable block data unchanged. A simple `(block, buffer)` write
-remains only as a unit-test fixture, not as evidence of the device's eFuse
-contents. RF calibration values printed as `tpCap` are restored from the
-separate ROM-owned globals described above; raw eFuse compatibility remains
+dump does not contain the separate eFuse contents. Captured TS0001 calls pass
+block 1 with `r1` pointing to a stack buffer, `r2=0x60`, and `r3=0x1fff2b29`;
+another block 1 call uses `r2=0x60` and `r3=0x1fff2eb9`. A block 3 call uses
+`r1=0x1fffce38`, `r2=0x1fff0100`, and `r3=0x10`. The purpose of these
+arguments and the output layout are unknown. The model logs each call, leaves
+the destination unchanged, and currently returns zero for block 1 so the image
+can continue; other block IDs return `-EINVAL`. Those return values are
+inferred compatibility behavior, not a verified eFuse contract. It does not
+synthesize eFuse contents. The `tpCap` values are restored separately from the
+observed ROM-owned globals described above; raw eFuse compatibility remains
 unverified.
 
 Two calls are deliberately visible limitations. The image reaches unexported

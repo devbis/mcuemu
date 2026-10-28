@@ -568,20 +568,17 @@ int main() {
     invoke_rom(0x14c00, heap_first, 0, 0, 535);
     invoke_rom(0x14c00, heap_second, 0, 0, 536);
     const std::uint32_t efuse_buffer = BootImage::RamBase + 0x3020;
-    invoke_rom(0xace0, 1, efuse_buffer, 0, 540);
-    CHECK(chip.core().reg(0) == 0);
-    std::uint8_t efuse_data[8]{};
-    CHECK(chip.core().read_memory(efuse_buffer, efuse_data, sizeof efuse_data));
-    CHECK(efuse_data[0] == 0x2b && efuse_data[1] == 0x23);
-    CHECK(std::all_of(efuse_data + 2, efuse_data + sizeof efuse_data,
-                      [](std::uint8_t value) { return value == 0; }));
-    invoke_rom(0xace0, 2, efuse_buffer, 0, 545);
-    CHECK(chip.core().reg(0) == static_cast<std::uint32_t>(-22));
     const std::uint8_t untouched_efuse_data[] = {1, 2, 3, 4, 5, 6, 7, 8};
     CHECK(chip.core().write_memory(efuse_buffer, untouched_efuse_data,
                                   sizeof untouched_efuse_data));
-    invoke_rom(0xace0, 1, efuse_buffer, 0x60, 547, 0x1fff2b29);
+    invoke_rom(0xace0, 1, efuse_buffer, 0x60, 540, 0x1fff2b29);
     CHECK(chip.core().reg(0) == 0);
+    std::uint8_t efuse_data[8]{};
+    CHECK(chip.core().read_memory(efuse_buffer, efuse_data, sizeof efuse_data));
+    CHECK(std::equal(std::begin(untouched_efuse_data), std::end(untouched_efuse_data),
+                     std::begin(efuse_data)));
+    invoke_rom(0xace0, 3, efuse_buffer, 0x1fff0100, 545, 0x10);
+    CHECK(chip.core().reg(0) == static_cast<std::uint32_t>(-22));
     CHECK(chip.core().read_memory(efuse_buffer, efuse_data, sizeof efuse_data));
     CHECK(std::equal(std::begin(untouched_efuse_data), std::end(untouched_efuse_data),
                      std::begin(efuse_data)));

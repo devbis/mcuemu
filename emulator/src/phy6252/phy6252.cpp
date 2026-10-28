@@ -634,24 +634,15 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             core_.set_reg(0, static_cast<std::uint32_t>(core_.cycles()) & 0x3fffffu);
         } else if (address == 0xace0) {
             // The SDK names this entry but omits its prototype. The simple
-            // block/buffer path is only a test fixture; TS0001 passes more
-            // arguments and its output layout is still unknown.
+            // output layout and the separate eFuse contents are unavailable.
             const std::uint32_t block = core_.reg(0);
             const std::uint32_t destination = core_.reg(1);
-            constexpr std::array<std::uint8_t, 8> rf_calibration = {
-                0x2b, 0x23, 0, 0, 0, 0, 0, 0};
-            if (block == 1 && core_.reg(2) == 0 && core_.reg(3) == 0) {
-                if (!core_.write_memory(destination, rf_calibration.data(),
-                                        rf_calibration.size()))
-                    core_.set_reg(0, static_cast<std::uint32_t>(-22));
-                else
-                    core_.set_reg(0, 0);
-            } else {
-                std::fprintf(stderr,
-                             "PHY6252: unverified efuse_read call (block=%u r1=0x%08x r2=0x%08x r3=0x%08x lr=0x%08x); leaving memory unchanged\n",
-                             block, destination, core_.reg(2), core_.reg(3), core_.reg(14));
-                core_.set_reg(0, block == 1 ? 0 : static_cast<std::uint32_t>(-22));
-            }
+            std::fprintf(stderr,
+                         "PHY6252: unverified efuse_read call (block=%u r1=0x%08x r2=0x%08x r3=0x%08x lr=0x%08x); leaving memory unchanged\n",
+                         block, destination, core_.reg(2), core_.reg(3), core_.reg(14));
+            // Keep the existing success result for block 1 so the image can
+            // continue, while making the absent data visible above.
+            core_.set_reg(0, block == 1 ? 0 : static_cast<std::uint32_t>(-22));
         } else if (address == 0x3fdc) {
             // SDK ROM symbol LL_ENC_AES128_Encrypt0(input, key, output).
             crypto::Block input{}, key{};
