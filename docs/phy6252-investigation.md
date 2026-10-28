@@ -56,6 +56,12 @@ software-triggered memory copy used with SPIF remapping; other channels and
 request sources are not modeled. The ADC and a complete clock tree are not
 implemented.
 
+AP_TIM3 starts as a masked free-running down-counter at `0xffffffff`. The SDK's
+`WaitUs()` reads `AP_TIM3->CurrentCount` and derives elapsed microseconds from
+the changing count; this is another ROM board-init state that direct image boot
+must supply. The startup value and mask are inferred from that SDK code and the
+TS0001 callback path, not verified on hardware.
+
 Direct image boot skips the ROM's earlier RF initialization. The SDK symbol
 table places `g_rfPhyTpCal0` and `g_rfPhyTpCal1` at `0x1fff0a44` and
 `0x1fff0a45`; reset seeds them to `0x2b` and `0x23`, matching the supplied
@@ -89,7 +95,9 @@ Implemented ROM entries include clock setup/query, IRQ critical-section
 helpers, eFuse read, AES-128 block encryption, OSAL heap and memory functions,
 `log_printf`, the ARM runtime memory/string functions,
 `__ARM_common_switch8`, `spif_config`, `spif_cmd`, `spif_rddata`,
-`spif_write`, `spif_write_dma`, sector erase, and `set_timer`. Both flash write
+`spif_write`, `spif_write_dma`, sector erase, `set_timer`, and `clear_timer`.
+`clear_timer` is modeled with the SDK's `hal_timer_stop_counter()` sequence.
+Both flash write
 calls share the SDK's `(address, RAM source, byte count)` contract and program flash with NOR
 1-to-0 semantics. SPIF command completion is synchronous; status reads report
 WIP clear. Flash timing, write protection, page limits and most opcodes are not

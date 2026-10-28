@@ -382,6 +382,13 @@ void Phy6252::reset() {
     timers_ = {};
     for (TimerState &timer : timers_)
         timer.last_cycle = core_.cycles();
+    // The SDK's WaitUs() polls AP_TIM3->CurrentCount continuously. ROM board
+    // init enables this down-counter before handing control to the image, so
+    // seed the state direct boot skips; otherwise WaitUs() never returns.
+    TimerState &wait_timer = timers_[2];
+    wait_timer.load = std::numeric_limits<std::uint32_t>::max();
+    wait_timer.current = wait_timer.load;
+    wait_timer.control = TimerEnable | TimerInterruptMask;
     gpio_data_ = gpio_direction_ = gpio_interrupt_enable_ = 0;
     gpio_interrupt_mask_ = GpioMask;
     gpio_interrupt_type_ = gpio_interrupt_polarity_ = 0;
@@ -842,6 +849,19 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                     }
                     core_.set_reg(0, 0); // LL_STATUS_SUCCESS
                 }
+            }
+        } else if (address == 0xa5c0) {
+            // The SDK ROM exports clear_timer(AP_TIM_TypeDef *). Its body is
+            // absent; match the public hal_timer_stop_counter() sequence.
+            const std::uint32_t base = core_.reg(0);
+            const int timer = timer_index(base);
+            if (timer < 0 || base != timer_base(static_cast<unsigned>(timer))) {
+                core_.set_reg(0, static_cast<std::uint32_t>(-22));
+            } else {
+                write_register(base + 0x08, 0, 4);
+                write_register(base, 0, 4);
+                write_register(base + 0x04, 0, 4);
+                core_.set_reg(0, 0);
             }
         } else if (address == 0x13ae4) {
             rom_log_printf();

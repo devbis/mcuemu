@@ -86,6 +86,11 @@ int main() {
     Phy6252 chip;
     chip.load_firmware(image);
     chip.reset();
+    CHECK(chip.read(0x4000102c, 4) == 0xffffffffu); // AP_TIM3 free-running CurrentCount
+    const std::uint64_t wait_timer_start = chip.core().cycles();
+    CHECK(chip.run(wait_timer_start + 16).reason == cortexm::StopReason::Deadline);
+    CHECK(chip.read(0x4000102c, 4) == 0xfffffffbu); // one tick per four core cycles
+    chip.reset();
     std::array<std::uint8_t, 2> rf_tp_cal{};
     CHECK(chip.core().read_memory(0x1fff0a44, rf_tp_cal.data(), rf_tp_cal.size()));
     CHECK(rf_tp_cal[0] == 0x2b); // ROM-owned g_rfPhyTpCal0
@@ -152,6 +157,16 @@ int main() {
     CHECK(rom_test_chip.read(0x40001010, 4) == 1);
     CHECK(rom_test_chip.read(0x4000100c, 4) == 1); // EOI clears Timer1 pending
     CHECK(rom_test_chip.read(0x40001010, 4) == 0);
+    rom_test_chip.write(0x40001000, 44, 4);
+    rom_test_chip.write(0x40001008, 3, 4);
+    rom_test_chip.core().set_reg(0, 0x40001000); // clear_timer(AP_TIM1)
+    rom_test_chip.core().set_reg(14, 0x11010109);
+    rom_test_chip.core().set_reg(15, 0xa5c0);
+    CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 16).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(rom_test_chip.read(0x40001000, 4) == 0);
+    CHECK(rom_test_chip.read(0x40001004, 4) == 0);
+    CHECK(rom_test_chip.read(0x40001008, 4) == 0);
     auto invoke_radio_rom = [&](std::uint32_t address, std::uint32_t arg0 = 0) {
         rom_test_chip.core().set_reg(0, arg0);
         rom_test_chip.core().set_reg(14, 0x11010109);
