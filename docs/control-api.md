@@ -33,7 +33,10 @@ simulation advances in short bursts between I/O.
 
 A value is `null`, a boolean, a number, a string, or `{"hex": "5a01"}` for
 bytes (UART/RTT data). Times are nanoseconds as integers or strings such as
-`"250us"`, `"10ms"`, `"2.5s"`.
+`"250us"`, `"10ms"`, `"2.5s"`. A `cc2530f256` UART frame endpoint
+(`device.mcu.uartN.frames`) takes and reports frame tokens as a string, for
+example `"0x41 0x42:perr 0x43:fe break"` (see
+[system-config.md](system-config.md)). A bad token is error `-32001`.
 
 ## Methods
 

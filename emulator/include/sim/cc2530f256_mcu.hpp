@@ -91,6 +91,11 @@ public:
     // the byte pending.
     bool uart_rx(unsigned index, std::uint8_t byte) override;
     std::vector<std::uint8_t> uart_take_tx(unsigned index) override;
+    // 9th bit, parity/framing errors and break (SWRU191F 17.1.4).
+    bool uart_frames(unsigned index) const override { return index < 2; }
+    bool uart_rx_frame(unsigned index, const UartFrame &frame) override;
+    void uart_capture_tx_frames(unsigned index, bool on) override;
+    std::vector<UartFrame> uart_take_tx_frames(unsigned index) override;
     void read_memory(std::uint32_t address, std::uint8_t *out,
                      std::size_t length) override;
     void write_memory(std::uint32_t address, const std::uint8_t *data,

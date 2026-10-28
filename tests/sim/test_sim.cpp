@@ -330,6 +330,10 @@ void test_cc2530_uart_host_link();
 void test_cc2530_system_gpio_adc_parts();
 void test_cc2530_system_supply_mv();
 void test_cc2530_system_spi_loopback();
+void test_cc2530_uart_frame_tokens();
+void test_cc2530_uart_frames_system();
+void test_cc2530_uart_frames_link();
+void test_cc2530_uart_frames_rpc();
 void test_config_parsing();
 void test_config_errors();
 void test_system_build_and_run();
@@ -463,6 +467,10 @@ int main() {
     RUN(test_cc2530_system_gpio_adc_parts);
     RUN(test_cc2530_system_supply_mv);
     RUN(test_cc2530_system_spi_loopback);
+    RUN(test_cc2530_uart_frame_tokens);
+    RUN(test_cc2530_uart_frames_system);
+    RUN(test_cc2530_uart_frames_link);
+    RUN(test_cc2530_uart_frames_rpc);
     if (mcuemu_tests::failures) {
         std::cerr << mcuemu_tests::failures << " sim check(s) failed\n";
         return 1;
