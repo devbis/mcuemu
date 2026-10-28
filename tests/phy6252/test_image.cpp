@@ -103,6 +103,34 @@ int main() {
     CHECK(chip.core().read_memory(0, &vector_readback, sizeof vector_readback));
     CHECK(vector_readback == 0);
     CHECK(chip.run(100).reason == cortexm::StopReason::Deadline);
+    Phy6252 rom_test_chip;
+    rom_test_chip.load_firmware(image);
+    rom_test_chip.reset();
+    CHECK(rom_test_chip.run(100).reason == cortexm::StopReason::Deadline);
+    constexpr std::uint32_t random_buffer = 0x1fff2100;
+    rom_test_chip.core().set_reg(0, random_buffer);
+    rom_test_chip.core().set_reg(1, 8);
+    rom_test_chip.core().set_reg(14, 0x11010109);
+    rom_test_chip.core().set_reg(15, 0x5e04); // SDK LL_Rand entry
+    CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 16).reason == cortexm::StopReason::Deadline);
+    CHECK(rom_test_chip.core().reg(0) == 0); // LL_STATUS_SUCCESS
+    std::array<std::uint8_t, 8> random_bytes{};
+    CHECK(rom_test_chip.core().read_memory(random_buffer, random_bytes.data(), random_bytes.size()));
+    CHECK(std::any_of(random_bytes.begin(), random_bytes.end(),
+                      [](std::uint8_t byte) { return byte != 0; }));
+    rom_test_chip.core().set_reg(0, random_buffer);
+    rom_test_chip.core().set_reg(1, 0); // SDK LL_Rand rejects an empty request
+    rom_test_chip.core().set_reg(14, 0x11010109);
+    rom_test_chip.core().set_reg(15, 0x5e04);
+    CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 16).reason == cortexm::StopReason::Deadline);
+    CHECK(rom_test_chip.core().reg(0) == 0x12); // LL_STATUS_ERROR_BAD_PARAMETER
+    const std::array<std::uint8_t, 4> unaligned_word{0x12, 0x34, 0x56, 0x78};
+    CHECK(rom_test_chip.core().write_memory(random_buffer + 1, unaligned_word.data(), unaligned_word.size()));
+    rom_test_chip.core().set_reg(0, random_buffer + 1);
+    rom_test_chip.core().set_reg(14, 0x11010109);
+    rom_test_chip.core().set_reg(15, 0x0f74); // ARM runtime __aeabi_uread4 entry
+    CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 16).reason == cortexm::StopReason::Deadline);
+    CHECK(rom_test_chip.core().reg(0) == 0x78563412);
     const std::uint32_t fifo_probe = 0x11030000;
     auto *fifo_probe_code = chip.core().host_pointer(fifo_probe, 6);
     CHECK(fifo_probe_code != nullptr);
@@ -511,6 +539,8 @@ int main() {
     CHECK(chip.run(timer6_start + 12).reason == cortexm::StopReason::Deadline);
     CHECK(chip.read(0x40001074, 4) == 1);
     CHECK(chip.read(0x40001070, 4) == 1);
+    chip.write(0x40001068, 0, 4); // SDK hal_timer_stop_counter clears CurrentCount
+    CHECK(chip.read(0x40001068, 4) == 0);
 
     constexpr char crc_vector[] = "123456789";
     const std::uint32_t crc_source = BootImage::RamBase + 0x4f00;

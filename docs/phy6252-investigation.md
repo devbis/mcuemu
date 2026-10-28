@@ -39,7 +39,8 @@ GPIO0..GPIO22 support data, direction, input, AON pulls and basic edge/level
 interrupts; alternate pad functions are not modeled. Timer5 and Timer6 use the
 observed DesignWare register layout, use four core cycles per tick (4 MHz on
 the Zephyr path at 16 MHz), and provide down-counting, one-shot alarms and IRQs
-24/25. The AON RTC counter advances at 32.768 kHz when `RTCCTL.RUN` is set;
+24/25. Their current-count registers are writable, as required by the SDK timer
+stop path. The AON RTC counter advances at 32.768 kHz when `RTCCTL.RUN` is set;
 direct image boot starts it in the state inferred for the skipped ROM board-init
 path. The AON RTC clock-select, control, compare and flag registers are stored,
 but compare events and IRQ generation are not. The four retained AON sleep
@@ -119,7 +120,10 @@ inferences, not a general PHY6252 ROM contract.
 
 The image also reaches the SDK's `__aeabi_uidiv` and `__aeabi_idiv` ROM helpers,
 which are modeled with quotient in `r0` and remainder in `r1`; division by zero
-faults. The observed `rtc_get_counter` call returns the model's AON RTC count.
+faults. `__aeabi_uread4` performs an unaligned little-endian 32-bit read, and
+the observed `LL_Rand` call returns success and fills the requested 1..255
+bytes with deterministic xorshift output. This is not cryptographic
+randomness. The observed `rtc_get_counter` call returns the model's AON RTC count.
 Several observed `ll_hw_*` BLE setup/FIFO calls are logged no-ops, and
 `ll_hw_get_tr_mode` returns idle. They do not model BLE state or radio effects.
 The SDK's `gpio_sel[pin / 4]` accesses are served from the inferred register
@@ -136,18 +140,23 @@ the SDK's `bb_rom_sym_m0` addresses. This fixed-vector mapping is inferred:
 the ROM image and its full vector table are not included in the SDK.
 
 After the 300 ms RF startup wait, TS0001 reaches PCR setup and pends PendSV from
-`0x1fff66e6` by writing `0x10000000` to `ICSR`. Before the write, the core is in
-Thread mode with `CONTROL=2`, `MSP=0x1fffce40` and `PSP=0x1fffe270`, both inside
-SRAM. With the absent VTOR modeled, exception dispatch reaches the SDK symbol
-`PendSV_Handler` at `0x000084cd` (the emulator's instruction address is
-`0x000084cc`). Its body is not present in the SDK, so the emulator reports the
-unimplemented ROM entry with registers, stack banks, `CONTROL` and `IPSR` rather
-than assuming a context-switch implementation. The prior `VTOR=0x1fff8b00`
-emulation selected an invalid RAM vector table and caused a misleading
-HardFault at `0x1fffdd00`; that is not the current failure. The model has not
-printed `Stack Init`, emitted Zigbee radio traffic, or joined a coordinator.
-A separate Cortex-M0 regression case that pends PendSV from Thread mode on PSP
-with a valid vector table passes and keeps its exception frame on PSP.
+`0x1fff66e6` by writing `0x10000000` to `ICSR`. The ROM symbol body is not in
+the SDK, but the firmware contains a FreeRTOS PendSV handler at `0x1fff1972`
+and a SysTick handler at `0x1fff6f10`; it installs their Thumb pointers in the
+observed slots at `0x1fff0378` and `0x1fff037c`. The model dispatches the ROM
+PendSV vector to the registered image handler and exposes the registered
+SysTick handler through the fixed vector alias. This callback-table contract
+is inferred from the image, not documented by the SDK.
+
+The supplied run now prints `Stack Init`, initializes the Zigbee stack, creates
+the application tasks and prints `zb_app_task_init`. It then enters the SDK's
+ROM HardFault vector at `0x000028f0`; the captured exception frame has PC zero.
+The task/context-switch failure remains under investigation. No Zigbee frames
+have been emitted by this image yet. A separate Cortex-M0 regression case that
+pends PendSV from Thread mode on PSP with a valid vector table passes and keeps
+its exception frame on PSP. The earlier `VTOR=0x1fff8b00` emulation selected an
+invalid RAM vector table and caused a misleading HardFault; that is not the
+current failure.
 
 ## Firmware evidence
 
@@ -160,13 +169,14 @@ The runnable system is `examples/phy6252-zephyr.yaml`; its image remains a
 local input under `firmware/`.
 
 The user-supplied TS0001 log shows startup through `Stack Init`,
-`Zigbe stack initialized`, successful restoration of network state 12 and Tuya
-reports. The emulator passes three observed CRC-checked copy blocks and prints
-configuration through `rfClk`; it reports `tpCap[00 00]` instead of the
-reference log's `tpCap[2b 23]`, omits `OS NVM Start Addr` and `Stack Init`, then
-stops at the unimplemented ROM `PendSV_Handler`. The image's runtime
-Zigbee-stack location and its ability to join or exchange frames therefore
-remain undetermined. Do not claim TS0001 relay support until it starts, joins,
+`Zigbe stack initialized`, restoration of network state 12 and Tuya reports.
+The supplied binary contains the Zigbee and FreeRTOS executable image, and the
+emulator reaches its Zigbee stack initialization path. It also passes three
+observed CRC-checked copy blocks and prints the NVM range
+`0x11079000..0x1107efff`. It still reports `tpCap[00 00]` instead of the
+reference log's `tpCap[2b 23]`. The emulator creates application tasks but
+enters HardFault before producing radio traffic, so joining and relay commands
+remain unverified. Do not claim TS0001 relay support until it starts, joins,
 and exchanges Zigbee traffic in a captured network scenario.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use

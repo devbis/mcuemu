@@ -71,6 +71,8 @@ private:
     bool sleep_allowed_{false};
     std::uint32_t sleep_mode_{0};
     bool unexported_init_hook_warned_{false};
+    bool pendsv_dispatch_warning_logged_{false};
+    bool ll_rand_warning_logged_{false};
     bool ll_context_warning_logged_{false};
     bool ll_rx_timeout_warning_logged_{false};
     bool ble_srx_warning_logged_{false};
@@ -78,6 +80,7 @@ private:
     bool ble_fifo_warning_logged_{false};
     bool ble_mode_warning_logged_{false};
     std::uint32_t heap_start_{0}, heap_size_{0};
+    std::uint32_t random_state_{0x6d2b79f5};
     std::map<std::uint32_t, std::uint32_t> free_heap_blocks_;
     std::unordered_map<std::uint32_t, std::uint32_t> heap_allocations_;
     std::string pending_fault_;

@@ -344,6 +344,8 @@ void Phy6252::reset() {
     sleep_allowed_ = false;
     sleep_mode_ = 0;
     unexported_init_hook_warned_ = false;
+    pendsv_dispatch_warning_logged_ = false;
+    ll_rand_warning_logged_ = false;
     ll_context_warning_logged_ = false;
     ll_rx_timeout_warning_logged_ = false;
     ble_srx_warning_logged_ = false;
@@ -351,6 +353,7 @@ void Phy6252::reset() {
     ble_fifo_warning_logged_ = false;
     ble_mode_warning_logged_ = false;
     heap_start_ = heap_size_ = 0;
+    random_state_ = 0x6d2b79f5u;
     free_heap_blocks_.clear();
     heap_allocations_.clear();
     pending_fault_.clear();
@@ -469,6 +472,17 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                               pc, numerator, core_.reg(14));
                 return {cortexm::StopReason::Fault, message};
             }
+        } else if (address == 0x0f74) {
+            // ARM runtime __aeabi_uread4 performs an unaligned little-endian
+            // 32-bit load. The M0 core uses this helper for such accesses.
+            std::array<std::uint8_t, 4> bytes{};
+            if (!core_.read_memory(core_.reg(0), bytes.data(), bytes.size()))
+                return {cortexm::StopReason::Fault,
+                        "invalid pointer passed to PHY6252 __aeabi_uread4"};
+            core_.set_reg(0, static_cast<std::uint32_t>(bytes[0]) |
+                             (static_cast<std::uint32_t>(bytes[1]) << 8) |
+                             (static_cast<std::uint32_t>(bytes[2]) << 16) |
+                             (static_cast<std::uint32_t>(bytes[3]) << 24));
         } else if (address == 0x16b14) {
             // SDK ROM rtc_get_counter() exposes the AON 32.768 kHz counter.
             core_.set_reg(0, rtc_count(core_.cycles_to_ns(core_.cycles())));
@@ -703,6 +717,33 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                 }
                 core_.set_reg(0, 0); // LL_STATUS_SUCCESS for unused BLE context setup.
             }
+        } else if (address == 0x5e04) {
+            // SDK LL_Rand(buffer, length) accepts lengths from 1 to 255 and
+            // returns an LL status. Use a deterministic PRNG for repeatable
+            // simulation; this is not a cryptographic random source.
+            const std::uint32_t destination = core_.reg(0);
+            const std::uint32_t length = core_.reg(1);
+            if (length == 0 || length > 255) {
+                core_.set_reg(0, 0x12); // LL_STATUS_ERROR_BAD_PARAMETER
+            } else {
+                std::vector<std::uint8_t> bytes(length);
+                for (std::uint8_t &byte : bytes) {
+                    random_state_ ^= random_state_ << 13;
+                    random_state_ ^= random_state_ >> 17;
+                    random_state_ ^= random_state_ << 5;
+                    byte = static_cast<std::uint8_t>(random_state_ >> 24);
+                }
+                if (!core_.write_memory(destination, bytes.data(), bytes.size())) {
+                    core_.set_reg(0, 0x12);
+                } else {
+                    if (!ll_rand_warning_logged_) {
+                        std::fprintf(stderr,
+                                     "PHY6252: LL_Rand uses deterministic non-cryptographic bytes\n");
+                        ll_rand_warning_logged_ = true;
+                    }
+                    core_.set_reg(0, 0); // LL_STATUS_SUCCESS
+                }
+            }
         } else if (address == 0x13ae4) {
             rom_log_printf();
         } else if (address == 0xa2e0) {
@@ -715,6 +756,31 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                 unexported_init_hook_warned_ = true;
             }
             core_.set_reg(0, 0);
+        } else if (address == (RomPendSvHandler & ~1u)) {
+            // The ROM body is unavailable, but this image installs FreeRTOS
+            // handlers in the observed exception callback slots at 0x1fff0374.
+            // Dispatch PendSV to its image-resident handler and expose its
+            // registered SysTick handler through the fixed vector alias.
+            std::array<std::uint32_t, 3> handlers{};
+            if (!core_.read_memory(0x1fff0374, handlers.data(), sizeof handlers) ||
+                (handlers[1] & 1u) == 0 || (handlers[2] & 1u) == 0 ||
+                (handlers[1] & ~1u) < BootImage::RamBase ||
+                (handlers[1] & ~1u) >= BootImage::RamBase + BootImage::RamSize ||
+                (handlers[2] & ~1u) < BootImage::RamBase ||
+                (handlers[2] & ~1u) >= BootImage::RamBase + BootImage::RamSize) {
+                return {cortexm::StopReason::Fault,
+                        "PHY6252 PendSV_Handler has no valid image callback"};
+            }
+            if (!pendsv_dispatch_warning_logged_) {
+                std::fprintf(stderr,
+                             "PHY6252: ROM PendSV body unavailable; dispatching registered image handlers PendSV=0x%08x SysTick=0x%08x (inferred callback slots)\n",
+                             handlers[1], handlers[2]);
+                pendsv_dispatch_warning_logged_ = true;
+            }
+            std::memcpy(vector_alias_ + 15 * sizeof(std::uint32_t),
+                        &handlers[2], sizeof handlers[2]);
+            core_.set_reg(15, handlers[1] & ~1u);
+            rom_branch = true;
         } else if (address == 0xa920) {
             sleep_allowed_ = false; // SDK disableSleep() only changes power-manager policy.
         } else if (address == 0xaeac) {
@@ -916,7 +982,7 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                 core_.set_reg(0, 0);
             }
         } else {
-            char message[384];
+            char message[512];
             std::uint32_t stack_args[2]{};
             std::uint32_t msp = 0, psp = 0, control = 0, ipsr = 0;
             core_.read_memory(core_.reg(13), stack_args, sizeof stack_args);
@@ -924,15 +990,24 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             uc_reg_read(core_.engine(), UC_ARM_REG_PSP, &psp);
             uc_reg_read(core_.engine(), UC_ARM_REG_CONTROL, &control);
             uc_reg_read(core_.engine(), UC_ARM_REG_IPSR, &ipsr);
+            const std::uint32_t lr = core_.reg(14);
+            const std::uint32_t exception_sp = (lr & 4u) != 0 ? psp : msp;
+            std::array<std::uint32_t, 8> exception_frame{};
+            const bool have_exception_frame = ipsr != 0 &&
+                core_.read_memory(exception_sp, exception_frame.data(), sizeof exception_frame);
             const char *symbol = address == (RomPendSvHandler & ~1u) ? "PendSV_Handler at " :
                                  address == (RomNmiHandler & ~1u) ? "NMI_Handler at " :
                                  address == (RomHardFaultHandler & ~1u) ? "HardFault_Handler at " :
                                  nullptr;
             std::snprintf(message, sizeof message,
-                          "unimplemented PHY6252 ROM call %s0x%08x (r0=0x%08x r1=0x%08x r2=0x%08x r3=0x%08x sp=0x%08x msp=0x%08x psp=0x%08x control=0x%08x ipsr=0x%08x stack=[0x%08x,0x%08x] lr=0x%08x)",
-                          symbol ? symbol : "", pc, core_.reg(0), core_.reg(1), core_.reg(2), core_.reg(3),
+                          "unimplemented PHY6252 ROM call %s0x%08x last_pc=0x%08x (r0=0x%08x r1=0x%08x r2=0x%08x r3=0x%08x sp=0x%08x msp=0x%08x psp=0x%08x control=0x%08x ipsr=0x%08x stack=[0x%08x,0x%08x] frame_pc=0x%08x frame_lr=0x%08x xpsr=0x%08x lr=0x%08x)",
+                          symbol ? symbol : "", pc, core_.last_instruction_pc(),
+                          core_.reg(0), core_.reg(1), core_.reg(2), core_.reg(3),
                           core_.reg(13), msp, psp, control, ipsr,
-                          stack_args[0], stack_args[1], core_.reg(14));
+                          stack_args[0], stack_args[1],
+                          have_exception_frame ? exception_frame[6] : 0,
+                          have_exception_frame ? exception_frame[5] : 0,
+                          have_exception_frame ? exception_frame[7] : 0, lr);
             return {cortexm::StopReason::Fault, message};
         }
         if (rom_branch)
@@ -1513,6 +1588,11 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             state.cycle_remainder = 0;
             state.last_cycle = core_.cycles();
             break;
+        case 0x04:
+            state.current = lane_write(state.current, value, address, size);
+            state.cycle_remainder = 0;
+            state.last_cycle = core_.cycles();
+            break;
         case 0x08: {
             const std::uint32_t old_control = state.control;
             state.control = lane_write(state.control, value, address, size) & 7u;
@@ -1534,7 +1614,7 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             // Interrupt status is read-only on the DesignWare timer.
             break;
         default:
-            unsupported_register(address, "write");
+            unsupported_register(address, "write", value, size);
             return;
         }
         return;
