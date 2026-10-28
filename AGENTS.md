@@ -342,8 +342,10 @@ Profile with `sample <pid> 3 -file out.txt` rather than guessing. What mattered:
 - No BLE at register level; CA51 has no GPIO/ADC/radio; no TLS on the control API.
 - CC2530F256: not cycle accurate (the shared MCS-51 cycle table, 2-cycle
   interrupt entry); no debug interface or DBGLOCK; a flash operation cut by a
-  reset is abandoned, not partially applied. Full list in `docs/cc2530.md`
-  ("Not modeled").
+  reset or power cut is abandoned by default, and the opt-in partial/complete
+  outcomes and the 6.2.2 `nondeterministic` policy are model-defined fault
+  injection, not measured behaviour. Full list in `docs/cc2530.md`
+  ("Not modeled", "Flash fault injection").
 - UART timing for the CA51F253L3 RX path is not bit-accurate.
 - The plug example uses the pins of the Zbeacon TS011F board. Without a coordinator the plug firmware only scans and requests steering, so the relay does not react to the button.
 - Realtime pacing cannot reach 1x for busy firmware; use `speed` below 1.

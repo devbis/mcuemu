@@ -1140,7 +1140,8 @@ void test_flash_erase_from_sram() {
 
 // 6.3.1: started from flash code, the CPU stalls until the erase is done
 // and resumes with the next instruction. A reset abandons the erase
-// (model-defined: the page is left unchanged; power loss is not modeled).
+// (model-defined default: the page is left unchanged; the other outcomes and
+// power cuts are in test_cc2530_flash_powercut.cpp).
 Asm erase_page6_program(std::uint16_t &erase, std::uint16_t &next) {
     Asm main(0x0100);
     main.mov(SP, 0x30).xwrite(FADDRH, 0x0c).dptr(FCTL).op({0x74, 0x05});

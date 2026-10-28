@@ -274,7 +274,7 @@ if(MCUEMU_BUILD_TESTS)
     add_test(NAME cc2530emu-lockstep-tests COMMAND cc2530emu-lockstep-tests)
 
     # CC2530 peripheral models (white-box access to src/mcs51 internals).
-    foreach(suite timers io_analog_usart dma_flash_aes mactimer radio spi uart_errors)
+    foreach(suite timers io_analog_usart dma_flash_aes mactimer radio spi uart_errors flash_powercut)
         add_executable(cc2530emu-${suite}-tests tests/mcs51/test_cc2530_${suite}.cpp)
         target_include_directories(cc2530emu-${suite}-tests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/emulator/src/mcs51)
