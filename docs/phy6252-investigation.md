@@ -297,14 +297,19 @@ the callback completes its `WaitUs()` polling and eight-sample RSSI loop, calls
 ROM `clear_timer`, and successfully enqueues a BDB event through the image's
 queue wrapper at `0x1fff7ad0`; the PendSV handler then runs. No LL control
 start or TX FIFO write follows before the image resumes its main loop around
-8.0 s. In a second cleared-NVM run, the gateway's last captured frame was at
-4.739 s, before the RSSI callback at 6.409 s, but TS0001 still sent no frame.
-With the supplied NVM image, the long-press BDB request also produced no
-TS0001 frame. All runs continue without a CPU fault. This narrows the visible
-gap to event handling or the commissioning-to-LMAC path after the RSSI sample;
-the event consumer and the exact firmware, ROM or stack contract remain
-unknown. Keep the cleared-NVM image outside the repository with the other
-local test inputs.
+8.0 s. An RF/LL register trace confirms that the callback only changes the
+channel and syncword and samples RSSI; it does not issue another LL operation.
+The BDB timer callback also sets event-group bit `0x20`, which wakes the LMAC
+task. That task sees zero at `0x1fff8b94` and skips its callback dispatcher;
+the image's static callback table at `0x1fff7e78` is populated. This wake is a
+timer/BDB notification, not evidence of a pending radio event, so it does not
+identify a missing radio callback or justify seeding internal LMAC state. In a
+second cleared-NVM run, the gateway's last captured frame was at 4.739 s,
+before the RSSI callback at 6.409 s, but TS0001 still sent no frame. With the
+supplied NVM image, the long-press BDB request also produced no TS0001 frame.
+All runs continue without a CPU fault. The commissioning-to-radio transition
+after the RSSI sample remains unknown. Keep the cleared-NVM image outside the
+repository with the other local test inputs.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
