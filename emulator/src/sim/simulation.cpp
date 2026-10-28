@@ -100,6 +100,12 @@ void Simulation::check_config(const SystemConfig &config) const {
                 (void)confine_path(*mcu.rom);
             if (mcu.rf_calibration)
                 (void)confine_path(*mcu.rf_calibration);
+            if (mcu.flash) {
+                if (!mcu.flash->persist.empty())
+                    (void)confine_path(mcu.flash->persist);
+                if (!mcu.flash->log.empty())
+                    (void)confine_path(mcu.flash->log);
+            }
         }
         for (const PartConfig &part : device.parts)
             if (!part.script.empty())

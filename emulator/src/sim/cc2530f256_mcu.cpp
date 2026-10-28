@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <array>
+#include <filesystem>
 #include <iomanip>
+#include <iostream>
+#include <iterator>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -60,6 +63,48 @@ void put_le(std::array<std::uint8_t, Cc2530F256Mcu::CpuSnapshotSize> &block, uns
         block[at + i] = static_cast<std::uint8_t>(value >> (8 * i));
 }
 
+const char *op_name(mcs51emu::Cc2530FlashOpKind op) {
+    switch (op) {
+    case mcs51emu::Cc2530FlashOpKind::PageErase: return "erase";
+    case mcs51emu::Cc2530FlashOpKind::WordWrite: return "write";
+    case mcs51emu::Cc2530FlashOpKind::ChipErase: return "chip-erase";
+    }
+    return "?";
+}
+
+const char *outcome_name(mcs51emu::Cc2530FlashOutcome outcome) {
+    switch (outcome) {
+    case mcs51emu::Cc2530FlashOutcome::Completed: return "completed";
+    case mcs51emu::Cc2530FlashOutcome::Aborted: return "aborted";
+    case mcs51emu::Cc2530FlashOutcome::Abandoned: return "abandoned";
+    case mcs51emu::Cc2530FlashOutcome::Partial: return "partial";
+    case mcs51emu::Cc2530FlashOutcome::Forced: return "forced";
+    }
+    return "?";
+}
+
+const char *reset_cause_name(mcs51emu::Cc2530ResetCause cause) {
+    switch (cause) {
+    case mcs51emu::Cc2530ResetCause::PowerOn: return "power-on";
+    case mcs51emu::Cc2530ResetCause::External: return "external";
+    case mcs51emu::Cc2530ResetCause::Watchdog: return "watchdog";
+    case mcs51emu::Cc2530ResetCause::ClockLoss: return "clock-loss";
+    }
+    return "?";
+}
+
+std::string violation_names(std::uint8_t violations) {
+    std::string text;
+    const std::pair<std::uint8_t, const char *> names[] = {
+        {mcs51emu::Cc2530FlashBitLimit, "bit"},
+        {mcs51emu::Cc2530FlashWordLimit, "word"},
+        {mcs51emu::Cc2530FlashPageLimit, "page"}};
+    for (const auto &[bit, name] : names)
+        if (violations & bit)
+            text += (text.empty() ? "" : ",") + std::string(name);
+    return text.empty() ? "none" : text;
+}
+
 } // namespace
 
 Cc2530F256Mcu::Cc2530F256Mcu(std::string name, std::uint32_t clock_hz)
@@ -87,13 +132,43 @@ bool Cc2530F256Mcu::externally_driven() const {
     return false;
 }
 
+Cc2530F256Mcu::~Cc2530F256Mcu() {
+    // Destruction ends the run: the remaining log, the counters, then the
+    // flash image (only after a run, so a failed configuration load does not
+    // create or overwrite the file).
+    power_listener_ = nullptr; // the endpoint's subscribers may be gone
+    try {
+        if (flash_log_) {
+            after_run();
+            write_flash_summary();
+        }
+        if (ran_ && !persist_file_.empty())
+            save_flash();
+    } catch (const std::exception &error) {
+        std::cerr << "warning: " << name() << ": " << error.what() << '\n';
+    }
+}
+
 void Cc2530F256Mcu::load_firmware(const std::string &path) {
     device_.load_firmware(path);
+    if (!persist_file_.empty() && std::filesystem::exists(persist_file_)) {
+        std::ifstream input(persist_file_, std::ios::binary);
+        if (!input)
+            throw std::invalid_argument("cannot read the flash persist file " + persist_file_);
+        const std::vector<std::uint8_t> image{std::istreambuf_iterator<char>(input),
+                                              std::istreambuf_iterator<char>()};
+        if (image.size() != mcs51emu::Cc2530F256::FlashSize)
+            throw std::invalid_argument("flash persist file " + persist_file_ + " holds " +
+                                        std::to_string(image.size()) +
+                                        " bytes, not the 262144 of a CC2530F256 flash");
+        device_.restore_flash(image);
+    }
     reset();
 }
 
 void Cc2530F256Mcu::reset() {
     device_.power_on_reset();
+    seen_power_cuts_ = device_.diagnostics().power_cuts;
     cycles_ = 0;
     state_ = McuState::Running;
     fault_.clear();
@@ -161,6 +236,10 @@ void Cc2530F256Mcu::debugger_arrive() {
         device_.set_breakpoint(std::nullopt); // nothing left to write: run free
 }
 
+std::uint64_t Cc2530F256Mcu::ns_to_cycles(std::uint64_t ns) const {
+    return ns_to_cycles_ceil(ns, clock_hz_);
+}
+
 std::uint64_t Cc2530F256Mcu::time_ns() const {
     return offset_ns_ + cycles_to_ns(cycles_, clock_hz_);
 }
@@ -187,6 +266,8 @@ McuState Cc2530F256Mcu::run_until(std::uint64_t target_ns) {
         const mcs51emu::Cc2530RunResult result =
             device_.run(std::numeric_limits<std::size_t>::max(), target_cycle);
         cycles_ = result.cycles;
+        ran_ = true;
+        after_run();
         if (result.break_hit)
             debugger_arrive();
         else if (result.instructions != 0)
@@ -211,6 +292,145 @@ McuState Cc2530F256Mcu::run_until(std::uint64_t target_ns) {
         }
     }
     return state_;
+}
+
+void Cc2530F256Mcu::set_flash(FlashSetup setup) {
+    std::unique_ptr<std::ofstream> log;
+    if (!setup.log.empty()) {
+        log = std::make_unique<std::ofstream>(setup.log, std::ios::out | std::ios::trunc);
+        if (!*log)
+            throw std::invalid_argument("flash: cannot create log file " + setup.log);
+        setup.fault.log = true;
+    }
+    device_.set_flash_fault_config(setup.fault);
+    for (const std::uint64_t cycle : setup.cut_cycles)
+        device_.schedule_power_cut(cycle);
+    for (const mcs51emu::Cc2530FlashTrigger &trigger : setup.triggers)
+        device_.add_flash_trigger(trigger);
+    persist_file_ = std::move(setup.persist);
+    flash_log_ = std::move(log);
+}
+
+void Cc2530F256Mcu::after_run() {
+    if (flash_log_) {
+        for (const mcs51emu::Cc2530FlashLogEntry &entry : device_.take_flash_log()) {
+            *flash_log_ << "time_ns=" << cycle_ns(entry.cycle) << " cycle=" << entry.cycle
+                        << " op=" << op_name(entry.op) << " page=" << entry.page
+                        << " address=" << hex(entry.address, 5)
+                        << " outcome=" << outcome_name(entry.outcome);
+            if (entry.cut == mcs51emu::Cc2530FlashCut::Reset)
+                *flash_log_ << " cut=reset cause=" << reset_cause_name(entry.reset_cause);
+            else if (entry.cut == mcs51emu::Cc2530FlashCut::PowerCut)
+                *flash_log_ << " cut=power-cut";
+            *flash_log_ << " elapsed=" << entry.elapsed_cycles
+                        << " changed_bits=" << entry.changed_bits
+                        << " violations=" << violation_names(entry.violations) << '\n';
+        }
+    }
+    const mcs51emu::Cc2530Diagnostics &diag = device_.diagnostics();
+    if (diag.power_cuts != seen_power_cuts_) {
+        seen_power_cuts_ = diag.power_cuts;
+        const std::uint64_t at = cycle_ns(diag.last_power_cut_cycle);
+        if (flash_log_)
+            *flash_log_ << "time_ns=" << at << " cycle=" << diag.last_power_cut_cycle
+                        << " event=power-cut count=" << diag.power_cuts << '\n';
+        if (power_listener_)
+            power_listener_(at, diag.power_cuts);
+    }
+    if (flash_log_) {
+        flash_log_->flush();
+        if (!*flash_log_)
+            throw std::runtime_error("flash: writing the log failed");
+    }
+}
+
+void Cc2530F256Mcu::write_flash_summary() {
+    const mcs51emu::Cc2530Diagnostics &diag = device_.diagnostics();
+    *flash_log_ << "summary power_cuts=" << diag.power_cuts
+                << " interrupted_erases=" << diag.flash_interrupted_erases
+                << " interrupted_writes=" << diag.flash_interrupted_writes
+                << " bit_limit_violations=" << diag.flash_bit_limit_violations
+                << " word_limit_violations=" << diag.flash_word_limit_violations
+                << " page_limit_violations=" << diag.flash_page_limit_violations << '\n';
+    for (unsigned page = 0; page < diag.flash_page_erases.size(); ++page)
+        if (diag.flash_page_erases[page] || diag.flash_page_writes[page])
+            *flash_log_ << "summary page=" << page << " erases=" << diag.flash_page_erases[page]
+                        << " writes=" << diag.flash_page_writes[page] << '\n';
+    flash_log_->flush();
+}
+
+void Cc2530F256Mcu::save_flash() const {
+    // Through a temporary file, so an interrupted save leaves the old image.
+    const std::string temporary = persist_file_ + ".tmp";
+    {
+        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+        const std::vector<std::uint8_t> &image = device_.flash_image();
+        output.write(reinterpret_cast<const char *>(image.data()),
+                     static_cast<std::streamsize>(image.size()));
+        if (!output)
+            throw std::runtime_error("cannot write the flash persist file " + temporary);
+    }
+    std::filesystem::rename(temporary, persist_file_);
+}
+
+void Cc2530F256Mcu::catch_up(std::uint64_t world_ns) {
+    // A stopped MCU stays behind the world clock; the cut belongs at the
+    // world time of the request.
+    if ((state_ == McuState::Sleeping || state_ == McuState::Halted) && world_ns > time_ns()) {
+        state_ = McuState::Running;
+        fault_.clear();
+        run_until(world_ns);
+    }
+}
+
+void Cc2530F256Mcu::revive() {
+    if (state_ == McuState::Sleeping || state_ == McuState::Halted) {
+        state_ = McuState::Running;
+        fault_.clear();
+    }
+}
+
+void Cc2530F256Mcu::host_power_cut(std::uint64_t world_ns) {
+    catch_up(world_ns);
+    device_.power_cut();
+    revive();
+    after_run();
+}
+
+void Cc2530F256Mcu::host_reset(std::uint64_t world_ns) {
+    catch_up(world_ns);
+    device_.reset();
+    revive();
+    after_run();
+}
+
+Cc2530PowerEndpoint::Cc2530PowerEndpoint(std::string name, Cc2530F256Mcu &mcu,
+                                         std::function<std::uint64_t()> world_now)
+    : name_(std::move(name)), mcu_(mcu), world_now_(std::move(world_now)) {
+    mcu_.set_power_listener([this](std::uint64_t time_ns, std::uint64_t count) {
+        for (const auto &[id, sink] : sinks_)
+            sink(EndpointEvent{time_ns, name_, Value{static_cast<std::int64_t>(count)}});
+    });
+}
+
+Value Cc2530PowerEndpoint::get() const {
+    return Value{static_cast<std::int64_t>(mcu_.power_cuts())};
+}
+
+void Cc2530PowerEndpoint::set(const Value &value) {
+    const auto *text = std::get_if<std::string>(&value);
+    if (text && *text == "cut")
+        mcu_.host_power_cut(world_now_());
+    else if (text && *text == "reset")
+        mcu_.host_reset(world_now_());
+    else
+        throw std::invalid_argument("power takes \"cut\" or \"reset\"");
+}
+
+std::size_t Cc2530PowerEndpoint::subscribe(EndpointSink sink) {
+    const std::size_t id = next_id_++;
+    sinks_.emplace(id, std::move(sink));
+    return id;
 }
 
 std::vector<std::string> Cc2530F256Mcu::pin_names() const {

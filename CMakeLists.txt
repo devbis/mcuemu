@@ -341,6 +341,7 @@ if(MCUEMU_BUILD_TESTS)
         tests/sim/test_control.cpp
         tests/sim/test_cc2530.cpp
         tests/sim/test_cc2530_uart_frames.cpp
+        tests/sim/test_cc2530_flash.cpp
     )
     target_link_libraries(simcore-tests PRIVATE simcore)
     target_compile_definitions(simcore-tests PRIVATE

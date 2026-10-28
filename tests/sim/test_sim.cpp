@@ -391,6 +391,10 @@ void test_cc2530_uart_frame_tokens();
 void test_cc2530_uart_frames_system();
 void test_cc2530_uart_frames_link();
 void test_cc2530_uart_frames_rpc();
+void test_cc2530_flash_config();
+void test_cc2530_flash_power_cut_log();
+void test_cc2530_flash_power_endpoint();
+void test_cc2530_flash_persist();
 void test_config_parsing();
 void test_config_errors();
 void test_system_build_and_run();
@@ -529,6 +533,10 @@ int main() {
     RUN(test_cc2530_uart_frames_system);
     RUN(test_cc2530_uart_frames_link);
     RUN(test_cc2530_uart_frames_rpc);
+    RUN(test_cc2530_flash_config);
+    RUN(test_cc2530_flash_power_cut_log);
+    RUN(test_cc2530_flash_power_endpoint);
+    RUN(test_cc2530_flash_persist);
     if (mcuemu_tests::failures) {
         std::cerr << mcuemu_tests::failures << " sim check(s) failed\n";
         return 1;

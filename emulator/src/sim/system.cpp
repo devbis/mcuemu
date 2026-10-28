@@ -109,6 +109,44 @@ const McuRegistry &McuRegistry::builtin() {
                     report = Cc2530F256Mcu::DebuggerReport{r->file, r->hits, {r->state, r->xdata}};
                 mcu->set_debugger(config.debugger->pc, std::move(writes), std::move(report));
             }
+            if (config.flash) {
+                const FlashConfig &flash = *config.flash;
+                Cc2530F256Mcu::FlashSetup setup;
+                setup.fault.limit_policy = flash.limits == "nondeterministic"
+                                               ? mcs51emu::Cc2530FlashLimitPolicy::Nondeterministic
+                                               : mcs51emu::Cc2530FlashLimitPolicy::Report;
+                setup.fault.interrupted =
+                    flash.interrupted == "partial"    ? mcs51emu::Cc2530FlashInterrupted::Partial
+                    : flash.interrupted == "complete" ? mcs51emu::Cc2530FlashInterrupted::Complete
+                                                      : mcs51emu::Cc2530FlashInterrupted::Abandon;
+                setup.fault.seed = flash.seed;
+                setup.fault.sram_fill = flash.sram_fill;
+                for (const PowerCutConfig &cut : flash.power_cuts) {
+                    if (cut.at_ns) {
+                        // World time; the chip counts cycles from its power-on.
+                        if (*cut.at_ns < config.start_at_ns)
+                            throw std::invalid_argument(
+                                "a power cut at " + std::to_string(*cut.at_ns) +
+                                " ns comes before the MCU starts (start_at)");
+                        setup.cut_cycles.push_back(
+                            mcu->ns_to_cycles(*cut.at_ns - config.start_at_ns));
+                        continue;
+                    }
+                    mcs51emu::Cc2530FlashTrigger trigger;
+                    trigger.op = cut.op == "erase"   ? mcs51emu::Cc2530FlashOpFilter::Erase
+                                 : cut.op == "write" ? mcs51emu::Cc2530FlashOpFilter::Write
+                                                     : mcs51emu::Cc2530FlashOpFilter::Any;
+                    trigger.nth = cut.nth;
+                    trigger.page = cut.page;
+                    trigger.delay_cycles = mcu->ns_to_cycles(cut.after_ns);
+                    trigger.action = cut.reset ? mcs51emu::Cc2530FaultAction::Reset
+                                               : mcs51emu::Cc2530FaultAction::PowerCut;
+                    setup.triggers.push_back(trigger);
+                }
+                setup.persist = flash.persist;
+                setup.log = flash.log;
+                mcu->set_flash(std::move(setup));
+            }
             return mcu;
         });
         r.add("nrf52840", [](const McuConfig &config, const std::string &name) {
@@ -440,6 +478,9 @@ std::unique_ptr<System> build_system(const SystemConfig &config,
             if (mcu_config.debugger && mcu_config.model != "cc2530f256")
                 fail_at(mcu_config.debugger->line,
                         "mcu '" + name + "': 'debugger' is only supported for cc2530f256");
+            if (mcu_config.flash && mcu_config.model != "cc2530f256")
+                fail_at(mcu_config.flash->line,
+                        "mcu '" + name + "': 'flash' is only supported for cc2530f256");
             std::unique_ptr<Mcu> mcu;
             try {
                 mcu = (*factory)(mcu_config, name);
@@ -468,6 +509,15 @@ std::unique_ptr<System> build_system(const SystemConfig &config,
                 }
             }
             Mcu &added = world.add_mcu(std::move(mcu), mcu_config.start_at_ns);
+            if (mcu_config.flash) {
+                // Only with `flash:`, so other systems keep their endpoint set.
+                World *owner = &world;
+                world.endpoints().add(
+                    name + ".power",
+                    std::make_unique<Cc2530PowerEndpoint>(
+                        name + ".power", static_cast<Cc2530F256Mcu &>(added),
+                        [owner] { return owner->now(); }));
+            }
             try {
                 for (unsigned i = 0; i < added.uart_count(); ++i) {
                     const std::string uart_name = name + ".uart" + std::to_string(i);

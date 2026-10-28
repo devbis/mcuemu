@@ -14,7 +14,8 @@ simulation advances in short bursts between I/O.
 ## Safety model
 
 - **Files are confined to `--root`** (required): firmware, Lua scripts and
-  output files named in a loaded description or in `attach`. Relative paths
+  output files named in a loaded description (including the cc2530f256
+  `flash:` `persist` and `log` files) or in `attach`. Relative paths
   resolve inside the root; `..`, absolute paths and symlinks that leave it are
   refused. `load` also takes `base_dir` (relative to the root) for resolving the
   YAML's relative paths.
@@ -61,6 +62,12 @@ example `"0x41 0x42:perr 0x43:fe break"` (see
 | `mem.read` | `mcu`, `address`, `length` | `{hex}` |
 | `mem.write` | `mcu`, `address`, `hex` | `true` |
 | `shutdown` | | `true`, then the server closes the connection |
+
+For a cc2530f256 with `flash:`, `set` on `<mcu>.power` with `"cut"` or
+`"reset"` cuts the power or resets the chip, at `at` if given (see
+[system-config.md](system-config.md#flash-faults-power-cuts-and-persistence-cc2530f256)).
+After a run, `unload` saves a `persist` flash image; call it before `load`
+when the next system must start from that image.
 
 Errors use the JSON-RPC codes (-32700 parse, -32600 invalid request, -32601
 unknown method, -32602 invalid params) plus -32000 (the YAML is invalid) and

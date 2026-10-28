@@ -39,6 +39,9 @@ devices:
         debugger:          # cc2530f256 only: halt at a PC and write XDATA, see below
           pc: 0x016a
           writes: [{ hit: 1, xdata: 0x0400, hex: "4ab54eb1a95601fe" }]
+        flash:             # cc2530f256 only: flash faults, power cuts, persistence, see below
+          interrupted: partial
+          power_cuts: [{ op: erase, page: 6, after: 10ms }]
         radio:             # optional: attach to a medium
           air: air0
           position: [0, 0, 1.5]    # meters
@@ -168,6 +171,89 @@ irq-levels=`, the dump rows, `end-hit: N`), taken before that arrival's
 is truncated when the system is built; a power-on reset restarts the arrival
 count and appends. With a `report`, `writes` may be omitted.
 
+## Flash faults, power cuts and persistence (cc2530f256)
+
+`flash:` configures the CC2530 flash fault model (rules and formulas in
+[cc2530.md](cc2530.md#flash-fault-injection)). All keys are optional and
+`flash: {}` only adds the power endpoint; without `flash:` nothing changes.
+Other models reject the key.
+
+```yaml
+flash:
+  limits: report            # SWRU191F 6.2.2 violations: report (default) | nondeterministic
+  interrupted: abandon      # erase/write cut by a reset or power cut: abandon (default) | partial | complete
+  seed: 1                   # seeds every pseudo-random outcome (default 0)
+  sram_fill: 0              # SRAM after a power-on reset: a byte (default 0) | random
+  persist: state/flash.bin  # load at start if present, save at the end
+  log: flash.log            # flash operation log
+  power_cuts:
+    - { at: 25ms }                                  # at a world time
+    - { op: erase, page: 6, nth: 2, after: 10ms }   # 10 ms into the 2nd erase of page 6
+    - { op: write, after: 10us, action: reset }     # an external reset instead
+```
+
+`limits: nondeterministic` and `interrupted: partial|complete` are
+model-defined fault injection, not hardware-accurate results.
+
+A power cut drops and restores the supply at once: an erase or word write in
+flight gets the `interrupted` outcome, SRAM takes `sram_fill` (`random`:
+seeded bytes), and the chip restarts from a power-on reset
+(`SLEEPSTA.RST = 00`); flash and the timeline continue. `action: reset` is
+an external reset (`RST = 01`, SRAM kept).
+
+- `at` is a world time like `start_at` and must not be earlier. It becomes
+  the first chip cycle at or after `at - start_at` at `clock_hz`; the cut
+  happens at the first instruction boundary from there (exactly that cycle
+  while the CPU is stalled by a flash operation, also in a power mode). `at`
+  takes no other key.
+- Otherwise `op` (`erase`, `write` or `any`) is required. The trigger fires
+  `after` (default 0) after the start of the `nth` (default 1) page erase or
+  word write that matches `op` and `page` (0-127, default any), counted from
+  the system build; erases and writes of locked pages do not count. An
+  `after` at or past the operation time (20 ms erase, 20 us word write)
+  lets the operation complete first. Each entry fires once.
+
+`log` (resolved against the YAML file's directory, truncated at build) gets
+one line per flash operation, written at the end of each run slice, then a
+summary when the system is destroyed:
+
+```
+time_ns=10000000 cycle=320000 op=erase page=6 address=0x03000 outcome=partial cut=power-cut elapsed=319980 changed_bits=8260 violations=none
+time_ns=10000000 cycle=320000 event=power-cut count=1
+summary power_cuts=1 interrupted_erases=1 interrupted_writes=0 bit_limit_violations=0 word_limit_violations=0 page_limit_violations=0
+```
+
+`time_ns` is world time and `cycle` counts from the MCU's power-on.
+`op` is `erase`, `write` or `chip-erase`; `outcome` is `completed`,
+`aborted` (PAGELOCK), `abandoned`, `partial` or `forced` (`complete`); a cut
+operation adds `cut=reset cause=power-on|external|watchdog|clock-loss` or
+`cut=power-cut`. `elapsed` is the operation time in 32 MHz cycles,
+`changed_bits` the flash bits it changed and `violations` the 6.2.2 limits it
+broke (`bit`, `word`, `page`, comma-separated, or `none`). The summary then
+has a `summary page=P erases=E writes=W` line for every page with erases
+(applied in full) or word writes.
+
+`persist` (resolved against the YAML file's directory) keeps the whole
+256 KiB flash across separate runs, for journal and NV recovery tests. If the
+file exists when the system is built, it replaces the flash after the
+firmware is loaded; it holds the code too, so delete it after changing the
+firmware. A file of another size is a configuration error. The flash is
+saved when the system is destroyed after it ran (the end of `mcuemu sim`, or
+a control-API `unload`/`load`), through `FILE.tmp` and a rename; a build that
+never ran, a crash or a kill saves nothing. Within one run flash always
+survives resets and power cuts. The control API's `load` builds the new
+system before the old one goes away, so `unload` first when the new system
+must start from the saved image.
+
+`device.mcu.power` (kind `power`, only with `flash:`) is the host's power
+switch: `get` returns the number of power cuts so far, subscribers get that
+count at each cut (from YAML, a trigger or `set`), and `set` takes `cut` (a
+power cut) or `reset` (an external reset). The action happens at the MCU's
+current instruction boundary: for a `scenario` event or a control-API `set`
+with `at`, the first boundary at or after that time; a halted or sleeping
+MCU is first brought up to the current time. Example:
+`scenario: { events: [{ at: 40ms, endpoint: d.m.power, set: cut }] }`.
+
 ## Inserting devices from files
 
 A `devices` entry may be an insertion instead of an inline device:
@@ -272,6 +358,7 @@ use `stdout`, `text` or `hex`.
 | `device.net`, world nets | `net` | level changes (true = high) | - |
 | `device.part.param` | `param` | the new value after a change | a new value |
 | radio medium `air0` | `radio` | one text summary per frame | - |
+| `device.mcu.power` (cc2530f256 with `flash:`) | `power` | the power-cut count at each cut | `cut` or `reset` |
 
 | sink | for | does |
 |---|---|---|

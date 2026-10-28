@@ -2,11 +2,14 @@
 
 #include "mcs51emu/cc2530_hit_report.hpp"
 #include "mcs51emu/cc2530f256.hpp"
+#include "sim/endpoint.hpp"
 #include "sim/mcu.hpp"
 
 #include <array>
 #include <cstdint>
 #include <fstream>
+#include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -128,6 +131,39 @@ public:
     // Arrivals counted at the debugger breakpoint so far.
     unsigned debugger_arrivals() const noexcept { return debugger_arrivals_; }
 
+    // Flash fault model, power cuts and persistence (`flash:` in the YAML;
+    // docs/system-config.md). Must be called before the firmware is loaded.
+    // `cut_cycles` are chip cycles since the MCU's power-on. `persist`: when
+    // the file exists, load_firmware() replaces the whole flash with it
+    // (exactly 256 KiB); the flash is saved there when the adapter is
+    // destroyed after it ran. `log`: truncated here; every flash operation
+    // and power cut is appended as a text line, the per-page counters when
+    // the adapter is destroyed. Throws when the log cannot be created.
+    struct FlashSetup {
+        mcs51emu::Cc2530FlashFaultConfig fault;
+        std::vector<std::uint64_t> cut_cycles;
+        std::vector<mcs51emu::Cc2530FlashTrigger> triggers;
+        std::string persist;
+        std::string log;
+    };
+    void set_flash(FlashSetup setup);
+    ~Cc2530F256Mcu() override;
+    // Chip cycles covering `ns` (rounded up) at this MCU's clock.
+    std::uint64_t ns_to_cycles(std::uint64_t ns) const;
+
+    // Host power control (the `<mcu>.power` endpoint). The MCU first catches
+    // up with `world_ns` when it stopped (Sleeping or Halted), then the
+    // chip takes a power cut (SRAM lost, power-on reset) or an external
+    // RESET_N reset; either revives a Sleeping or Halted MCU (not a Fault).
+    void host_power_cut(std::uint64_t world_ns);
+    void host_reset(std::uint64_t world_ns);
+    std::uint64_t power_cuts() const noexcept { return device_.diagnostics().power_cuts; }
+    // Called with (time_ns, total power cuts) after every power cut, also
+    // the injected ones, in run order.
+    void set_power_listener(std::function<void(std::uint64_t, std::uint64_t)> listener) {
+        power_listener_ = std::move(listener);
+    }
+
 private:
     static constexpr unsigned PadCount = 24; // index = port * 8 + pin
     std::uint8_t read_byte(std::uint32_t address) const;
@@ -157,6 +193,40 @@ private:
     // The CPU stands at the breakpoint and this arrival is already counted.
     bool debugger_at_break_{false};
     void debugger_arrive();
+
+    std::string persist_file_;
+    std::unique_ptr<std::ofstream> flash_log_;
+    bool ran_{false};
+    std::uint64_t seen_power_cuts_{0};
+    std::function<void(std::uint64_t, std::uint64_t)> power_listener_;
+    // Runs a stopped MCU on to world time `world_ns` (no-op when running).
+    void catch_up(std::uint64_t world_ns);
+    // Writes the flash log and reports new power cuts after a chip run.
+    void after_run();
+    void revive();
+    void save_flash() const;
+    void write_flash_summary();
+};
+
+// `<mcu>.power` (kind "power"): set("cut") power-cuts the MCU, set("reset")
+// pulses RESET_N; get() is the number of power cuts so far; subscribers get
+// the running count at the time of every power cut (also injected ones).
+class Cc2530PowerEndpoint final : public Endpoint {
+public:
+    Cc2530PowerEndpoint(std::string name, Cc2530F256Mcu &mcu,
+                        std::function<std::uint64_t()> world_now);
+    std::string kind() const override { return "power"; }
+    Value get() const override;
+    void set(const Value &value) override;
+    std::size_t subscribe(EndpointSink sink) override;
+    void unsubscribe(std::size_t id) override { sinks_.erase(id); }
+
+private:
+    std::string name_;
+    Cc2530F256Mcu &mcu_;
+    std::function<std::uint64_t()> world_now_;
+    std::map<std::size_t, EndpointSink> sinks_;
+    std::size_t next_id_{1};
 };
 
 } // namespace sim
