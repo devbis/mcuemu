@@ -267,6 +267,7 @@ use `stdout`, `text` or `hex`.
 | endpoint | kind | events | `set` |
 |---|---|---|---|
 | `device.mcu.uartN` | `uart` | bytes the UART transmitted | bytes/string to receive (queued until the FIFO has room) |
+| `device.mcu.uartN.frames` (`cc2530f256` only) | `uart-frames` | the frames the UART transmitted, as frame tokens (a string); only while subscribed | frame tokens (a string), a byte 0..255 or bytes (plain frames); same queue as `uartN` |
 | `device.mcu.rtt`, `rttN` | `rtt` | bytes the firmware wrote to up buffer N | bytes/string for down buffer N |
 | `device.net`, world nets | `net` | level changes (true = high) | - |
 | `device.part.param` | `param` | the new value after a change | a new value |
@@ -281,6 +282,31 @@ use `stdout`, `text` or `hex`.
 | `tcp:PORT` or `tcp:HOST:PORT` | any; useful for uart/rtt | listens (default `127.0.0.1`; `tcp:0` picks a port); one client gets the events and what it sends is fed into the endpoint; a new connection replaces the old one; a client that does not read loses data |
 | `vcd:PATH` | `net` and numeric `param` | a waveform, written when the run ends; several endpoints can share one file |
 | `pcap:PATH[,ble]` | `radio` | a capture of Zigbee frames (IEEE 802.15.4 without FCS, link type 230) or BLE (link type 251, with the advertising access address in front of the payload); timestamps are virtual time |
+
+UART frames (`cc2530f256`). `uartN.frames` is a frame view of the same UART
+for the 9th bit and line errors (see [cc2530.md](cc2530.md#usart-uart-errors)).
+Frame tokens are separated by spaces or commas. A token is `break`, or a byte
+(`65`, `0x41`, `0101`) followed by optional flags, each `:flag`:
+
+| flag | frame |
+|---|---|
+| (none) | well formed in the receiver's format, exactly like a byte on `uartN` |
+| `9=0`, `9=1` | an explicit 9th bit; a receiver with UxUCR.BIT9 = 0 samples it as its first stop bit |
+| `perr` | the inverse of the 9th bit the receiver expects: a parity error with UxUCR.PARITY = 1, no effect with BIT9 = 0 |
+| `fe` | the first stop bit at the wrong level |
+| `fe2` | the second stop bit at the wrong level (seen with UxUCR.SPB = 1) |
+
+`break` holds the line at the start-bit level for one frame. A token takes at
+most one of `9=0`, `9=1` and `perr`. `data` is the byte as an LSB-first
+receiver sees it on the wire. Example:
+`- { at: 2ms, endpoint: node.zb.uart0.frames, set: "0x41 0x42:perr 0x43:9=1:fe break" }`.
+A bad token in a scenario event is a configuration error that names its line.
+Over JSON-RPC it is error `-32001`. Events are produced only while something
+subscribes to the endpoint. They use the same tokens: `0x41` for a frame
+without a 9th bit, and `0x41:9=0` or `0x41:9=1` when UxUCR.BIT9 = 1. The
+transmitter always sends good stop bits. The byte endpoint `uartN` and its
+sinks (`--trace-uart` matches only `uart` endpoints) are unchanged. A `tcp`
+client's bytes on `uartN.frames` are plain frames.
 
 `rtt:` (on an `mcu`) reads the control block at `address` straight from target
 memory; nothing happens until the firmware has initialized it. It uses the
@@ -356,7 +382,7 @@ behavior is inferred from the Zephyr driver and is not hardware-verified.
 - UART: `uartN`. `tlsr8258` has `uart0`; `nrf52840` has `uart0`/`uart1` (UARTE0
   and UARTE1); `efr32mg21` has none yet; `phy6252` has polling `uart0` without interrupts; `esp32c6`/`esp32h2` have `uart0` (the console, with a receive FIFO and interrupts); `ca51f253l3` has `uart0`/`uart1` (transmit only), so a link to
   it is one-way and reports a warning. `cc2530f256` has `uart0`/`uart1` (USART0
-  and USART1 in UART mode).
+  and USART1 in UART mode), each with a frame endpoint `uartN.frames`.
 - Memory windows for `mem.read`/`mem.write`: `cc2530f256` maps its 8051
   spaces (CODE, XDATA, IDATA, SFR, a CPU snapshot, physical flash) to separate
   32-bit windows; see [cc2530.md](cc2530.md).
@@ -373,3 +399,9 @@ behavior is inferred from the Zephyr driver and is not hardware-verified.
 - A UART link moves bytes the transmitting UART has finished sending to the
   other side's RX FIFO after `latency`; bytes wait while the FIFO is full.
   `baud` is accepted but the wire timing comes from each chip model.
+  When both ends have a frame endpoint (two `cc2530f256` UARTs), the link
+  carries frames instead: each receiver checks the sender's 9th bit against
+  its own UxUCR (parity error, or framing error when it lands in an 8-bit
+  receiver's stop bit). A frame without a 9th bit is plain and arrives well
+  formed. START, STOP and SPB are not compared between the ends. Any other
+  pair of UARTs carries bytes as before.

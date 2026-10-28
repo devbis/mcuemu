@@ -66,6 +66,7 @@ private:
     std::vector<std::string> warnings_;
     // Owned by the endpoint registry; polled after every slice.
     std::vector<UartEndpoint *> uarts_;
+    std::vector<UartFramesEndpoint *> uart_frames_;
     std::vector<RttEndpoint *> rtts_;
     unsigned session_ticks_{0};
     std::vector<std::unique_ptr<Part>> parts_;

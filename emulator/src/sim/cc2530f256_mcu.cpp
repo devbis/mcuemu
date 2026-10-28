@@ -275,6 +275,57 @@ std::vector<std::uint8_t> Cc2530F256Mcu::uart_take_tx(unsigned index) {
     return device_.uart_take_transmitted(index);
 }
 
+namespace {
+
+// The two frame structs mirror each other field for field.
+mcs51emu::Cc2530UartFrame to_chip(const UartFrame &frame) {
+    return {.data = frame.data,
+            .ninth = static_cast<mcs51emu::Cc2530UartFrame::Ninth>(frame.ninth),
+            .stop1_error = frame.stop1_error,
+            .stop2_error = frame.stop2_error,
+            .line_break = frame.line_break};
+}
+
+UartFrame from_chip(const mcs51emu::Cc2530UartFrame &frame) {
+    return {.data = frame.data,
+            .ninth = static_cast<UartFrame::Ninth>(frame.ninth),
+            .stop1_error = frame.stop1_error,
+            .stop2_error = frame.stop2_error,
+            .line_break = frame.line_break};
+}
+
+constexpr bool same_ninth(UartFrame::Ninth a, mcs51emu::Cc2530UartFrame::Ninth b) {
+    return static_cast<int>(a) == static_cast<int>(b);
+}
+static_assert(same_ninth(UartFrame::Ninth::Expected, mcs51emu::Cc2530UartFrame::Ninth::Expected) &&
+              same_ninth(UartFrame::Ninth::Zero, mcs51emu::Cc2530UartFrame::Ninth::Zero) &&
+              same_ninth(UartFrame::Ninth::One, mcs51emu::Cc2530UartFrame::Ninth::One) &&
+              same_ninth(UartFrame::Ninth::BadParity, mcs51emu::Cc2530UartFrame::Ninth::BadParity));
+
+} // namespace
+
+bool Cc2530F256Mcu::uart_rx_frame(unsigned index, const UartFrame &frame) {
+    uart_used_ = true;
+    if (index >= 2 || !device_.uart_can_receive(index))
+        return false;
+    device_.uart_receive_frame(index, to_chip(frame));
+    return true;
+}
+
+void Cc2530F256Mcu::uart_capture_tx_frames(unsigned index, bool on) {
+    if (index < 2)
+        device_.uart_capture_frames(index, on);
+}
+
+std::vector<UartFrame> Cc2530F256Mcu::uart_take_tx_frames(unsigned index) {
+    std::vector<UartFrame> frames;
+    if (index >= 2)
+        return frames;
+    for (const mcs51emu::Cc2530UartFrame &frame : device_.uart_take_transmitted_frames(index))
+        frames.push_back(from_chip(frame));
+    return frames;
+}
+
 std::uint8_t Cc2530F256Mcu::read_byte(std::uint32_t address) const {
     if (address < XdataWindow)
         return device_.read_code(static_cast<std::uint16_t>(address));

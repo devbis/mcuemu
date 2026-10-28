@@ -470,11 +470,17 @@ std::unique_ptr<System> build_system(const SystemConfig &config,
             Mcu &added = world.add_mcu(std::move(mcu), mcu_config.start_at_ns);
             try {
                 for (unsigned i = 0; i < added.uart_count(); ++i) {
-                    auto uart = std::make_unique<UartEndpoint>(
-                        name + ".uart" + std::to_string(i), added, i);
+                    const std::string uart_name = name + ".uart" + std::to_string(i);
+                    auto uart = std::make_unique<UartEndpoint>(uart_name, added, i);
+                    UartEndpoint &bytes = *uart;
                     system->uarts_.push_back(uart.get());
-                    world.endpoints().add(name + ".uart" + std::to_string(i),
-                                          std::move(uart));
+                    world.endpoints().add(uart_name, std::move(uart));
+                    if (added.uart_frames(i)) {
+                        auto frames = std::make_unique<UartFramesEndpoint>(
+                            uart_name + ".frames", added, i, bytes);
+                        system->uart_frames_.push_back(frames.get());
+                        world.endpoints().add(uart_name + ".frames", std::move(frames));
+                    }
                 }
                 if (mcu_config.rtt) {
                     std::uint8_t probe = 0;
@@ -524,10 +530,13 @@ std::unique_ptr<System> build_system(const SystemConfig &config,
                                    " UART(s)");
         if (mcu_a == mcu_b && index_a == index_b)
             fail_at(link.line, "link connects " + link.a + " to itself");
-        auto *end_a = dynamic_cast<UartEndpoint *>(world.endpoints().find(
-            mcu_a->name() + ".uart" + std::to_string(index_a)));
-        auto *end_b = dynamic_cast<UartEndpoint *>(world.endpoints().find(
-            mcu_b->name() + ".uart" + std::to_string(index_b)));
+        auto uart_name = [](const Mcu *mcu, unsigned index) {
+            return mcu->name() + ".uart" + std::to_string(index);
+        };
+        auto *end_a = dynamic_cast<UartEndpoint *>(
+            world.endpoints().find(uart_name(mcu_a, index_a)));
+        auto *end_b = dynamic_cast<UartEndpoint *>(
+            world.endpoints().find(uart_name(mcu_b, index_b)));
         if (!end_a->can_receive() && !end_b->can_receive())
             fail_at(link.line, "neither " + link.a + " nor " + link.b +
                                    " can receive UART data");
@@ -539,16 +548,27 @@ std::unique_ptr<System> build_system(const SystemConfig &config,
         // destination queues them until its FIFO has room.
         Scheduler *scheduler = &world.scheduler();
         const std::uint64_t latency = link.latency_ns;
-        auto forward = [scheduler, latency](UartEndpoint *from, UartEndpoint *to) {
-            if (!to->can_receive())
+        auto forward = [scheduler, latency](Endpoint *from, Endpoint *to, bool receives) {
+            if (!receives)
                 return;
             from->subscribe([scheduler, latency, to](const EndpointEvent &event) {
-                const Value bytes = event.value;
-                scheduler->at(event.time_ns + latency, [to, bytes] { to->set(bytes); });
+                const Value data = event.value;
+                scheduler->at(event.time_ns + latency, [to, data] { to->set(data); });
             });
         };
-        forward(end_a, end_b);
-        forward(end_b, end_a);
+        // When both ends model frames, the frames (9th bit) travel instead
+        // of the bytes; plain frames are received exactly like bytes.
+        auto *frames_a = dynamic_cast<UartFramesEndpoint *>(
+            world.endpoints().find(uart_name(mcu_a, index_a) + ".frames"));
+        auto *frames_b = dynamic_cast<UartFramesEndpoint *>(
+            world.endpoints().find(uart_name(mcu_b, index_b) + ".frames"));
+        if (frames_a && frames_b) {
+            forward(frames_a, frames_b, end_b->can_receive());
+            forward(frames_b, frames_a, end_a->can_receive());
+        } else {
+            forward(end_a, end_b, end_b->can_receive());
+            forward(end_b, end_a, end_a->can_receive());
+        }
     };
     for (const DeviceConfig &device : config.devices)
         for (const LinkConfig &link : device.links)
@@ -564,6 +584,15 @@ std::unique_ptr<System> build_system(const SystemConfig &config,
                 fail_at(event.line, "unknown endpoint '" + event.endpoint +
                                         "' in event");
             const Value value = parse_scalar_value(event.value);
+            // Frame tokens are checked now so a typo names its line.
+            if (const auto *text = std::get_if<std::string>(&value);
+                text && dynamic_cast<UartFramesEndpoint *>(endpoint)) {
+                try {
+                    parse_uart_frames(*text);
+                } catch (const std::invalid_argument &error) {
+                    fail_at(event.line, error.what());
+                }
+            }
             const int line = event.line;
             const std::string name = event.endpoint;
             world.scheduler().at(event.at_ns, [endpoint, value, line, name] {
@@ -598,6 +627,8 @@ std::unique_ptr<System> build_system(const SystemConfig &config,
     world.add_poller([self](std::uint64_t now) {
         for (UartEndpoint *uart : self->uarts_)
             uart->poll(now);
+        for (UartFramesEndpoint *frames : self->uart_frames_)
+            frames->poll(now);
         for (RttEndpoint *rtt : self->rtts_)
             rtt->poll(now);
         if (++self->session_ticks_ % 16 == 0)

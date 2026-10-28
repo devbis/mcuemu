@@ -12,6 +12,28 @@
 
 namespace sim {
 
+// One UART frame with line detail beyond the byte, for MCUs that model it
+// (Mcu::uart_frames): an explicit 9th bit, stop bits at the wrong level or a
+// break (the line held at the start-bit level for one frame). `data` is the
+// byte as an LSB-first receiver sees it on the wire. A default frame (only
+// `data` set) is a plain byte, well formed in the receiver's format.
+struct UartFrame {
+    enum class Ninth : std::uint8_t {
+        Expected,  // the 9th bit the receiver expects (parity or fixed level),
+                   // if it uses one; on transmit: the frame has no 9th bit
+        Zero,      // a 9th bit of 0
+        One,       // a 9th bit of 1
+        BadParity, // the inverse of the 9th bit the receiver expects
+    };
+    std::uint8_t data{};
+    Ninth ninth{Ninth::Expected};
+    bool stop1_error{}; // first stop bit at the wrong level
+    bool stop2_error{}; // second stop bit at the wrong level
+    bool line_break{};  // break: the other fields are ignored
+    bool plain() const { return *this == UartFrame{.data = data}; }
+    bool operator==(const UartFrame &) const = default;
+};
+
 enum class McuState {
     Running,
     Sleeping, // asleep with no wake event; will not run again by itself
@@ -113,6 +135,28 @@ public:
         return false;
     }
     virtual std::vector<std::uint8_t> uart_take_tx(unsigned index) {
+        (void)index;
+        return {};
+    }
+    // Frame access (9th bit, line errors) to UART `index`, for MCUs that
+    // model it (uart_frames() true); the defaults support none. A plain
+    // frame always goes through uart_rx. While capture is on, transmitted
+    // frames are also kept for uart_take_tx_frames; uart_take_tx still
+    // returns every byte.
+    virtual bool uart_frames(unsigned index) const {
+        (void)index;
+        return false;
+    }
+    virtual bool uart_rx_frame(unsigned index, const UartFrame &frame) {
+        (void)index;
+        (void)frame;
+        return false;
+    }
+    virtual void uart_capture_tx_frames(unsigned index, bool on) {
+        (void)index;
+        (void)on;
+    }
+    virtual std::vector<UartFrame> uart_take_tx_frames(unsigned index) {
         (void)index;
         return {};
     }
