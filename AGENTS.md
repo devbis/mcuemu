@@ -12,6 +12,8 @@ chips and a declarative system layer on top:
 - **TLSR8258** (Telink, TC32 core, 2.4 GHz radio: Zigbee/BLE-style frames): board
   model in `emulator/src/` (`cpu.cpp`, `tlsr8258*.cpp`, `radio.cpp`).
 - **CA51F253L3** (Cmsemicron, MCS-51 core): `emulator/src/mcs51/`.
+- **CC2530F256** (TI, MCS-51 core, banked 256 KiB flash): `emulator/src/mcs51/cc2530f256.cpp`,
+  sim adapter `emulator/src/sim/cc2530f256_mcu.cpp`. See `docs/cc2530.md`.
 - **nRF52840** (Nordic, Cortex-M4F): generic core glue in `emulator/src/cortexm/`
   (`cortexm::Core`), the chip in `emulator/src/nrf52/` (`nrf52emu::Nrf52840`).
   See `docs/nrf52840.md`.
@@ -44,7 +46,7 @@ folder may still be called `tc32-emu`; never hard-code absolute paths.
 ```
 emulator/include/{mcuemu,mcs51emu,sim}/   public and internal headers
 emulator/src/                              TLSR8258 + CPU wrapper, CLI main, C API
-emulator/src/mcs51/                        CA51F253L3 model and its `mcuemu run` runner
+emulator/src/mcs51/                        CA51F253L3 and CC2530F256 models and their `mcuemu run` runner
 emulator/src/cortexm/                      generic Cortex-M core (NVIC glue, SysTick, WFI/WFE, cycle clock)
 emulator/src/riscv/                        generic RV32 hart (traps, host interrupt line, WFI, cycle clock)
 emulator/src/esp32/                        ESP32-C6: chip, ROM stand-ins, flash controller/MMU, timers, `mcuemu run`
@@ -77,11 +79,12 @@ ctest --test-dir build --output-on-failure
 - The build type defaults to `Release`; an unoptimised build is about 5x
   slower (the firmware tests take minutes). Pass `-DCMAKE_BUILD_TYPE=Debug` to debug.
 - Test binaries: `mcuemu-tests` (TC32 core, machine, radio), `mcs51emu-tests`,
-  `nrf52emu-tests` (Cortex-M core and the nRF52840 peripherals), `riscvemu-tests`
+  `cc2530emu-tests` (the CC2530F256 model), `nrf52emu-tests` (Cortex-M core and
+  the nRF52840 peripherals), `riscvemu-tests`
   (the fork's RISC-V traps and interrupts), `esp32emu-tests` (the ESP32 models and the MAC/AES blocks),
   `efr32emu-tests`
   (the EFR32MG21), `bl702emu-tests` (the BL702 model), `simcore-tests` (the whole system layer, about 9 s).
-  `ctest -E firmware` runs just those eight.
+  `ctest -E firmware` runs just those nine.
   The nrf52 test programs are assembly in `tests/nrf52/programs/*.s`; after
   editing one, run `tests/nrf52/programs/build.py` (needs `arm-none-eabi-as`) and
   commit the regenerated `tests/nrf52/programs.hpp`.
@@ -222,6 +225,14 @@ up at every stop and before any special SFR access. Trace mode
 runs the same programs both ways and compares the full state, so keep the two
 paths equivalent. Details in `docs/mcs51.md`.
 
+The CC2530F256 model swaps the code the interpreter fetches from by
+repointing `UC_MCS51_REG_FAST_MEMORY` on FMAP/XMAP writes (no TB flush is
+needed because the interpreter decodes the bytes itself). It delivers every
+interrupt through `UC_MCS51_REG_IRQ_VECTOR` and turns the core's built-in
+Timer0 interrupt off (`UC_MCS51_REG_TIMER0_INTERRUPT = 0`); new core registers
+must default to the classic behaviour so CA51F253L3 stays unchanged. Details
+in `docs/cc2530.md`.
+
 ### System layer (`emulator/src/sim/`)
 
 - Config parsing is in `config.cpp` (yaml-cpp). `devices:` entries can be
@@ -329,6 +340,10 @@ Profile with `sample <pid> 3 -file out.txt` rather than guessing. What mattered:
 ## Known limitations
 
 - No BLE at register level; CA51 has no GPIO/ADC/radio; no TLS on the control API.
+- CC2530F256: not cycle accurate (the shared MCS-51 cycle table, 2-cycle
+  interrupt entry); no debug interface or DBGLOCK; a flash operation cut by a
+  reset is abandoned, not partially applied. Full list in `docs/cc2530.md`
+  ("Not modeled").
 - UART timing for the CA51F253L3 RX path is not bit-accurate.
 - The plug example uses the pins of the Zbeacon TS011F board. Without a coordinator the plug firmware only scans and requests steering, so the relay does not react to the button.
 - Realtime pacing cannot reach 1x for busy firmware; use `speed` below 1.

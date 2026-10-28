@@ -191,6 +191,100 @@ RttConfig parse_rtt(const YAML::Node &node) {
     return rtt;
 }
 
+DebuggerReport parse_debugger_report(const YAML::Node &node, const std::string &base_dir) {
+    require_map(node, "debugger report");
+    check_keys(node, "debugger report", {"file", "hits", "state", "xdata"});
+    DebuggerReport report;
+    report.line = node.Mark().line + 1;
+    std::filesystem::path path(required_string(node, "file", "debugger report"));
+    if (path.is_relative())
+        path = std::filesystem::path(base_dir) / path;
+    report.file = path.lexically_normal().string();
+    if (const YAML::Node hits = node["hits"]) {
+        const std::uint64_t value = config_integer(hits, "hits");
+        if (value < 1 || value > 0xffffffffull)
+            fail(hits, "hits must be a positive arrival count");
+        report.hits = static_cast<unsigned>(value);
+    }
+    if (const YAML::Node state = node["state"]) {
+        const std::string text = scalar(state, "state");
+        if (text != "true" && text != "false")
+            fail(state, "state must be true or false");
+        report.state = text == "true";
+    }
+    if (const YAML::Node xdata = node["xdata"]) {
+        if (!xdata.IsSequence())
+            fail(xdata, "xdata must be a list of {address, length}");
+        for (const YAML::Node &entry : xdata) {
+            require_map(entry, "debugger report xdata range");
+            check_keys(entry, "debugger report xdata range", {"address", "length"});
+            if (!entry["address"] || !entry["length"])
+                fail(entry, "debugger report xdata range requires 'address' and 'length'");
+            const std::uint64_t address = config_integer(entry["address"], "address");
+            const std::uint64_t length = config_integer(entry["length"], "length");
+            if (length == 0 || address > 0xffff || address + length > 0x10000)
+                fail(entry, "xdata range must be non-empty and lie within the 64 KiB XDATA space");
+            report.xdata.emplace_back(static_cast<std::uint16_t>(address),
+                                      static_cast<std::uint32_t>(length));
+        }
+    }
+    return report;
+}
+
+DebuggerConfig parse_debugger(const YAML::Node &node, const std::string &base_dir) {
+    require_map(node, "debugger");
+    check_keys(node, "debugger", {"pc", "writes", "report"});
+    DebuggerConfig debugger;
+    debugger.line = node.Mark().line + 1;
+    if (!node["pc"])
+        fail(node, "debugger requires 'pc' (the logical CODE address to halt at)");
+    const std::uint64_t pc = config_integer(node["pc"], "pc");
+    if (pc > 0xffff)
+        fail(node["pc"], "pc must be a 16-bit logical CODE address");
+    debugger.pc = static_cast<std::uint16_t>(pc);
+    if (const YAML::Node report = node["report"])
+        debugger.report = parse_debugger_report(report, base_dir);
+    const YAML::Node writes = node["writes"];
+    if (!writes && debugger.report)
+        return debugger;
+    if (!writes || !writes.IsSequence() || writes.size() == 0)
+        fail(node, "debugger requires a non-empty 'writes' list (or a 'report')");
+    for (const YAML::Node &entry : writes) {
+        require_map(entry, "debugger write");
+        check_keys(entry, "debugger write", {"hit", "xdata", "hex"});
+        DebuggerWrite write;
+        write.line = entry.Mark().line + 1;
+        if (const YAML::Node hit = entry["hit"]) {
+            const std::uint64_t value = config_integer(hit, "hit");
+            if (value < 1 || value > 0xffffffffull)
+                fail(hit, "hit must be a positive arrival count");
+            write.hit = static_cast<unsigned>(value);
+        }
+        if (!entry["xdata"])
+            fail(entry, "debugger write requires 'xdata'");
+        const std::uint64_t address = config_integer(entry["xdata"], "xdata");
+        std::string text = required_string(entry, "hex", "debugger write");
+        std::erase_if(text, [](char c) { return c == ' ' || c == '_'; });
+        if (text.empty() || text.size() % 2 != 0)
+            fail(entry["hex"], "hex must be a non-empty even number of hex digits");
+        for (std::size_t i = 0; i < text.size(); i += 2) {
+            const auto digit = [&](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                fail(entry["hex"], "hex contains a non-hex character");
+            };
+            write.bytes.push_back(
+                static_cast<std::uint8_t>(digit(text[i]) << 4 | digit(text[i + 1])));
+        }
+        if (address > 0xffff || address + write.bytes.size() > 0x10000)
+            fail(entry["xdata"], "xdata range must lie within the 64 KiB XDATA space");
+        write.xdata = static_cast<std::uint16_t>(address);
+        debugger.writes.push_back(std::move(write));
+    }
+    return debugger;
+}
+
 RadioAttachConfig parse_radio_attach(const YAML::Node &node) {
     require_map(node, "radio");
     check_keys(node, "radio",
@@ -356,7 +450,7 @@ McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
     check_keys(node, "mcu",
                {"id", "model", "variant", "firmware", "efuse", "rom", "boot_from_rom", "rf_calibration", "clock_hz", "supply_mv",
                 "start_at", "radio", "rtt", "flash_timing",
-                "tick_start_settle", "tick_start_jitter", "tick_start_seed"});
+                "tick_start_settle", "tick_start_jitter", "tick_start_seed", "debugger"});
     McuConfig mcu;
     mcu.line = node.Mark().line + 1;
     mcu.id = required_string(node, "id", "mcu");
@@ -458,6 +552,8 @@ McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
         mcu.radio = parse_radio_attach(radio);
     if (const YAML::Node rtt = node["rtt"])
         mcu.rtt = parse_rtt(rtt);
+    if (const YAML::Node debugger = node["debugger"])
+        mcu.debugger = parse_debugger(debugger, base_dir);
     return mcu;
 }
 

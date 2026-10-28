@@ -18,9 +18,9 @@ SFR manual is needed before assigning CA51-specific peripheral behavior.
 
 The CPU API preserves a separate 16-bit CODE and 16-bit XDATA bus. The current
 CA51 shell maps the full bus windows for deterministic access, while only the
-first 32 KiB of CODE is loadable from firmware. Future CC2530 support should be
-a separate device wrapper with its banked code mapping and SoC-specific
-peripherals; it can reuse the CPU backend.
+first 32 KiB of CODE is loadable from firmware. The CC2530F256 is a separate
+device wrapper on the same CPU backend with its banked code mapping and
+SoC-specific registers; see [`cc2530.md`](cc2530.md).
 
 ## Cortex-M / nRF52840 / EFR32MG21
 

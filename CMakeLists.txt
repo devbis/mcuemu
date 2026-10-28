@@ -54,11 +54,23 @@ target_link_libraries(mcuemu PRIVATE mcuemu-core mcs51emu nrf52emu efr32emu esp3
 
 add_library(mcs51emu
     emulator/src/mcs51/ca51f253l3.cpp
+    emulator/src/mcs51/cc2530f256.cpp
+    emulator/src/mcs51/cc2530_aes.cpp
+    emulator/src/mcs51/cc2530_analog.cpp
+    emulator/src/mcs51/cc2530_dma.cpp
+    emulator/src/mcs51/cc2530_flash.cpp
+    emulator/src/mcs51/cc2530_hit_report.cpp
+    emulator/src/mcs51/cc2530_io.cpp
+    emulator/src/mcs51/cc2530_mactimer.cpp
+    emulator/src/mcs51/cc2530_radio.cpp
+    emulator/src/mcs51/cc2530_timers.cpp
+    emulator/src/mcs51/cc2530_usart.cpp
     emulator/src/mcs51/run_command.cpp
 )
 target_include_directories(mcs51emu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(mcs51emu PRIVATE ${MCUEMU_WARNING_FLAGS})
-target_link_libraries(mcs51emu PUBLIC unicorn)
+# The CC2530 radio joins mcuemu::VirtualAir.
+target_link_libraries(mcs51emu PUBLIC unicorn mcuemu-core)
 
 # Generic Cortex-M core on the Unicorn fork's ARM backend (NVIC, SysTick, WFI/WFE).
 add_library(cortexm emulator/src/cortexm/core.cpp)
@@ -207,6 +219,7 @@ add_library(simcore
     emulator/src/sim/cli.cpp
     emulator/src/sim/tlsr8258_mcu.cpp
     emulator/src/sim/ca51f253l3_mcu.cpp
+    emulator/src/sim/cc2530f256_mcu.cpp
     emulator/src/sim/nrf52840_mcu.cpp
     emulator/src/sim/efr32mg21_mcu.cpp
     emulator/src/sim/esp32_mcu.cpp
@@ -241,6 +254,34 @@ if(MCUEMU_BUILD_TESTS)
     )
     target_link_libraries(mcs51emu-tests PRIVATE mcs51emu)
     add_test(NAME mcs51emu-tests COMMAND mcs51emu-tests)
+
+    add_executable(cc2530emu-tests
+        tests/mcs51/test_cc2530f256.cpp
+    )
+    target_link_libraries(cc2530emu-tests PRIVATE mcs51emu)
+    add_test(NAME cc2530emu-tests COMMAND cc2530emu-tests)
+
+    add_executable(cc2530emu-r2-tests
+        tests/mcs51/test_cc2530f256_r2.cpp
+    )
+    target_link_libraries(cc2530emu-r2-tests PRIVATE mcs51emu)
+    add_test(NAME cc2530emu-r2-tests COMMAND cc2530emu-r2-tests)
+
+    add_executable(cc2530emu-lockstep-tests
+        tests/mcs51/test_cc2530f256_lockstep.cpp
+    )
+    target_link_libraries(cc2530emu-lockstep-tests PRIVATE mcs51emu)
+    add_test(NAME cc2530emu-lockstep-tests COMMAND cc2530emu-lockstep-tests)
+
+    # CC2530 peripheral models (white-box access to src/mcs51 internals).
+    foreach(suite timers io_analog_usart dma_flash_aes mactimer radio spi)
+        add_executable(cc2530emu-${suite}-tests tests/mcs51/test_cc2530_${suite}.cpp)
+        target_include_directories(cc2530emu-${suite}-tests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/emulator/src/mcs51)
+        target_compile_options(cc2530emu-${suite}-tests PRIVATE ${MCUEMU_WARNING_FLAGS})
+        target_link_libraries(cc2530emu-${suite}-tests PRIVATE mcs51emu)
+        add_test(NAME cc2530emu-${suite}-tests COMMAND cc2530emu-${suite}-tests)
+    endforeach()
 
     add_executable(nrf52emu-tests
         tests/nrf52/test_main.cpp
@@ -298,11 +339,17 @@ if(MCUEMU_BUILD_TESTS)
         tests/sim/test_efr32.cpp
         tests/sim/test_bl702.cpp
         tests/sim/test_control.cpp
+        tests/sim/test_cc2530.cpp
     )
     target_link_libraries(simcore-tests PRIVATE simcore)
     target_compile_definitions(simcore-tests PRIVATE
         MCUEMU_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME simcore-tests COMMAND simcore-tests)
+
+    add_test(NAME mcuemu-cli-exit-codes
+             COMMAND ${CMAKE_COMMAND} -DMCUEMU=$<TARGET_FILE:mcuemu>
+                     -DWORK=${CMAKE_CURRENT_BINARY_DIR}/cli-exit-codes
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli/cli_exit_codes.cmake)
 
     set(MCUEMU_SAMPLE_GW_FIRMWARE
         "${CMAKE_CURRENT_SOURCE_DIR}/firmware/samplegw_tb03f.bin")

@@ -187,8 +187,10 @@ int sim_command(int argc, char **argv) {
     world.run_until(*run_for);
     system->session().finish();
     std::cout << "simulated " << world.now() << " ns\n";
+    bool faulted = false;
     for (const std::string &name : world.mcu_names()) {
         Mcu &mcu = world.mcu(name);
+        faulted = faulted || mcu.state() == McuState::Fault;
         std::cout << "mcu " << name << " (" << mcu.model() << "): "
                   << state_name(mcu.state()) << " at " << mcu.time_ns() << " ns";
         if (!mcu.fault_message().empty())
@@ -201,7 +203,8 @@ int sim_command(int argc, char **argv) {
             std::cout << "net " << name << " = "
                       << (std::get<bool>(endpoint.get()) ? 1 : 0) << '\n';
     }
-    return 0;
+    // Like `run`: 1 when the firmware faulted, 2 for usage or setup errors.
+    return faulted ? 1 : 0;
 }
 
 } // namespace sim

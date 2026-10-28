@@ -10,6 +10,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sim {
@@ -59,6 +60,35 @@ struct RttConfig {
     int line{0};
 };
 
+// Debugger emulation (cc2530f256 only): the CPU halts each time it reaches
+// `pc`; on the N-th arrival the writes for `hit: N` are applied to XDATA in
+// list order, then execution resumes. Mirrors a host that halts firmware at a
+// checkpoint and loads mailbox/input data before continuing.
+struct DebuggerWrite {
+    unsigned hit{1}; // 1-based arrival count at the breakpoint
+    std::uint16_t xdata{0};
+    std::vector<std::uint8_t> bytes;
+    int line{0};
+};
+
+// Checkpoint report: on arrivals 1..hits the halted CPU state is appended to
+// `file` in the `mcuemu run --report-hits` format (before that arrival's
+// writes are applied).
+struct DebuggerReport {
+    std::string file; // resolved against the YAML file's directory
+    unsigned hits{1};
+    bool state{true}; // dump all IDATA and SFRs
+    std::vector<std::pair<std::uint16_t, std::uint32_t>> xdata; // (start, length)
+    int line{0};
+};
+
+struct DebuggerConfig {
+    std::uint16_t pc{0}; // logical CODE address
+    std::vector<DebuggerWrite> writes;
+    std::optional<DebuggerReport> report;
+    int line{0};
+};
+
 struct McuConfig {
     std::string id;
     std::string model;
@@ -82,6 +112,7 @@ struct McuConfig {
     std::uint64_t start_at_ns{0};
     std::optional<RadioAttachConfig> radio;
     std::optional<RttConfig> rtt;
+    std::optional<DebuggerConfig> debugger;
     int line{0};
 };
 
