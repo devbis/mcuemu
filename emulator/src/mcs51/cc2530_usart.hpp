@@ -2,10 +2,10 @@
 
 // CC2530 USART0/USART1 (SWRU191F Chapter 17): UART and SPI master/slave
 // modes, baud-rate generator, URXn/UTXn interrupts and DMA triggers.
-// UART data is exchanged with the host as bytes (frames are not rendered
-// on pads). SPI master and slave shift bits on the pads (SCK edges at exact
-// cycles); a master transfer calls the optional host device instead when
-// one is set.
+// UART data is exchanged with the host as bytes or as frames with a 9th
+// bit, stop-bit errors or a break (frames are not rendered on pads). SPI
+// master and slave shift bits on the pads (SCK edges at exact cycles); a
+// master transfer calls the optional host device instead when one is set.
 
 #include "cc2530_soc.hpp"
 
@@ -38,7 +38,13 @@ public:
     // Queues a byte; it arrives (URXn, UxDBUF) one frame time after the
     // previous one at the configured baud rate.
     void receive(std::uint8_t byte);
+    // Queues a frame (9th bit, stop-bit errors, break); a plain frame is a
+    // byte.
+    void receive(const Cc2530UartFrame &frame);
     std::vector<std::uint8_t> take_transmitted();
+    // Records transmitted UART frames with their 9th bit while on.
+    void set_frame_capture(bool on);
+    std::vector<Cc2530UartFrame> take_transmitted_frames();
     // SPI master: when set, called once per transferred byte with the MOSI
     // byte; returns the MISO byte (byte level, the pads do not toggle).
     // Without a device the transfer runs on the pads (SCK, MOSI, MISO).
@@ -48,6 +54,7 @@ private:
     friend class Io;
     friend struct IoAnalogUsartTestAccess; // white-box test access
     friend struct SpiTestAccess;           // white-box test access
+    friend struct UartErrorsTestAccess;    // white-box test access
 
     // Exact bit timing: bit k after the anchor ends at anchor +
     // ceil((frac + k * num) / den) cycles of the HF domain.
@@ -87,6 +94,7 @@ private:
     void publish_pads(std::uint64_t hf_at);
     void try_start_rx(std::uint64_t at);
     void rx_complete();
+    void rx_second_stop();
     void deliver(std::uint8_t byte);
     void abort_all(bool drop_queue);
     void set_csr_bits(std::uint8_t mask, bool set);
@@ -96,23 +104,29 @@ private:
     unsigned index_;
     std::function<std::uint8_t(std::uint8_t)> spi_device_;
     std::vector<std::uint8_t> transmitted_;
+    bool capture_frames_{};
+    std::vector<Cc2530UartFrame> transmitted_frames_;
     // Transmit side: the data buffer (`tx_hold_`, double buffering) and the
     // shift register.
     std::optional<std::uint8_t> tx_hold_;
     bool tx_busy_{};
     std::uint8_t tx_byte_{};
+    Cc2530UartFrame::Ninth tx_ninth_{}; // the 9th bit of the UART frame
     unsigned tx_bits_{};
     std::uint64_t tx_end_hf_{Never};
     BitClock tx_clock_;
     // Receive side.
-    std::deque<std::uint8_t> rx_queue_; // host bytes not yet on the wire
+    std::deque<Cc2530UartFrame> rx_queue_; // host frames not yet on the wire
     bool rx_active_{};
     bool rx_discard_{}; // frame aborted by FLUSH, still occupies the wire
-    std::uint8_t rx_byte_{};
+    Cc2530UartFrame rx_frame_{};
+    std::uint8_t rx_ucr_{}; // UxUCR latched at the start bit
     unsigned rx_bits_{};
     std::uint64_t rx_start_hf_{};
     std::uint64_t rx_done_hf_{Never};
     std::uint64_t rx_idle_hf_{}; // end of the last frame on the RX wire
+    // End of a second stop bit at the wrong level: FE is set then (17.1.4).
+    std::uint64_t rx_fe2_hf_{Never};
     BitClock rx_clock_;
     std::uint8_t rx_data_{};                // UxDBUF read register
     std::optional<std::uint8_t> rx_pending_; // received while RX_BYTE = 1
