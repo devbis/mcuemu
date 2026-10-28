@@ -239,23 +239,23 @@ is the available source of evidence for that stack's runtime behavior.
 The user-supplied TS0001 log shows startup through `Stack Init`,
 `Zigbee stack initialized`, restoration of network state 12 and Tuya reports.
 The supplied binary contains the Zigbee and FreeRTOS executable image, and the
-emulator reaches its Zigbee stack initialization path. It also passes three
+emulator reaches its Zigbee stack initialization path. It passes three
 observed CRC-checked copy blocks and prints the NVM range
-`0x11079000..0x1107efff`. It still reports `tpCap[00 00]` instead of the
-reference log's `tpCap[2b 23]`. The emulator runs past the `spif_write_dma`
-NVM update, restores network state 12 and continues through timer callbacks. In
-a 15 s `sim` run with a locally built Telink sampleGW, the pcap contained 19
-frames: 16 beacon requests and 3 broadcast data frames. A 6 s coordinator-only
-control run with the same `samplegw_tb03f.bin` produced the same frame types at
-the same times, so these frames are attributable to the gateway image; no
-TS0001 association request, NWK data or ACK was captured. Repeating the
-first-boot scenario after adding generated RX FCS bytes did not change that
-result. The emulated UART otherwise reaches the same startup milestones as the
-supplied `log.txt`, but differs in reported values: `power report time = 4744`
-(reference 3288), `set read local time: 39` (reference 44), and
-`fix Report time = 326790` (reference 330785). Join and relay commands remain
-unverified. Do not claim TS0001 relay support until it starts, joins, and
-exchanges Zigbee traffic in a captured network scenario.
+`0x11079000..0x1107efff`. With the observed RF calibration globals seeded, the
+UART now reports `tpCap[2b 23]`, matching the supplied log. The image runs past
+the `spif_write_dma` NVM update, restores network state 12 and continues through
+timer callbacks.
+
+In a 15 s `sim` run with a locally built Telink sampleGW, the pcap contains 19
+frames: 16 beacon requests and 3 broadcast data frames. Attaching
+`air0=stdout` shows the gateway scans channels 11–26; a coordinator-only run
+produces the same traffic. No TS0001 association request, NWK data or ACK is
+captured. The UART reaches the same startup milestones as `log.txt`, but the
+reported values still differ: `power report time = 4744` (reference 3288),
+`set read local time: 39` (reference 44), and `fix Report time = 326790`
+(reference 330785). Join and relay commands remain unverified. Do not claim
+TS0001 relay support until it starts, joins and exchanges Zigbee traffic in a
+captured network scenario.
 
 The reusable `examples/phy6252-ts0001.yaml` probe also reproduces the reference
 short key1 press on GPIO8 and key-level transitions on GPIO3. It does not print
@@ -264,17 +264,19 @@ to the gateway-only capture.
 
 For a separate first-boot probe, a temporary copy of the TS0001 dump had its
 `0x6000`-byte NVM range at `0x11079000` erased. The image reported
-`Device started for the first time` with network state 0. A long press on
-GPIO8 reached ROM `set_timer` for Timer1, dispatched its registered callback,
-and read RF register `0x400300e8`; the model returns the virtual-air RSSI
-sample there because this SDK package does not document the register. The
-image then ran through a 15 s simulation without a CPU fault, but still sent
-no Zigbee frames. A temporary MMIO trace found no later TS0001 TX FIFO writes
-or link-layer TX/RX commands after its BDB request; only coordinator frames
-were present in the pcap. The trace narrows the next investigation to the
-commissioning-to-PHY path, but does not establish whether the missing step is
-commissioning state or a radio contract. The cleared-NVM copy and all other
-firmware images remain external test inputs.
+`Device started for the first time` with network state 0. Holding GPIO8 from
+1 s to 8 s reports `KEY 1 longPress` and `zb bdb devNetOpt = 0`; with the
+supplied NVM contents, the same input reports option 7. In the erased-NVM
+case, the firmware reads RF register `0x400300e8` after a Timer1 callback. The
+model samples shared-air energy at that access. In a timing probe, a gateway
+beacon request on channel 11 ended 120 us before the read and the model returned
+about -41 dBm. The TS0001 still made no subsequent LL TX/RX start and wrote no
+frame to its TX FIFO. With the supplied NVM image, the long-press BDB request
+also produced no TS0001 frame. The erased-NVM run restarts the image at about
+8.0 s and continues without a CPU fault. This narrows the visible gap to the
+commissioning-to-LMAC path after its initial RSSI sample; the exact firmware,
+ROM or stack event contract remains unknown. Keep the cleared-NVM image outside
+the repository with the other local test inputs.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
