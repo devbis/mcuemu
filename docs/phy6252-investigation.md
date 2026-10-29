@@ -621,12 +621,22 @@ This confirms that GPIO sampling, debounce, timer delivery, and the generic key
 dispatcher all execute. It does not yet identify why the hardware run proceeds
 to a local relay state change while this emulated run does not.
 
-The down-event path also reaches the image helper at `0x110219b4`. In this run
-it calls `0x11030fac`, which reads the byte at `0x1fff81d0` and returns zero;
-the helper then exits before its later state-change calls. The purpose of that
-byte is not identified. This narrows the missing transition to application
-state gating after key dispatch; it does not establish a missing PHY6252 ROM
-function or justify forcing relay state from the GPIO input.
+The down-event path reaches the image helper at `0x110219b4`. A follow-up
+read/write watch corrected the earlier interpretation of its state check:
+startup writes `1` to `0x1fff81d0` from `0x1102af8e`, and the helper's call to
+`0x11030fac` reads back `1` during the button path. The flag does not explain
+the missing relay callback.
+
+The helper then reaches `0x11021f34`, which builds a command for cluster
+`0x0006`. Its lookup in `0x1102e1f4` finds the endpoint-1/cluster-6 entry in
+the three-row table at `0x1fffc0f8`. After that successful lookup, the helper
+reads a local halfword at `sp+44`; it is zero and the code branches around
+`0x11043bf0`, the send path. The second lookup returns zero to end the row
+iteration. A two-second GPIO8 hold still produces Down/Up without a `longPress`
+or relay `On`/`Off` report. The callback at `0x1102ddd8` remains uncalled, and
+the pcap has no TS0001 transmission. The meaning and source of the zero
+halfword, and why the hardware run proceeds past this gate, remain unknown.
+Do not force relay state from the GPIO input based on this trace.
 
 For a separate first-boot probe, a temporary copy of the TS0001 dump had its
 `0x6000`-byte NVM range at `0x11079000` erased. The image reported
