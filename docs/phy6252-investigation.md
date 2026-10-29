@@ -663,6 +663,18 @@ confirm the extended-PAN/key mapping or restore the module's parent state.
 It also does not explain the absence of an outbound frame during first-boot
 commissioning; that radio path remains unverified.
 
+The saved ZB-info payload contains the same eight-byte value twice at offsets
+`+0x20` and `+0x28` (`9e:75:d9:fe:ff:e2:0a:68`), a possible parent/coordinator
+IEEE address. A separate scratch coordinator was built with that IEEE address
+in addition to the candidate PAN ID, short address, extended PAN ID and NWK
+key. In a 35-second run the relay printed `Restored nwk success on reboot`
+and its GPIO8 press still changed the local relay output, but it transmitted no
+802.15.4 frame. The 21-frame pcap contains 16 coordinator Beacon Requests and
+five coordinator data frames; it has no successful association response, ACK,
+or relay transmission. Thus matching this candidate IEEE address alone does
+not restore radio communication. The repeated value's meaning and the other
+conditions for the saved parent relationship remain unconfirmed.
+
 An instrumented 10 s saved-state probe confirms that the PHY receive path is
 active: while the TS0001 was listening on channel 25, the emulator accepted the
 gateway's Beacon Request at 4.298 s with RSSI -42 dBm (8-byte MAC payload). The
