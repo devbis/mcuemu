@@ -341,7 +341,8 @@ Profile with `sample <pid> 3 -file out.txt` rather than guessing. What mattered:
 
 - No BLE at register level; CA51 has no GPIO/ADC/radio; no TLS on the control API.
 - CC2530F256: not cycle accurate (the shared MCS-51 cycle table, 2-cycle
-  interrupt entry); no debug interface or DBGLOCK; a flash operation cut by a
+  interrupt entry); the debug interface does not check DC/DD electrical
+  timing and DEBUG_INSTR takes no virtual time; a flash operation cut by a
   reset or power cut is abandoned by default, and the opt-in partial/complete
   outcomes and the 6.2.2 `nondeterministic` policy are model-defined fault
   injection, not measured behaviour. Full list in `docs/cc2530.md`

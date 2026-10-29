@@ -24,6 +24,10 @@ public:
 
     // A DMA trigger (namespace trigger) occurred now.
     void trigger(unsigned number);
+    // Debug configuration DMA_PAUSE (SWRU191F Table 3-2): no data slot is
+    // granted while paused; a slot in progress completes, descriptor fetches
+    // and triggers are still recorded and served after the pause.
+    void set_paused(bool paused);
 
 private:
     // The flash controller and the AES coprocessor are co-simulated with the
@@ -89,6 +93,7 @@ private:
     std::uint64_t watermark_ = 0;          // every event up to here is processed
     std::uint64_t cursor_ = 0;             // time of the event being processed
     bool in_service_ = false;
+    bool paused_ = false; // set by the debug interface, not by a reset
 };
 
 } // namespace mcs51emu::cc2530

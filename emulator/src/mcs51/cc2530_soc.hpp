@@ -76,6 +76,7 @@ class Dma;
 class FlashController;
 class Aes;
 class Radio;
+class Debug;
 
 // Typed access between peripherals (all non-null after construction).
 struct Soc {
@@ -93,6 +94,7 @@ struct Soc {
     FlashController *flash{};
     Aes *aes{};
     Radio *radio{};
+    Debug *debug{}; // the debug interface (Chapter 3)
 };
 
 class Bus {
@@ -177,6 +179,29 @@ public:
     virtual void fault(std::string message) = 0;
     // Counts an access the model accepts but does not emulate.
     virtual void note_unmodeled(Reg reg, bool write) = 0;
+
+    // ---- debug interface (Chapter 3) ----
+    // RESET_N is held low: the chip is in reset and the CPU does not run.
+    virtual bool reset_held() const = 0;
+    // PCON.IDLE was set and the CPU is not executing (power mode requested
+    // or in effect).
+    virtual bool sleep_requested() const = 0;
+    virtual std::uint16_t cpu_pc() const = 0;
+    // True inside the CPU engine (between instruction boundaries).
+    virtual bool engine_running() const = 0;
+    // DEBUG_INSTR: executes the 1-3 byte instruction `code` on the halted
+    // CPU at its current PC without advancing the PC, in zero virtual time,
+    // and returns A.
+    virtual std::uint8_t debug_execute(const std::uint8_t *code, unsigned length) = 0;
+    // HALT in a power mode: wake the chip (it stays halted).
+    virtual void wake_for_debug_halt() = 0;
+    // Timer 1/3/4 time base: hf_now() minus the time the debug interface
+    // held the timers (TIMER_SUSPEND / TIMERS_OFF). Timer deadlines are
+    // Never while suspended.
+    virtual void set_timers_suspended(bool suspended) = 0;
+    virtual bool timers_suspended() const = 0;
+    virtual std::uint64_t timer_hf_now() const = 0;
+    virtual std::uint64_t timer_hf_deadline(std::uint64_t hf) const = 0;
     virtual Soc &soc() = 0;
 };
 

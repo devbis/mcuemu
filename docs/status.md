@@ -20,8 +20,9 @@ peripherals and what is missing (the radio first). The EFR32MG21 (Cortex-M33)
 is in [`efr32mg21.md`](efr32mg21.md). The CC2530F256 (MCS-51) is
 described in [`cc2530.md`](cc2530.md): CPU, code banking, memory map,
 interrupt controller, power modes, the SWRU191F peripherals and the IEEE
-802.15.4 radio are modeled; instruction timing is not cycle accurate and the
-debug interface is not modeled.
+802.15.4 radio are modeled, as are the two-wire debug interface (pad-level
+DC/DD, DBGLOCK) and CC-Debugger-style programming through it; instruction
+timing is not cycle accurate.
 
 Two behaviors are explicit inferences. The datasheet documents the register
 window at `0x800000..0x83ffff`, while vendor `LoadTblCmdSet` code forms writes

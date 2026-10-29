@@ -14,6 +14,10 @@
 //   slot is arbitrated separately (Figure 8-1: "Transfer one byte or word
 //   when channel is granted access"; 8.2.8 priority and round-robin).
 // - Data really moves through Bus::xdata_read/xdata_write.
+// - Every Table 8-1 trigger is raised by its source, including DBG_BW (31),
+//   which the debug interface raises for each BURST_WRITE byte it puts in
+//   DBGDATA; the debug configuration bit DMA_PAUSE (Table 3-2) holds
+//   arbitration (set_paused()).
 // - The flash controller and the AES coprocessor are co-simulated in
 //   advance() so their DMA triggers and the DMA accesses to FWDATA, ENCDI
 //   and ENCDO happen at exact cycles in every run mode.
@@ -351,8 +355,16 @@ std::uint64_t Dma::eligible_at(unsigned index) const {
     return at == Never ? Never : std::max(at, channel.armed_at);
 }
 
+void Dma::set_paused(bool paused) {
+    if (paused == paused_)
+        return;
+    advance(bus_.hf_now());
+    paused_ = paused;
+    bus_.reschedule();
+}
+
 std::uint64_t Dma::arbitration_time() const {
-    if (slot_active_)
+    if (slot_active_ || paused_)
         return Never;
     std::uint64_t at = Never;
     for (unsigned index = 0; index < Channels; ++index)

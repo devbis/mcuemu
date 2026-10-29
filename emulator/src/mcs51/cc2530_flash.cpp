@@ -14,8 +14,14 @@
 //   the 1-bits are ignored").
 // - Lock bits (2.2.3, 3.4.1): one PAGELOCK bit per page in the last 16 bytes
 //   of the flash, 0 = locked; the lock-bit page itself is implicitly locked
-//   when not in debug mode (the debug interface is not modeled, so always).
+//   when not in debug mode (cc2530_debug.cpp): in debug mode it can be
+//   erased and written, which is how a debugger sets PAGELOCK and DBGLOCK.
 //   A locked page aborts the operation (FCTL.ABORT = 1).
+// - Chip erase (debug command CHIP_ERASE, Table 3-1): the whole 256 KiB main
+//   flash, lock bits included, becomes 0xFF after the chip-erase time of
+//   20 ms (6 / 2.2.3 "Flash erase timing ... chip erase 20 ms"); the
+//   information page is not touched. FCTL reads BUSY during it, and the
+//   debug status shows CHIP_ERASE_BUSY (Table 3-3).
 // - Effects are applied deterministically at the completion of the erase /
 //   word write. A reset or power cut before that ends the operation with the
 //   configured model-defined outcome (SWRU191F does not specify it):
@@ -38,6 +44,7 @@
 
 #include "cc2530_flash.hpp"
 
+#include "cc2530_debug.hpp"
 #include "cc2530_dma.hpp"
 
 #include "mcs51emu/cc2530f256.hpp"
@@ -64,6 +71,7 @@ constexpr std::uint8_t FctlErase = 0x01;
 
 // SWRU191F Chapter 6 / 2.2.3 flash timing, in cycles of the 32 MHz base.
 constexpr std::uint64_t PageEraseCycles = 20 * CyclesPerSecond / 1000;   // 20 ms
+constexpr std::uint64_t ChipEraseCycles = 20 * CyclesPerSecond / 1000;   // 20 ms
 constexpr std::uint64_t WordWriteCycles = 20 * CyclesPerSecond / 1000000; // 20 us
 
 constexpr std::uint32_t PageSize = 2048;                       // 6.1
@@ -112,6 +120,7 @@ void FlashController::reset(ResetCause) {
     // log) is kept: it is not chip state.
     op_ = Op::None;
     write_after_erase_ = false;
+    chip_erase_ = false;
     erase_end_ = 0;
     erase_page_ = 0;
     window_end_ = 0;
@@ -141,7 +150,9 @@ std::uint8_t FlashController::peek(Reg reg) const {
             value |= FctlAbort;
         if (op_ == Op::Write || (op_ == Op::Erase && write_after_erase_))
             value |= FctlWrite;
-        if (op_ == Op::Erase)
+        // Model-defined: a chip erase shows BUSY only (it is not an FCTL
+        // page erase).
+        if (op_ == Op::Erase && !chip_erase_)
             value |= FctlErase;
         return value;
     }
@@ -249,7 +260,7 @@ bool FlashController::page_locked(unsigned page) const {
     // 0 = locked. The lock-bit page (the last page) has no lock bit and is
     // "implicitly locked when not in debug mode" (2.2.3).
     if (page >= PageCount - 1)
-        return true;
+        return !(bus_.soc().debug && bus_.soc().debug->active());
     const std::uint8_t bits = bus_.flash()[Cc2530F256::LockBitsStart + page / 8];
     return ((bits >> (page % 8)) & 1u) == 0;
 }
@@ -303,15 +314,59 @@ void FlashController::start_erase(std::uint64_t at, bool then_write) {
     op_started(Cc2530FlashOpKind::PageErase, page, at);
 }
 
+void FlashController::start_chip_erase() {
+    // The debug interface only accepts CHIP_ERASE while no chip erase runs.
+    // Model-defined: a page erase or write in progress is abandoned (its
+    // result is overwritten by the erase anyway).
+    bus_.soc().dma->advance(bus_.hf_now()); // settle operations due by now
+    const std::uint64_t at = access_time();
+    end_write();
+    abort_ = false;
+    op_ = Op::Erase;
+    chip_erase_ = true;
+    erase_end_ = at + ChipEraseCycles;
+    erase_serial_ = ++op_serial_;
+    stall_if_executing_from_flash(erase_end_);
+    bus_.storage(RegFctl) = peek(RegFctl);
+    bus_.reschedule();
+}
+
+void FlashController::cpu_resumed() {
+    if (op_ != Op::None)
+        stall_if_executing_from_flash(next_event());
+}
+
+std::uint32_t FlashController::erased_bits(std::uint32_t begin, std::uint32_t end) const {
+    const std::vector<std::uint8_t> &flash = bus_.flash();
+    std::uint32_t changed = 0;
+    for (std::uint32_t i = begin; i < end; ++i)
+        changed += static_cast<std::uint32_t>(std::popcount(static_cast<std::uint8_t>(~flash[i])));
+    return changed;
+}
+
+void FlashController::erase_range(std::uint32_t begin, std::uint32_t end) {
+    std::vector<std::uint8_t> &flash = bus_.flash();
+    std::fill(flash.begin() + begin, flash.begin() + end, 0xff);
+    bus_.flash_changed(begin, end);
+}
+
 void FlashController::finish_erase(std::uint64_t at) {
+    if (chip_erase_) {
+        chip_erase_ = false;
+        op_ = Op::None;
+        const std::uint32_t changed = erased_bits(0, PageCount * PageSize);
+        erase_range(0, PageCount * PageSize);
+        // A chip erase is an erase of every page for the 6.2.2 tracking and
+        // the per-page counters.
+        erase_applied(0, PageCount);
+        log_op(at, Cc2530FlashOpKind::ChipErase, 0, Cc2530FlashOutcome::Completed,
+               Cc2530FlashCut::None, ResetCause::PowerOn, ChipEraseCycles, changed, 0);
+        return;
+    }
     // Model-defined: the page is latched when the erase starts.
     const std::uint32_t begin = erase_page_ * PageSize;
-    std::vector<std::uint8_t> &flash = bus_.flash();
-    std::uint32_t changed = 0;
-    for (std::uint32_t i = begin; i < begin + PageSize; ++i)
-        changed += static_cast<std::uint32_t>(std::popcount(static_cast<std::uint8_t>(~flash[i])));
-    std::fill(flash.begin() + begin, flash.begin() + begin + PageSize, 0xff);
-    bus_.flash_changed(begin, begin + PageSize);
+    const std::uint32_t changed = erased_bits(begin, begin + PageSize);
+    erase_range(begin, begin + PageSize);
     op_ = Op::None;
     erase_applied(erase_page_, 1);
     log_op(at, Cc2530FlashOpKind::PageErase, begin, Cc2530FlashOutcome::Completed,
@@ -412,20 +467,30 @@ void FlashController::interrupt_operation(Cc2530FlashCut cut, ResetCause cause) 
     std::uint32_t changed = 0;
     if (op_ == Op::Erase) {
         ++diagnostics_->flash_interrupted_erases;
-        const std::uint64_t start = erase_end_ - PageEraseCycles;
-        const std::uint64_t elapsed = std::min(hf - std::min(hf, start), PageEraseCycles);
-        const std::uint32_t begin = erase_page_ * PageSize;
+        // A debug CHIP_ERASE (3.3) is cut like a page erase over the whole
+        // main flash.
+        const bool chip = chip_erase_;
+        const std::uint64_t duration = chip ? ChipEraseCycles : PageEraseCycles;
+        const std::uint64_t start = erase_end_ - duration;
+        const std::uint64_t elapsed = std::min(hf - std::min(hf, start), duration);
+        const unsigned first_page = chip ? 0 : erase_page_;
+        const unsigned pages = chip ? PageCount : 1;
+        const std::uint32_t begin = first_page * PageSize;
+        const std::uint32_t end = begin + pages * PageSize;
+        const Cc2530FlashOpKind kind =
+            chip ? Cc2530FlashOpKind::ChipErase : Cc2530FlashOpKind::PageErase;
         Cc2530FlashOutcome outcome = Cc2530FlashOutcome::Abandoned;
         if (mode == Cc2530FlashInterrupted::Partial) {
-            // Model-defined: every 0 bit of the page (bit index b = 8 * byte
-            // offset + bit) is erased to 1 when draw(seed, erase serial, b)
-            // mod 20 ms < elapsed, i.e. with probability elapsed / 20 ms.
-            for (std::uint32_t i = 0; i < PageSize; ++i) {
+            // Model-defined: every 0 bit of the erased range (bit index b =
+            // 8 * byte offset in the range + bit) is erased to 1 when
+            // draw(seed, erase serial, b) mod 20 ms < elapsed, i.e. with
+            // probability elapsed / 20 ms.
+            for (std::uint32_t i = 0; i < end - begin; ++i) {
                 std::uint8_t byte = flash[begin + i];
                 for (unsigned bit = 0; bit < 8; ++bit) {
                     if (byte & (1u << bit))
                         continue;
-                    if (fault_draw(config_.seed, erase_serial_, i * 8u + bit) % PageEraseCycles <
+                    if (fault_draw(config_.seed, erase_serial_, i * 8u + bit) % duration <
                         elapsed) {
                         byte = static_cast<std::uint8_t>(byte | (1u << bit));
                         ++changed;
@@ -433,19 +498,16 @@ void FlashController::interrupt_operation(Cc2530FlashCut cut, ResetCause cause) 
                 }
                 flash[begin + i] = byte;
             }
-            bus_.flash_changed(begin, begin + PageSize);
+            bus_.flash_changed(begin, end);
             // A partial erase is no erase: the 6.2.2 tracking goes on.
             outcome = Cc2530FlashOutcome::Partial;
         } else if (mode == Cc2530FlashInterrupted::Complete) {
-            for (std::uint32_t i = begin; i < begin + PageSize; ++i)
-                changed += static_cast<std::uint32_t>(
-                    std::popcount(static_cast<std::uint8_t>(~flash[i])));
-            std::fill(flash.begin() + begin, flash.begin() + begin + PageSize, 0xff);
-            bus_.flash_changed(begin, begin + PageSize);
-            erase_applied(erase_page_, 1);
+            changed = erased_bits(begin, end);
+            erase_range(begin, end);
+            erase_applied(first_page, pages);
             outcome = Cc2530FlashOutcome::Forced;
         }
-        log_op(hf, Cc2530FlashOpKind::PageErase, begin, outcome, cut, cause, elapsed, changed, 0);
+        log_op(hf, kind, begin, outcome, cut, cause, elapsed, changed, 0);
     } else {
         ++diagnostics_->flash_interrupted_writes;
         const std::uint64_t start = program_end_ - WordWriteCycles;
@@ -466,6 +528,7 @@ void FlashController::interrupt_operation(Cc2530FlashCut cut, ResetCause cause) 
     }
     // The operation is over; reset() clears the rest of the controller state.
     op_ = Op::None;
+    chip_erase_ = false;
     write_after_erase_ = false;
     programming_ = false;
     full_ = false;
@@ -474,6 +537,7 @@ void FlashController::interrupt_operation(Cc2530FlashCut cut, ResetCause cause) 
 
 void FlashController::flash_replaced() {
     op_ = Op::None;
+    chip_erase_ = false;
     write_after_erase_ = false;
     programming_ = false;
     full_ = false;
