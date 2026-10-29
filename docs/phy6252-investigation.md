@@ -408,6 +408,20 @@ NWK data. The radio-source trace again contains no TS0001 transmission after its
 channel-11 steering path. This second gateway image changes the PAN but does not
 provide a channel-11 network for the observed first-boot path.
 
+A same-channel check used the SDK's `apps/sampleGW` sources, with only
+`DEFAULT_CHANNEL` changed to 11 in a scratch build. The 20 s run formed an
+active channel-11 network: `sampleLight` associated at 9.045 s as `0x3acc` and
+exchanged 9 uplink NWK frames (5 unicast) and 6 downlink frames. The pcap again
+has 76 frames, all sourced by the coordinator or sampleLight; TS0001 emitted
+none. The radio medium recorded six decodable channel-11 frames at TS0001,
+including the sampleLight beacon request and coordinator response at 6.202 s
+and 6.221 s. Its UART reaches `zb bdb devNetOpt = 0`, but no association or
+other transmission follows. Channel mismatch alone therefore does not explain
+the missing TS0001 exchange; the first outbound frame after this steering path
+and the stack's later RX state remain unknown. This test used the cleared-NVM
+first-boot image (`network state=0`), unlike the supplied `log.txt`, which
+restores state 12 and includes Tuya reports and relay `On`/`Off` counters.
+
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
 instruction tracing for a PC interval and prints registers on a fault.
