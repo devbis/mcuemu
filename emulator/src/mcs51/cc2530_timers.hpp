@@ -26,6 +26,9 @@ public:
     bool output(unsigned channel) const;
     // Input capture: level of the pad routed to channel 0-4 changed.
     void input_changed(unsigned channel, bool level);
+    // Input capture from the RF interrupt (T1CCTLn.RFIRQ = 1): an RF
+    // interrupt request (rising) or the RF interrupt line going low.
+    void rf_interrupt_edge(bool rising);
 
 private:
     friend class Timer34;
@@ -79,6 +82,9 @@ private:
     std::uint16_t count_now() const;
     // One Timer 3 channel 1 compare event while IRCTL.IRGEN = 1.
     void ir_tick();
+    // Captures channel `channel` on an edge of its selected input if its
+    // mode and CAP allow (sets T1STAT.CHnIF); true if it captured.
+    bool capture(unsigned channel, bool rising);
 
     Unit unit_;
     unsigned ir_prescale_ = 0;
