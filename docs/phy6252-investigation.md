@@ -639,9 +639,11 @@ or the network stall.
 
 The `*** On:%d, Off:%d, toggle:%d ***` format belongs to the XIP helper at
 `0x1102ddd8`. Its disassembly increments counters for event values 1 and 2,
-then passes the counters to the UART formatter. The supplied log associates
-these reports with pressing the relay's local toggle button. The route from
-the button event to this helper remains unresolved in the emulator.
+then passes the counters to the UART formatter. The maintainer first associated
+these reports with the local toggle button, then said the trigger is uncertain
+and may require an over-the-air toggle. The UART log has no timestamped event
+correlation, and the route from either input to this helper remains unresolved
+in the emulator.
 
 A four-second VCD probe of the module full-flash image confirms the physical
 GPIO path. Startup logs `relay_LED[0] = 2,0`; GPIO2 is initially driven low,
@@ -768,10 +770,10 @@ data frames; it has no successful association response and no TS0001 source
 frame (`0x87db`). Compared with the supplied hardware UART log,
 `power report time`, `set read local time`, and `fix Report time` remain
 `4744`, `39`, and `326790` instead of `3288`, `44`, and `330785`. The user
-confirms that the `On`/`Off` lines follow pressing the relay's local toggle
-button; they are not evidence of a remote Zigbee command. The GPIO8 press
+initially attributed the `On`/`Off` lines to the local toggle button, then said
+the trigger is uncertain and might be an over-the-air toggle. The GPIO8 press
 changes the relay state and GPIO2 output, while the diagnostic callback remains
-unreached.
+unreached; this run does not identify what causes the reference lines.
 
 After adding the `0x3fc4` ROM wrapper, a 12-second run using the hardware's
 full-flash dump and saved NVM reaches both GPIO8 key events and stays running.
@@ -851,19 +853,19 @@ one of three counters, then prints the format string at `0x1102de38`
 (`On:%d, Off:%d, toggle:%d`). Event code 1 increments `On`, codes 0 and
 `0x40` increment `Off`, and code 2 increments `toggle`. This matches the
 counter labels in the supplied UART log and confirms the absent lines are
-caused by this handler not running; it does not reveal which dispatcher should
-call it after the GPIO8 event.
+caused by this handler not running in the emulator; it does not identify what
+dispatches the handler in the hardware run.
 
-The maintainer confirmed that the reference UART log was captured with no
-coordinator and that its `*** On:... Off:... toggle:... ***` lines follow
-operation of the relay's physical toggle button. They belong to the local
-button/state callback path. A 65-second host-ROM replay without a coordinator,
-using the saved-state image and GPIO8 presses at 6–6.5 s and 7–7.5 s, prints
-both `key 1 Down/Up` pairs and changes GPIO2 at each press. It restores
-`network state=12`, repeats stack statistics at 30 s and 60 s, but never prints
-the reference `On`/`Off` counters. No radio medium is present. The run therefore
-reproduces the physical input and local relay output while leaving the
-application callback gap above unresolved.
+The maintainer said the reference UART log was captured with no coordinator,
+but later clarified that it is uncertain whether the `On`/`Off` lines follow a
+physical button press or an over-the-air toggle. The log does not timestamp
+those lines against an input event. A 65-second host-ROM replay without a
+coordinator, using the saved-state image and GPIO8 presses at 6–6.5 s and
+7–7.5 s, prints both `key 1 Down/Up` pairs and changes GPIO2 at each press. It
+restores `network state=12` and repeats stack statistics at 30 s and 60 s, but
+never prints the reference counters. No radio medium is present. This verifies
+local button and output behavior, but does not establish the trigger for the
+reference `On`/`Off` lines or resolve the callback path.
 
 Disassembly of the external ROM's `0x27e8` wrapper initially looked like a
 possible route to that callback: it calls `0x7f1c`, which loads a callback from
