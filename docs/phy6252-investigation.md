@@ -499,25 +499,30 @@ IRQ4 becomes pending, and the ROM vector dispatches `JUMP_FUNCTION(228)` at
 before the BDB callback. With AP_TIM3 running, the callback completes its
 `WaitUs()` polling and eight-sample RSSI loop, calls ROM `clear_timer`, and
 successfully enqueues a BDB event through the image's queue wrapper at
-`0x1fff7ad0`; the PendSV handler then runs. It changes the channel and syncword,
-samples RSSI, and starts one more SRX at about 6.411 s. No later TX operation
-starts in the LL trace, and the 20 s pcap has 20 gateway frames but no TS0001
-frame. The image resumes its main loop around 8.0 s. The BDB timer callback
-also sets event-group bit `0x20`, which wakes the LMAC task. The captured wait
-returns that bit; the task sees a non-null queue entry (`0x1fffe748`) through
-`0x1fff8b94` and calls the image's callback dispatcher at `0x1fff4bb0`. That
-dispatcher searches the populated callback table at `0x1fff7e78`; the selected
-entry and its expected network effect remain unknown. The saved-NVM 15 s run
-likewise has only 19 gateway frames and no TS0001 frame. All runs continue
-without a CPU fault. The transition from the commissioning callback path to an
-outbound Zigbee frame remains unknown. In a separate 20 s run, gateway startup
-was delayed so its first beacon request began at 6.416 s, about 4.5 ms after the
-TS0001 SRX start at 6.411 s. The pcap still contained 19 gateway frames and no
-TS0001 frame. Keep the cleared-NVM image outside the repository with the other
-local test inputs. A further 20 s first-boot run added `samplelight_tb03f.bin`
-at 5 s. The light completed MAC association with the sampleGW (request at
-7.694 s, response at 8.190 s) and exchanged NWK data from short address
-`0x7054`. In the post-eFuse-fix rerun, the long-press TS0001 reached
+`0x1fff7ad0`. Its event-group bit `0x20` wakes the LMAC task; the task sees a
+non-null queue entry (`0x1fffe748`) through `0x1fff8b94` and calls the image's
+callback dispatcher at `0x1fff4bb0`. A PC trace shows state 0 and event 0
+selecting table row `(0, 0, 1, 0x1fff4a69)` at `0x1fff7e78`. The dispatcher
+updates the state to 1 and invokes that callback. The callback calls ROM
+`LL_Rand` and arms Timer1 for 1512 us with image callback `0x1fff49d9`. Timer1
+IRQ20 reaches the registered image handler `0x1fff2565`, which calls that
+callback; it sets event-group bit `0x20` and PendSV runs afterward. That path
+changes channel and syncword, samples RSSI, and starts one more SRX around
+6.411 s. The trace does not show the BDB dispatcher receiving event 1, so the
+next expected table row `(1, 1, 2, 0x1fff4acd)` is not reached during the 7 s
+probe. No later TX operation starts in the LL trace, and the 20 s pcap has 20
+gateway frames but no TS0001 frame. The image resumes its main loop around
+8.0 s. The saved-NVM 15 s run likewise has only 19 gateway frames and no
+TS0001 frame. All runs continue without a CPU fault. The transition from the
+commissioning callback path to an outbound Zigbee frame remains unknown. In a
+separate 20 s run,
+gateway startup was delayed so its first beacon request began at 6.416 s, about
+4.5 ms after the TS0001 SRX start at 6.411 s. The pcap still contained 19
+gateway frames and no TS0001 frame. Keep the cleared-NVM image outside the
+repository with the other local test inputs. A further 20 s first-boot run
+added `samplelight_tb03f.bin` at 5 s. The light completed MAC association with
+the sampleGW (request at 7.694 s, response at 8.190 s) and exchanged NWK data
+from short address `0x7054`. In the post-eFuse-fix rerun, the long-press TS0001 reached
 `devNetOpt = 0` and the sampleLight associated at 9.045 s with short address
 `0x2554`; it then exchanged 9 uplink NWK frames (5 unicast) and 6 downlink
 frames. The pcap has 76 frames. A simultaneous `air0=file:` trace attributes
