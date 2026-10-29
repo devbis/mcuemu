@@ -245,15 +245,16 @@ int main() {
           cortexm::StopReason::Deadline);
     CHECK(rom_test_chip.read(0x400300bc, 4) == 0x00580828);
     invoke_radio_rom(0x112a4); // ll_hw_set_srx
-    CHECK(rom_test_chip.read(0x40031004, 4) == 1);
+    CHECK(rom_test_chip.read(0x40031004, 4) == 0x010001);
+    CHECK(rom_test_chip.read(0x40031038, 4) == 7);
     invoke_radio_rom(0x10cdc); // ll_hw_get_tr_mode
     CHECK(rom_test_chip.core().reg(0) == 1);
     invoke_radio_rom(0x112b8); // ll_hw_set_stx
-    CHECK(rom_test_chip.read(0x40031004, 4) == 0);
+    CHECK(rom_test_chip.read(0x40031004, 4) == 0x000100);
     invoke_radio_rom(0x113c8); // ll_hw_set_trx
-    CHECK(rom_test_chip.read(0x40031004, 4) == 0x10);
+    CHECK(rom_test_chip.read(0x40031004, 4) == 0x010102);
     invoke_radio_rom(0x11264); // ll_hw_set_rtx
-    CHECK(rom_test_chip.read(0x40031004, 4) == 0x12);
+    CHECK(rom_test_chip.read(0x40031004, 4) == 0x010103);
     invoke_radio_rom(0x11174, 1); // ll_hw_set_irq
     CHECK(rom_test_chip.read(0x4003100c, 4) == 1);
     rom_test_chip.write(0x40031400, 0x78563412, 4);
@@ -271,6 +272,8 @@ int main() {
     rom_test_chip.write(0x40031403, 0x5a, 1);
     invoke_radio_rom(0x112b8); // ll_hw_set_stx
     invoke_radio_rom(0x10cf8); // ll_hw_go
+    CHECK(rom_test_chip.read(0x4003100c, 4) == 1); // ll_hw_go uses MD-only IRQs
+    CHECK((rom_test_chip.read(0x40030094, 4) & 0xffu) == 0x2b); // clamped channel 2 TP cap
     CHECK(phy_air.frames().size() == 1);
     if (!phy_air.frames().empty()) {
         CHECK(phy_air.frames()[0].payload == std::vector<std::uint8_t>({0x01, 0x00, 0x5a}));

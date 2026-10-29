@@ -146,10 +146,10 @@ constexpr std::uint32_t RadioIrqCokZephyr = 1u << 1;
 constexpr std::uint32_t RadioIrqRto = 1u << 2;
 constexpr std::uint32_t RadioIrqRtoZephyr = 1u << 3;
 constexpr std::uint32_t RadioIrqMask = 0x3fffu;
-constexpr std::uint32_t RadioModeStx = 0x00;
-constexpr std::uint32_t RadioModeSrx = 0x01;
-constexpr std::uint32_t RadioModeTrx = 0x10;
-constexpr std::uint32_t RadioModeRtx = 0x12;
+constexpr std::uint32_t RadioModeStx = 0x000100;
+constexpr std::uint32_t RadioModeSrx = 0x010001;
+constexpr std::uint32_t RadioModeTrx = 0x010102;
+constexpr std::uint32_t RadioModeRtx = 0x010103;
 constexpr std::uint32_t RomLlIrqHandler = 0x4e25;
 constexpr std::uint32_t RomGpioIrqHandler = 0x112d;
 constexpr std::uint32_t RomTimerIrqDispatch = 0x17ff1; // Private host trap; no exported ROM symbol.
@@ -683,8 +683,27 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             // ll_hw_clr_irq() writes the SDK's 14-bit IRQ mask to the W1C
             // status register (same sequence as phy_hw_go() in PHY+).
             write_register(RadioLlBase + 0x14, 0x3fffu, 4);
-        } else if (address == 0x10cf8 || address == 0x11420) {
-            // Both exported entries start the mode configured in LL_HW+0x04.
+        } else if (address == 0x10cf8) {
+            // ll_hw_go() clears pending status and selects MD-only interrupts
+            // before triggering the configured LL mode. The SDK then updates
+            // RF TP calibration from its two RAM-resident channel endpoints.
+            write_register(RadioLlBase + 0x14, RadioIrqMask, 4);
+            write_register(RadioLlBase + 0x0c, RadioIrqMd, 4);
+            write_register(RadioLlBase, 1, 4);
+            std::uint32_t channel = rf_registers_[RadioRfBase + 0xb4] & 0xffu;
+            channel = std::clamp(channel, 2u, 80u);
+            std::uint8_t tp0 = 0, tp1 = 0;
+            if (core_.read_memory(RfTpCal0, &tp0, sizeof tp0) &&
+                core_.read_memory(RfTpCal1, &tp1, sizeof tp1)) {
+                const std::uint32_t index = (channel - 2) >> 1;
+                const std::uint32_t cap = tp0 > tp1 ?
+                    ((static_cast<std::uint32_t>(tp0) << 5) -
+                     static_cast<std::uint32_t>(tp0 - tp1) * index + 16) >> 5 : tp0;
+                const std::uint32_t current = rf_registers_[RadioRfBase + 0x94];
+                write_register(RadioRfBase + 0x94, (current & ~0xffu) | (cap & 0xffu), 4);
+            }
+        } else if (address == 0x11420) {
+            // ll_hw_trigger() only starts the mode already configured by the caller.
             write_register(RadioLlBase, 1, 4);
         } else if (address == 0x11174) {
             // ll_hw_set_irq(mask) maps to LL_HW+0x0c, as the SDK's PHY+
@@ -726,6 +745,7 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                 address == 0x112a4 ? RadioModeSrx :
                 address == 0x112b8 ? RadioModeStx : RadioModeTrx;
             ll_registers_[RadioLlBase + 0x04] = mode;
+            ll_registers_[RadioLlBase + 0x38] = 0x7;
         } else if (address == 0x110b0) {
             rx_fifo_.fill(0);
             rx_fifo_read_ = 0;
@@ -746,7 +766,7 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
         } else if (address == 0x10cdc) {
             // Return the current LL_HW operation mode; the symbol is exported
             // by the SDK ROM map but its declaration is omitted from headers.
-            core_.set_reg(0, ll_registers_[RadioLlBase + 0x04]);
+            core_.set_reg(0, ll_registers_[RadioLlBase + 0x04] & 0x0fu);
         } else if (address == 0x15cc8) {
             // timer.h wraps fine-time deltas at BASE_TIME_UNITS. Core cycles
             // are the only exposed 16 MHz clock in this model.

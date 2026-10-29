@@ -293,14 +293,20 @@ the observed `LL_Rand` call returns success and fills the requested 1..255
 bytes with deterministic xorshift output. This is not cryptographic
 randomness. The observed `rtc_get_counter` call returns the model's AON RTC count.
 The PHY62 SDK places `ll_hw_*` declarations under its BLE controller, but the
-PHY+ example also uses those helpers for Zigbee. The model implements the
-observed mode selections (`STX`, `SRX`, `TRX`, `RTX`), IRQ status/mask/clear,
-go/trigger, FIFO reset, `ll_hw_get_tr_mode`, `ll_hw_get_irq_status`,
+PHY+ example also uses those helpers for Zigbee. The four mode helpers write
+`0x000100` (`STX`), `0x010001` (`SRX`), `0x010102` (`TRX`), or `0x010103`
+(`RTX`) to LL+`0x04`, and write `7` to LL+`0x38`; `ll_hw_get_tr_mode()` returns
+the low nibble of LL+`0x04`. `ll_hw_go()` clears the `0x3fff` W1C status mask,
+selects `MD`-only interrupts, triggers LL+`0x00`, and updates RF+`0x94` from
+the two RAM-resident TP calibration endpoints and the clamped RF channel index.
+`ll_hw_trigger()` only strobes LL+`0x00`. The model implements these contracts,
+IRQ status/mask/clear, FIFO reset, `ll_hw_get_irq_status`,
 `ll_hw_read_rfifo_zb`, and `read_current_fine_time` against the modeled
-baseband registers and FIFOs. The Zigbee FIFO helper copies the length byte,
-PSDU and FCS to firmware memory and returns the packet length and inferred
-RSSI footer. The status register exposes the SDK ROM layout (`MD` bit 0,
-`RTO` bit 2, `COK` bit 10) and the PB-03F Zephyr driver's compact layout
+baseband registers and FIFOs. Only standalone TX and RX modes currently drive
+the shared air; `TRX` and `RTX` remain register-only. The Zigbee FIFO helper
+copies the length byte, PSDU and FCS to firmware memory and returns the packet
+length and inferred RSSI footer. The status register exposes the SDK ROM
+layout (`MD` bit 0, `RTO` bit 2, `COK` bit 10) and the PB-03F Zephyr driver's compact layout
 (`COK` bit 1, `RTO` bit 3) for the same completion; clearing either alias
 clears the shared event. This reconciles the two checked firmware contracts,
 whose observed bit definitions differ. Fine time uses the 16 MHz core cycle
