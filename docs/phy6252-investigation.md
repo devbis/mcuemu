@@ -591,7 +591,9 @@ exchanged 9 uplink NWK frames (5 unicast) and 6 downlink frames. The pcap again
 has 76 frames, all sourced by the coordinator or sampleLight; TS0001 emitted
 none. After correcting the `ll_hw_read_rfifo_zb` return/length outputs and SDK
 RSSI footer, the rerun's pcap was byte-identical; these ROM-contract fixes do
-not change this first-boot stall. The radio medium recorded six decodable
+not change this first-boot stall. The later `LL+0x54` pointer and streaming
+FIFO implementation also leaves this 20-second pcap byte-identical to the
+previous capture. The radio medium recorded six decodable
 channel-11 frames at TS0001,
 including the sampleLight beacon request and coordinator response at 6.202 s
 and 6.221 s. Its UART reaches `zb bdb devNetOpt = 0`, but no association or
