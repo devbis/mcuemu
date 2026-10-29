@@ -364,7 +364,8 @@ Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
 instruction tracing for a PC interval and prints registers on a fault.
 `--trace-stack` reports when MSP or PSP leaves or returns to the PHY6252 SRAM range,
-with the preceding instruction address. UART0 is exposed as `mcu.uart0`.
+with the preceding instruction address. `--dump-memory ADDRESS:COUNT` prints
+bytes from the requested range after the run. UART0 is exposed as `mcu.uart0`.
 Firmware inputs can be the package beginning at physical flash offset `0x2000`
 or a 512 KiB full flash dump; keep local images outside the repository.
 For the TS0001 capture setup, place the full dump at

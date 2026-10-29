@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cmath>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <iterator>
 #include <limits>
@@ -11,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace phy6252emu {
 namespace {
@@ -28,6 +30,7 @@ int run_command(int argc, char **argv) {
     std::uint64_t steps = 0, duration_ns = 0;
     bool trace_stack = false;
     std::optional<std::pair<std::uint32_t, std::uint32_t>> trace_range;
+    std::vector<std::pair<std::uint32_t, std::size_t>> memory_dumps;
     for (int i = 2; i < argc; ++i) {
         const std::string option = argv[i];
         if (option == "--firmware" && i + 1 < argc) firmware = argv[++i];
@@ -58,9 +61,28 @@ int run_command(int argc, char **argv) {
             if (!duration_ns) throw std::invalid_argument("duration is shorter than one nanosecond");
         } else if (option == "--trace-stack") {
             trace_stack = true;
+        } else if (option == "--dump-memory" && i + 1 < argc) {
+            const std::string range = argv[++i];
+            const std::size_t separator = range.find(':');
+            if (separator == std::string::npos || range.find(':', separator + 1) != std::string::npos)
+                throw std::invalid_argument("--dump-memory expects ADDRESS:COUNT");
+            const std::uint32_t address = parse_address(range.substr(0, separator));
+            const std::string count_text = range.substr(separator + 1);
+            if (count_text.empty())
+                throw std::invalid_argument("--dump-memory expects ADDRESS:COUNT");
+            std::size_t end = 0;
+            const unsigned long long count = std::stoull(count_text, &end, 0);
+            if (end != count_text.size() || count == 0 || count > 0x100000)
+                throw std::invalid_argument("--dump-memory count must be in 1..1048576");
+            if (static_cast<std::uint64_t>(address) + count >
+                static_cast<std::uint64_t>(std::numeric_limits<std::uint32_t>::max()) + 1)
+                throw std::invalid_argument("--dump-memory range wraps the address space");
+            memory_dumps.emplace_back(address, static_cast<std::size_t>(count));
         } else if (option == "--help" || option == "-h") {
             std::cout << "Usage: mcuemu run --model PHY6252 --firmware IMAGE [--steps N] [--for DURATION]\n"
-                         "       [--trace-pc-range START:END] [--trace-stack]\n";
+                         "       [--trace-pc-range START:END] [--trace-stack]\n"
+                         "       [--dump-memory ADDRESS:COUNT]...\n"
+                         "--dump-memory prints bytes from the end of the run.\n";
             return 0;
         } else throw std::invalid_argument("unknown or incomplete option: " + option);
     }
@@ -95,6 +117,19 @@ int run_command(int argc, char **argv) {
     if (!output.empty()) std::cout.write(reinterpret_cast<const char *>(output.data()), output.size());
     std::cout << "\nmodel: PHY6252\ninstructions: " << chip.core().instructions()
               << "\ncycles: " << chip.core().cycles() << "\npc: 0x" << std::hex << chip.core().pc() << std::dec << '\n';
+    for (const auto &[address, count] : memory_dumps) {
+        std::vector<std::uint8_t> bytes(count);
+        const bool readable = chip.core().read_memory(address, bytes.data(), bytes.size());
+        std::cout << "memory 0x" << std::hex << address << std::dec << ':';
+        if (!readable) {
+            std::cout << " unreadable";
+        } else {
+            for (std::uint8_t byte : bytes)
+                std::cout << ' ' << std::hex << std::setw(2) << std::setfill('0')
+                          << static_cast<unsigned>(byte) << std::setfill(' ') << std::dec;
+        }
+        std::cout << '\n';
+    }
     if (result.reason == cortexm::StopReason::Fault) { std::cerr << "CPU fault: " << result.message << '\n'; return 1; }
     if (result.reason == cortexm::StopReason::Halted) std::cout << "stop: " << result.message << '\n';
     else if (result.reason == cortexm::StopReason::StepLimit) std::cout << "stop: instruction limit\n";
