@@ -303,6 +303,8 @@ int main() {
     CHECK((radio_irq_status & 1u) != 0); // LIRQ_MD
     CHECK((radio_irq_status & (1u << 10)) != 0); // LIRQ_COK
     CHECK((radio_irq_status & (1u << 1)) != 0); // PB-03F Zephyr COK alias
+    CHECK(static_cast<std::int8_t>(rom_test_chip.read(0x400300e4, 4) >> 24) == -50);
+    CHECK((rom_test_chip.read(0x400300e8, 4) >> 24) == 50); // SDK RF RSSI is positive -dBm
     invoke_radio_rom(0x10bbc); // ll_hw_get_irq_status
     CHECK(rom_test_chip.core().reg(0) == radio_irq_status);
     constexpr std::uint32_t radio_packet = 0x1fff2300;
@@ -330,7 +332,8 @@ int main() {
           received_packet[2] == 0x00 && received_packet[3] == 0xa5);
     CHECK(received_packet[6] == 0 && received_packet[7] == 0);
     CHECK((received_foot0 & 0x00ffffffu) == 2);
-    CHECK(received_foot1 == 0);
+    CHECK((received_foot0 >> 24) == 0);
+    CHECK((received_foot1 >> 24) == 50);
     rom_test_chip.write(0x40031014, 1u << 1, 4); // Zephyr W1C clears the SDK COK alias too
     CHECK(rom_test_chip.read(0x40031010, 4) == 1u); // LIRQ_MD remains pending
     invoke_radio_rom(0x110b0); // ll_hw_rst_rfifo

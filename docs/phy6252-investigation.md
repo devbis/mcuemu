@@ -306,8 +306,11 @@ baseband registers and FIFOs. Only standalone TX and RX modes currently drive
 the shared air; `TRX` and `RTX` remain register-only. The Zigbee FIFO helper
 copies FIFO words containing the length byte, PSDU and FCS to firmware memory;
 it returns the copied word count (`1 + (blen >> 2)`) and writes `blen + 1` to
-`pktLen`, matching the SDK helper contract. The model supplies an inferred RSSI
-footer. The status register exposes the SDK ROM
+`pktLen`, matching the SDK helper contract. SDK callers treat the high byte of
+`pktFoot1` and RF+`0xe8` as a positive RSSI magnitude; the model keeps RF+`0xe4`
+in the signed form used by the observed Zephyr CCA path. Carrier sensitivity
+and frequency offset are not modeled beyond the inferred footer defaults. The
+status register exposes the SDK ROM
 layout (`MD` bit 0, `RTO` bit 2, `COK` bit 10) and the PB-03F Zephyr driver's compact layout
 (`COK` bit 1, `RTO` bit 3) for the same completion; clearing either alias
 clears the shared event. This reconciles the two checked firmware contracts,
@@ -543,7 +546,10 @@ A same-channel check used the SDK's `apps/sampleGW` sources, with only
 active channel-11 network: `sampleLight` associated at 9.045 s as `0x3acc` and
 exchanged 9 uplink NWK frames (5 unicast) and 6 downlink frames. The pcap again
 has 76 frames, all sourced by the coordinator or sampleLight; TS0001 emitted
-none. The radio medium recorded six decodable channel-11 frames at TS0001,
+none. After correcting the `ll_hw_read_rfifo_zb` return/length outputs and SDK
+RSSI footer, the rerun's pcap was byte-identical; these ROM-contract fixes do
+not change this first-boot stall. The radio medium recorded six decodable
+channel-11 frames at TS0001,
 including the sampleLight beacon request and coordinator response at 6.202 s
 and 6.221 s. Its UART reaches `zb bdb devNetOpt = 0`, but no association or
 other transmission follows. Channel mismatch alone therefore does not explain

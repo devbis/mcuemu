@@ -718,9 +718,10 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             const std::uint32_t foot0_out = core_.reg(2);
             const std::uint32_t foot1_out = core_.reg(3);
             const std::uint16_t packet_length = rx_fifo_[0];
-            const std::uint32_t foot0 =
-                (static_cast<std::uint32_t>(static_cast<std::uint8_t>(radio_rx_rssi_)) << 24) | 2u;
-            constexpr std::uint32_t foot1 = 0;
+            constexpr std::uint32_t foot0 = 2; // inferred small carrier-frequency offset
+            const std::uint32_t rssi_magnitude = static_cast<std::uint32_t>(
+                std::clamp(-static_cast<int>(radio_rx_rssi_), 0, 127));
+            const std::uint32_t foot1 = rssi_magnitude << 24;
             const std::size_t fifo_words = 1 + (packet_length >> 2);
             const std::size_t fifo_bytes = fifo_words * sizeof(std::uint32_t);
             const std::uint16_t reported_length = packet_length + 1;
@@ -1923,13 +1924,16 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
         } else if (offset == 0xe4 || offset == 0xe8) {
             if (offset == 0xe8 && !rf_sample_e8_warning_logged_) {
                 std::fprintf(stderr,
-                             "PHY6252: RF register 0x400300e8 is read by TS0001 calibration code; returning the virtual-air RSSI sample (inferred)\n");
+                             "PHY6252: RF register 0x400300e8 is read by TS0001 calibration code; returning positive RSSI magnitude from virtual air (inferred)\n");
                 rf_sample_e8_warning_logged_ = true;
             }
             const std::int8_t rssi = radio_rx_rssi_ > -100 ? radio_rx_rssi_ :
                                      radio_energy_dbm(core_.cycles_to_ns(core_.cycles()));
             value = rf_registers_[aligned] & 0x00ffffffu;
-            value |= static_cast<std::uint32_t>(static_cast<std::uint8_t>(rssi)) << 24;
+            const std::uint8_t high = offset == 0xe8 ?
+                static_cast<std::uint8_t>(std::clamp(-static_cast<int>(rssi), 0, 127)) :
+                static_cast<std::uint8_t>(rssi);
+            value |= static_cast<std::uint32_t>(high) << 24;
         } else if (offset == 0x94 && rf_registers_.find(aligned) == rf_registers_.end()) {
             value = 0x20; // calibration capacitor value used by the Zephyr driver's fallback range
         } else {
