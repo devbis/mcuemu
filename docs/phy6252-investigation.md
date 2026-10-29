@@ -36,7 +36,8 @@ memory-map guarantees.
 
 UART0 supports polling byte input/output, without interrupt or bit timing.
 GPIO0..GPIO22 support data, direction, input, AON pulls and basic edge/level
-interrupts; alternate pad functions are not modeled. Timer1..Timer6 share the
+interrupts; `SWPORTA_CTL` at `0x40008008` is retained, but its pad-control
+effects and alternate pad functions are not modeled. Timer1..Timer6 share the
 SDK's AP_TIM register layout and a 4 MHz timer source, providing down-counting,
 one-shot alarms and IRQs 20..25. The SDK Timer5/6 driver documents the 4 MHz
 source and applies a factor of four when programming microsecond intervals;
@@ -48,12 +49,17 @@ direct image boot starts it in the state inferred for the skipped ROM board-init
 path. The AON RTC clock-select, control, compare and flag registers are stored,
 but compare events and IRQ generation are not. The four retained AON sleep
 words at `0x4000f0c0..0x4000f0cc` are read/write storage, as indicated by the
-SDK's sleep/tracking fields. The watchdog uses the SDK's
+SDK's sleep/tracking fields. AON `REG_S11` at `0x4000f0a8` stores the SDK sleep
+flag. With an external ROM, the `0xa5a55a5a` write to `PWRSLP` at `0x4000f004`
+waits for enabled RTC compare 0 and resets through the external ROM vector;
+this wake path is inferred from the related SDK and has not been checked on
+hardware. The watchdog uses the SDK's
 2–256 second timeout selections, feed key and IRQ 10;
 its clock source and reset details are inferred. PCR software reset and clock
 registers, including SW_CLK1 and APB_CLK, retain writes; clock gating and reset
 effects are not enforced. AP_CACHE and the observed AP_SPIF registers are
-write-backed. DMA channel 3 supports the observed
+write-backed. AP_SPIF write-protection registers at `0x4000c850..0x4000c858`
+retain their values, but do not prevent flash writes. DMA channel 3 supports the observed
 software-triggered memory copy used with SPIF remapping; other channels and
 request sources are not modeled. The ADC and a complete clock tree are not
 implemented.
@@ -162,6 +168,11 @@ between the dump's full vector wrappers and the direct-boot callback table has
 not been resolved. The dump remains an external analysis input; no ROM bytes
 or Ghidra project files are stored in the repository.
 
+The supplied `SoC_info.txt` reports the attached flash ID as `0x1364c8` and a
+512 KiB capacity. The external-ROM path accepts the SDK's three-byte `RDID`
+controller command and returns `c8 64 13` in wire order. This is tied to the
+captured module; flash IDs are not yet configurable for other PHY6252 boards.
+
 At `0xa2e0`, Ghidra sees a real function prologue, global-pointer setup, a
 switch-helper call, and a later return in the ROM dump. The current shim skips
 those effects. The SDK places this address within its `ble_crc24_gen` symbol
@@ -218,6 +229,27 @@ unavailable data-register access instead of filling in unknown device data.
 The supplied `SoC_info.txt` reports four zero-valued blocks, but no separate
 raw 32-byte eFuse file was included.
 
+The related SDK's `rf_calibrate1()` runs `rf_tpCal_gen_cap_arrary()`, then
+`rf_rxDcoc_cfg(88, 1, &g_rfPhyRxDcIQ)`, then `rc32k_calibration()`. The RAM
+snapshot contains `g_rfPhyRxDcIQ = 0x20200000`, which is the fallback the SDK
+sets before polling `RF+0xec`. The model retains the documented DCOC setup
+writes and reports the calibration-not-ready state at `RF+0xec`, allowing the
+SDK fallback path to proceed; it does not model the analog conversion. It
+retains AON `PMCTL1` and seeds it from the register snapshot (`0x01064040`),
+which the SDK uses for RC32K cap-bank control. The captured `cal_ro2 = 0x100`
+has no RC32K-ready bit set, so the related SDK's bounded calibration loop
+leaves its result at zero. These AON values are module-specific observations.
+
+The captured RAM bytes at `g_rfPhyTpCal0..g_rfPhyTpCal1_2Mbps` are
+`2d 23 47 45`. The related SDK stores each `rf_tp_cal()` result plus two, so
+the inferred `kCal` values are `2b 21 45 43`. A raw four-byte file with those
+values can be passed using `mcuemu run --rf-calibration DUMP` or
+`rf_calibration: DUMP` in `sim`; the emulator exposes them only after the
+matching RF calibration trigger, channel, and `fDev` are observed. This
+derivation depends on the related PHY6222 SDK and the supplied unit snapshot.
+It is not an embedded default and does not establish that this ROM or RF
+calibration contract matches PB-03F silicon.
+
 With that ROM and the TS0001 image, emulation passes the early eFuse path and
 reaches PHY initialization. Disassembly of the copied image shows a consecutive
 setup table writing `0x40030054..0x40030074`; the model retains those values and
@@ -225,14 +257,25 @@ warns that their PHY6252 effects are unknown. The image then writes `0x0e` to
 `0x400300a0`; the related PHY6222 SDK calls this the PLL auto override. That
 write is also retained with a warning, without applying an analog effect.
 
-At 19.06 ms, TS0001 reads `0x400300f4` and the external-ROM run faults there.
-The related SDK's `rf_tp_cal` triggers RF calibration, waits, then extracts
-`kCal` from bits 16..23 of this register and returns it. The supplied device
-snapshot has no value for this calibration result, and the available SDK does
-not describe how the PHY6252 produces it, so the model leaves the read
-unsupported rather than inventing a result. A 15-second pcap run with the
-TS0001 image and gateway contains no successful association response; relay
-network support remains unverified.
+The external-ROM run initially stopped on `RF+0xf4` at 19.06 ms. The related
+SDK's `rf_tp_cal` triggers RF calibration and extracts `kCal` from bits 16..23
+of this register. Supplying the four inferred bytes lets the image pass that
+read and enter RX DCOC setup. The model then reaches the three-byte `RDID`
+command (`0x9fa00001`) at `0x4000c890` and returns the captured module's JEDEC
+ID. It also passes the later ROM initialization and reaches `PWRSLP` at
+454.7235 ms. On RTC compare wake, the captured ROM enters its image-copy path
+and faults at `PC=0x00000e8a` reading `0x22010000`.
+
+This address follows from the supplied image table and the ROM disassembly.
+The first XIP record has source and destination `0x11010000`, size `0xcd8`;
+another has source and destination `0x1100a000`, size `0x6000`. ROM function
+`0x0000a3c1` adds `0x11000000` to each record's source before calling its
+`memcpy`, producing the invalid `0x22010000` source. `SoC_info.txt` identifies
+the ROM as PHY6222M005, while the firmware is the TS0001 PHY6252 image. The
+evidence points to an image/ROM loader-format or revision mismatch; the model
+does not map the invalid address or patch the firmware table. A 5-second pcap
+check fails with no successful association response, so relay network support
+remains unverified.
 
 With the default host-trap ROM, the corrected ABI and no eFuse dump, an
 8-second saved-state TS0001 run reads

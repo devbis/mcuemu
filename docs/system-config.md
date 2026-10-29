@@ -98,6 +98,18 @@ last 32 KiB are erased (`0xff`). The dump's interrupt vector table is used as
 provided. ROM dumps remain external test inputs and should only be used when
 their revision matches the firmware under investigation.
 
+For PHY6252 RF power calibration, `rf_calibration:` optionally supplies four
+raw `kCal` bytes in this order: channel 2 and 66 at `fDev=0`, then channel 2
+and 66 at `fDev=1`. This external input replaces the analog `RF+0xf4` result
+when the related SDK's calibration trigger is observed. It is required only by
+ROM/firmware paths that execute that calibration; the emulator does not embed
+unit-specific results.
+
+The external-ROM PHY6252 path currently returns the captured P622ZB2S flash
+JEDEC ID (`c8 64 13`) for the documented three-byte `RDID` command. This ID
+comes from that module's `SoC_info.txt`; other flash variants are not yet
+configurable.
+
 ## Inserting devices from files
 
 A `devices` entry may be an insertion instead of an inline device:

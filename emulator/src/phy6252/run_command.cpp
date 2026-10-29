@@ -29,6 +29,7 @@ int run_command(int argc, char **argv) {
     std::string firmware;
     std::optional<std::string> rom_path;
     std::optional<std::string> efuse_path;
+    std::optional<std::string> rf_calibration_path;
     std::uint64_t steps = 0, duration_ns = 0;
     bool trace_stack = false;
     std::optional<std::pair<std::uint32_t, std::uint32_t>> trace_range;
@@ -38,6 +39,7 @@ int run_command(int argc, char **argv) {
         if (option == "--firmware" && i + 1 < argc) firmware = argv[++i];
         else if (option == "--rom" && i + 1 < argc) rom_path = argv[++i];
         else if (option == "--efuse" && i + 1 < argc) efuse_path = argv[++i];
+        else if (option == "--rf-calibration" && i + 1 < argc) rf_calibration_path = argv[++i];
         else if (option == "--model" && i + 1 < argc) ++i;
         else if (option == "--steps" && i + 1 < argc) {
             const std::string value = argv[++i];
@@ -84,7 +86,7 @@ int run_command(int argc, char **argv) {
             memory_dumps.emplace_back(address, static_cast<std::size_t>(count));
         } else if (option == "--help" || option == "-h") {
             std::cout << "Usage: mcuemu run --model PHY6252 --firmware IMAGE [--steps N] [--for DURATION]\n"
-                         "       [--rom DUMP] [--efuse DUMP]\n"
+                         "       [--rom DUMP] [--efuse DUMP] [--rf-calibration DUMP]\n"
                          "       [--trace-pc-range START:END] [--trace-stack]\n"
                          "       [--dump-memory ADDRESS:COUNT]...\n"
                          "--dump-memory prints bytes from the end of the run.\n";
@@ -111,6 +113,14 @@ int run_command(int argc, char **argv) {
         const std::vector<std::uint8_t> dump(
             (std::istreambuf_iterator<char>(efuse_input)), std::istreambuf_iterator<char>());
         chip.load_efuse_dump(dump);
+    }
+    if (rf_calibration_path) {
+        std::ifstream calibration_input(*rf_calibration_path, std::ios::binary);
+        if (!calibration_input)
+            throw std::runtime_error("cannot open RF calibration dump: " + *rf_calibration_path);
+        const std::vector<std::uint8_t> dump(
+            (std::istreambuf_iterator<char>(calibration_input)), std::istreambuf_iterator<char>());
+        chip.load_rf_calibration_dump(dump);
     }
     chip.load_firmware(image);
     chip.reset();

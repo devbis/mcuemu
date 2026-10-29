@@ -98,6 +98,8 @@ void Simulation::check_config(const SystemConfig &config) const {
                 (void)confine_path(*mcu.efuse);
             if (mcu.rom)
                 (void)confine_path(*mcu.rom);
+            if (mcu.rf_calibration)
+                (void)confine_path(*mcu.rf_calibration);
         }
         for (const PartConfig &part : device.parts)
             if (!part.script.empty())

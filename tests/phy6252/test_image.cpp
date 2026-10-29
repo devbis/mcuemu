@@ -141,6 +141,7 @@ int main() {
     CHECK(chip.read(0x40001068, 4) == 0);
     CHECK(chip.read(0x40001074, 4) == 1); // three 4 MHz ticks took 24 HCLK cycles
     chip.reset();
+    CHECK(chip.read(0x4000f018, 4) == 0x01064040); // captured AON PMCTL1
     CHECK(chip.read(0x4000f054, 4) == 0x8000); // captured efuse_cfg
     CHECK(chip.read(0x4000f058, 4) == 0); // captured chip_state
     CHECK(chip.read(0x4000f05c, 4) == 0x1f2); // captured cal_rw
@@ -149,6 +150,8 @@ int main() {
     CHECK(chip.read(0x4000f068, 4) == 0x100); // captured cal_ro2
     chip.write(0x4000f05c, 0x1234, 4);
     CHECK(chip.read(0x4000f05c, 4) == 0x1234);
+    chip.write(0x4000f018, 0x010640c0, 4); // SDK RC32K cap-bank ownership strobe
+    CHECK(chip.read(0x4000f018, 4) == 0x010640c0);
     chip.reset(); // reload the captured startup calibration values
     std::array<std::uint8_t, 2> rf_tp_cal{};
     CHECK(chip.core().read_memory(0x1fff0a44, rf_tp_cal.data(), rf_tp_cal.size()));
@@ -614,12 +617,25 @@ int main() {
     chip.write(0x4000f0a4, 7, 4); // GPIO32..34 wakeup mask
     CHECK(chip.read(0x4000f0a0, 4) == 0x12345678);
     CHECK(chip.read(0x4000f0a4, 4) == 7);
+    CHECK(chip.read(0x4000f0a8, 4) == 0); // captured REG_S11 sleep flag
+    chip.write(0x4000f0a8, 1, 4);
+    CHECK(chip.read(0x4000f0a8, 4) == 1);
+    chip.write(0x4000f0a8, 0, 4);
+    CHECK(chip.read(0x4000f0a8, 4) == 0);
     CHECK(chip.read(0x4000f0b0, 4) == 0); // no modeled GPIO wake event
     CHECK(chip.read(0x4000f0b4, 4) == 0);
     chip.write(0x4000f140, 0x34, 4); // eFuse programming control, not OTP contents
     chip.write(0x4000f144, 0x56, 4);
     CHECK(chip.read(0x4000f140, 4) == 0x34);
     CHECK(chip.read(0x4000f144, 4) == 0x56);
+    chip.write(0x40008008, 0x12345678, 4); // observed SWPORTA_CTL, pad effect unknown
+    CHECK(chip.read(0x40008008, 4) == 0x12345678);
+    chip.write(0x4000c850, 0, 4); // SPIF lower write-protection register
+    chip.write(0x4000c854, 0x10, 4);
+    chip.write(0x4000c858, 2, 4);
+    CHECK(chip.read(0x4000c850, 4) == 0);
+    CHECK(chip.read(0x4000c854, 4) == 0x10);
+    CHECK(chip.read(0x4000c858, 4) == 2);
 
     auto invoke_rom = [&chip](std::uint32_t pc, std::uint32_t r0,
                               std::uint32_t r1, std::uint32_t r2,
@@ -703,6 +719,30 @@ int main() {
     CHECK(chip.core().read_memory(efuse_buffer, efuse_data, sizeof efuse_data));
     CHECK(std::equal(efuse_dump.begin() + 24, efuse_dump.begin() + 32,
                      std::begin(efuse_data)));
+    const std::vector<std::uint8_t> rf_calibration = {0x2b, 0x21, 0x45, 0x43};
+    chip.load_rf_calibration_dump(rf_calibration);
+    chip.write(0x400300b4, 2, 4);
+    chip.write(0x400300d8, 1u << 18, 4); // fDev 0
+    chip.write(0x400300a4, 0, 4);
+    chip.write(0x400300a4, 0x114, 4); // trigger rf_tp_cal
+    CHECK(chip.read(0x400300f4, 4) == (0x2bu << 16));
+    chip.write(0x400300b4, 66, 4);
+    chip.write(0x400300a4, 0x114, 4);
+    CHECK(chip.read(0x400300f4, 4) == (0x21u << 16));
+    chip.write(0x400300b4, 2, 4);
+    chip.write(0x400300d8, 2u << 18, 4); // fDev 1
+    chip.write(0x400300a4, 0x114, 4);
+    CHECK(chip.read(0x400300f4, 4) == (0x45u << 16));
+    chip.write(0x400300b4, 66, 4);
+    chip.write(0x400300a4, 0x114, 4);
+    CHECK(chip.read(0x400300f4, 4) == (0x43u << 16));
+    bool short_rf_calibration_rejected = false;
+    try {
+        chip.load_rf_calibration_dump(std::vector<std::uint8_t>(3));
+    } catch (const std::invalid_argument &) {
+        short_rf_calibration_rejected = true;
+    }
+    CHECK(short_rf_calibration_rejected);
     chip.write(0x400300a4, 0x140, 4); // opaque external-ROM RF init register
     CHECK(chip.read(0x400300a4, 4) == 0x140);
     chip.write(0x4003008c, 0x00800000, 4); // opaque external-ROM RF init register
@@ -717,6 +757,13 @@ int main() {
     CHECK(chip.read(0x40030074, 4) == 0x1c222e28);
     chip.write(0x400300a0, 0x0e, 4); // opaque PLL auto override
     CHECK(chip.read(0x400300a0, 4) == 0x0e);
+    chip.write(0x400300a8, 0x40, 4); // SDK RX DCOC LO override
+    chip.write(0x400300ac, 0x50, 4); // SDK RX LO and PLL buffer
+    chip.write(0x40030078, 0x0d3564, 4); // SDK RX DCOC phase-search setup
+    CHECK(chip.read(0x400300ec, 4) == 0); // captured calibration uses SDK default result
+    CHECK(chip.read(0x400300a8, 4) == 0x40);
+    chip.write(0x400300a8, 0, 4);
+    CHECK(chip.read(0x400300a8, 4) == 0);
     chip.write(0x4003102c, 0x00010000, 4); // opaque external-ROM LL setup register
     CHECK(chip.read(0x4003102c, 4) == 0x00010000);
     chip.write(0x40031024, 0x1f4, 4); // opaque external-ROM LL timing register
@@ -813,6 +860,9 @@ int main() {
     CHECK(chip.core().write_memory(rom_stack, &zero, sizeof zero));
     chip.core().set_reg(13, rom_stack);
     chip.core().set_reg(3, 0);
+    chip.write(0x4000c890, 0x9fa00001, 4); // RDID, three-byte response
+    CHECK(chip.read(0x4000c890, 4) == 0x9fa00001);
+    CHECK(chip.read(0x4000c8a0, 4) == 0x001364c8); // captured FlashID 0x1364c8
     invoke_rom(0x16dc4, 0, 1, 0x0801003b, 1001);
     CHECK(chip.core().reg(0) == 0);
     CHECK(chip.read(0x4000c804, 4) == 0x0801003b);
@@ -835,6 +885,14 @@ int main() {
     CHECK(chip.core().reg(0) == 0);
     CHECK(chip.core().read_memory(status_destination, &status_byte, 1));
     CHECK(status_byte == 0);
+    CHECK(chip.core().write_memory(rom_stack, spif_command_args, sizeof spif_command_args));
+    invoke_rom(0x16d48, 0x9f, 0, 3, 1004);
+    CHECK(chip.core().reg(0) == 0);
+    const std::uint32_t jedec_destination = BootImage::RamBase + 0x3210;
+    std::array<std::uint8_t, 3> jedec_bytes{};
+    invoke_rom(0x1713c, jedec_destination, jedec_bytes.size(), 0, 1005);
+    CHECK(chip.core().read_memory(jedec_destination, jedec_bytes.data(), jedec_bytes.size()));
+    CHECK((jedec_bytes == std::array<std::uint8_t, 3>{0xc8, 0x64, 0x13}));
     chip.write(0x4000f024, 2, 4); // RTC clear strobe
     CHECK(chip.read(0x4000f028, 4) == 0);
     chip.write(0x4000f02c, 100, 4);

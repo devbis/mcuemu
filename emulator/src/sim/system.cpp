@@ -140,6 +140,14 @@ const McuRegistry &McuRegistry::builtin() {
                     (std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
                 mcu->chip().load_efuse_dump(dump);
             }
+            if (config.rf_calibration) {
+                std::ifstream input(*config.rf_calibration, std::ios::binary);
+                if (!input)
+                    throw std::invalid_argument("cannot open RF calibration dump: " + *config.rf_calibration);
+                const std::vector<std::uint8_t> dump(
+                    (std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+                mcu->chip().load_rf_calibration_dump(dump);
+            }
             return mcu;
         });
         return r;

@@ -29,6 +29,8 @@ public:
     // A supplied 32-byte dump contains four blocks in order; no dump means all
     // blocks are unprogrammed because their device-specific contents are unknown.
     void load_efuse_dump(const std::vector<std::uint8_t> &dump);
+    // Four raw kCal bytes: channel 2/66 at fDev 0, then channel 2/66 at fDev 1.
+    void load_rf_calibration_dump(const std::vector<std::uint8_t> &dump);
     void reset();
     cortexm::RunResult run(std::uint64_t until_cycle);
     cortexm::Core &core() noexcept { return core_; }
@@ -55,6 +57,9 @@ private:
     std::array<bool, 4> efuse_block_present_{};
     std::array<bool, 4> efuse_read_ready_{};
     std::array<bool, 4> efuse_missing_warning_logged_{};
+    std::array<std::uint8_t, 4> rf_tp_calibration_{};
+    bool rf_tp_calibration_present_{false};
+    bool rf_tp_calibration_pending_{false};
     std::uint8_t lcr_{0}, ier_{0}, dll_{0}, dlm_{0}, mcr_{0}, scratch_{0};
     std::deque<std::uint8_t> rx_;
     std::vector<std::uint8_t> tx_;
@@ -83,14 +88,21 @@ private:
     std::uint32_t rtc_epoch_count_{0};
     bool sleep_allowed_{false};
     std::uint32_t sleep_mode_{0};
+    bool system_sleep_request_{false};
+    bool system_sleeping_{false};
+    std::uint64_t system_sleep_wake_cycle_{0};
     bool unexported_init_hook_warned_{false};
     bool pendsv_dispatch_warning_logged_{false};
     bool ll_rand_warning_logged_{false};
     bool baseband_irq_dispatch_warning_logged_{false};
     bool gpio_irq_dispatch_warning_logged_{false};
+    bool gpio_control_warning_logged_{false};
     std::array<bool, 6> timer_irq_dispatch_warning_logged_{};
     bool ll_context_warning_logged_{false};
     bool rf_sample_e8_warning_logged_{false};
+    bool rf_rx_calibration_warning_logged_{false};
+    bool aon_pmctl1_warning_logged_{false};
+    bool spif_protection_warning_logged_{false};
     bool rf_a4_warning_logged_{false};
     bool rf_8c_warning_logged_{false};
     bool rf_a0_warning_logged_{false};
@@ -113,7 +125,7 @@ private:
         std::uint64_t last_cycle{0}, cycle_remainder{0};
     };
     std::array<TimerState, 6> timers_{};
-    std::uint32_t gpio_data_{0}, gpio_direction_{0};
+    std::uint32_t gpio_data_{0}, gpio_direction_{0}, gpio_control_{0};
     std::uint32_t gpio_interrupt_enable_{0}, gpio_interrupt_mask_{0x007fffff};
     std::uint32_t gpio_interrupt_type_{0}, gpio_interrupt_polarity_{0};
     std::uint32_t gpio_interrupt_status_{0}, gpio_input_{0};

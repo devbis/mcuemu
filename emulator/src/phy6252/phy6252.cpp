@@ -59,6 +59,9 @@ constexpr std::uint32_t SpifSramPartition = FlashControlBase + 0x818;
 constexpr std::uint32_t SpifRemap = FlashControlBase + 0x824;
 constexpr std::uint32_t SpifModeBit = FlashControlBase + 0x828;
 constexpr std::uint32_t SpifWriteCompletionControl = FlashControlBase + 0x838;
+constexpr std::uint32_t SpifLowWriteProtection = FlashControlBase + 0x850;
+constexpr std::uint32_t SpifUpWriteProtection = FlashControlBase + 0x854;
+constexpr std::uint32_t SpifWriteProtection = FlashControlBase + 0x858;
 constexpr std::uint32_t SpifCommand = FlashControlBase + 0x890;
 constexpr std::uint32_t SpifCommandAddress = FlashControlBase + 0x894;
 constexpr std::uint32_t SpifReadData = FlashControlBase + 0x8a0;
@@ -69,6 +72,9 @@ constexpr std::uint32_t SpifPollStatus = FlashControlBase + 0x8b0;
 constexpr std::uint32_t FlashSectorSize = 4096;
 constexpr std::uint32_t FlashReady = 0x80000000;
 constexpr std::uint32_t SpifReadStatus = 0x05900001;
+constexpr std::uint32_t SpifReadId = 0x9fa00001;
+// SoC_info.txt for the supplied P622ZB2S module records FlashID 0x1364c8.
+constexpr std::uint32_t CapturedFlashJedecId = 0x001364c8;
 constexpr std::uint32_t PcrReset = PcrBase;
 constexpr std::uint32_t PcrReset1 = PcrBase + 0x04;
 constexpr std::uint32_t PcrClock = PcrBase + 0x08;
@@ -90,7 +96,9 @@ constexpr std::uint32_t MuxPadEnable = 0x40003814;
 constexpr std::uint32_t MuxSelectBase = 0x40003818;
 constexpr std::uint32_t AonPullBase = 0x4000f008;
 constexpr std::uint32_t AonPullEnd = 0x4000f014;
+constexpr std::uint32_t AonPmctl1 = 0x4000f018;
 constexpr std::uint32_t AonPmctl2_0 = 0x4000f01c;
+constexpr std::uint32_t AonPowerSleep = 0x4000f004;
 constexpr std::uint32_t AonRtcControl = 0x4000f024;
 constexpr std::uint32_t AonRtcCount = 0x4000f028;
 constexpr std::uint32_t AonRtcClock = 0x4000f03c;
@@ -102,6 +110,7 @@ constexpr std::uint32_t AonWakeMask0 = 0x4000f0a0;
 constexpr std::uint32_t AonWakeMask1 = 0x4000f0a4;
 constexpr std::uint32_t AonWakeSource0 = 0x4000f0b0;
 constexpr std::uint32_t AonWakeSource1 = 0x4000f0b4;
+constexpr std::uint32_t AonSleepFlag = 0x4000f0a8;
 constexpr std::uint32_t AonEfuseDataBase = 0x4000f160;
 constexpr std::uint32_t AonEfuseSecurityState = 0x4000f180;
 constexpr std::uint32_t RadioClockControl = 0x4000f040;
@@ -173,9 +182,10 @@ bool phy_rf_register(std::uint32_t offset) {
     switch (offset) {
     case 0x00: case 0x0c: case 0x40: case 0x48: case 0x4c: case 0x50:
     case 0x54: case 0x58: case 0x5c: case 0x60: case 0x64: case 0x68: case 0x6c: case 0x70: case 0x74:
-    case 0x80: case 0x8c: case 0x90: case 0x94: case 0xa0: case 0xa4: case 0xb0: case 0xb4: case 0xb8: case 0xbc:
+    case 0x78: case 0x80: case 0x8c: case 0x90: case 0x94: case 0xa0: case 0xa4: case 0xa8: case 0xac:
+    case 0xb0: case 0xb4: case 0xb8: case 0xbc: case 0xc4: case 0xc8:
     case 0xcc: case 0xd0: case 0xd4: case 0xd8: case 0xdc: case 0xe0:
-    case 0xe4: case 0xe8: case 0x104: case 0x108: case 0x10c: case 0x124:
+    case 0xe4: case 0xe8: case 0xec: case 0x104: case 0x108: case 0x10c: case 0x124:
         return true;
     default:
         return false;
@@ -381,6 +391,13 @@ void Phy6252::load_efuse_dump(const std::vector<std::uint8_t> &dump) {
     efuse_read_ready_.fill(false);
 }
 
+void Phy6252::load_rf_calibration_dump(const std::vector<std::uint8_t> &dump) {
+    if (dump.size() != rf_tp_calibration_.size())
+        throw std::invalid_argument("PHY6252 RF calibration dump must be exactly 4 bytes");
+    std::copy(dump.begin(), dump.end(), rf_tp_calibration_.begin());
+    rf_tp_calibration_present_ = true;
+}
+
 void Phy6252::reset() {
     if (!run_address_)
         throw std::runtime_error("PHY6252 firmware has not been loaded");
@@ -417,6 +434,7 @@ void Phy6252::reset() {
     tx_.clear();
     control_registers_.clear();
     // Values captured from the supplied P622ZB2S AON register snapshot.
+    control_registers_[AonPmctl1] = 0x01064040;
     control_registers_[AonEfuseConfig] = 0x8000;
     control_registers_[AonChipState] = 0;
     control_registers_[AonCalReadWrite] = 0x1f2;
@@ -424,6 +442,7 @@ void Phy6252::reset() {
     control_registers_[AonCalReadOnly1] = 0;
     control_registers_[AonCalReadOnly2] = 0x100;
     efuse_read_ready_.fill(false);
+    rf_tp_calibration_pending_ = false;
     rf_registers_.clear();
     ll_registers_.clear();
     tx_fifo_.clear();
@@ -446,7 +465,7 @@ void Phy6252::reset() {
     wait_timer.load = std::numeric_limits<std::uint32_t>::max();
     wait_timer.current = wait_timer.load;
     wait_timer.control = TimerEnable | TimerInterruptMask;
-    gpio_data_ = gpio_direction_ = gpio_interrupt_enable_ = 0;
+    gpio_data_ = gpio_direction_ = gpio_control_ = gpio_interrupt_enable_ = 0;
     gpio_interrupt_mask_ = GpioMask;
     gpio_interrupt_type_ = gpio_interrupt_polarity_ = 0;
     gpio_interrupt_status_ = gpio_input_ = 0;
@@ -458,6 +477,9 @@ void Phy6252::reset() {
     watchdog_interrupt_pending_ = false;
     sleep_allowed_ = false;
     sleep_mode_ = 0;
+    system_sleep_request_ = false;
+    system_sleeping_ = false;
+    system_sleep_wake_cycle_ = 0;
     unexported_init_hook_warned_ = false;
     pendsv_dispatch_warning_logged_ = false;
     ll_rand_warning_logged_ = false;
@@ -490,6 +512,17 @@ void Phy6252::reset() {
 
 cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
     for (;;) {
+        if (system_sleeping_) {
+            if (system_sleep_wake_cycle_ > until_cycle) {
+                core_.advance_to(until_cycle);
+                return {cortexm::StopReason::Deadline, {}};
+            }
+            core_.advance_to(system_sleep_wake_cycle_);
+            system_sleeping_ = false;
+            // The captured ROM owns wake restoration. Resetting through its
+            // vector lets it inspect the retained AON sleep flag and RTC state.
+            core_.reset(0);
+        }
         auto result = core_.run(until_cycle);
         const auto pc = core_.pc();
         if (result.reason == cortexm::StopReason::Reset && !pending_fault_.empty()) {
@@ -521,6 +554,24 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             result.message = std::move(pending_fault_);
             pending_fault_.clear();
             return result;
+        }
+        if (result.reason == cortexm::StopReason::Reset && system_sleep_request_) {
+            system_sleep_request_ = false;
+            system_sleeping_ = true;
+            system_sleep_wake_cycle_ = std::numeric_limits<std::uint64_t>::max();
+            const std::uint32_t rtc_control = control_registers_[AonRtcControl];
+            constexpr std::uint32_t RtcCompare0Interrupt = 1u << 15;
+            constexpr std::uint32_t RtcCompare0Event = 1u << 20;
+            if ((rtc_control & (RtcCompare0Interrupt | RtcCompare0Event)) ==
+                (RtcCompare0Interrupt | RtcCompare0Event)) {
+                const std::uint64_t now_ns = core_.cycles_to_ns(core_.cycles());
+                const std::uint32_t current = rtc_count(now_ns);
+                const std::uint32_t delta = control_registers_[AonRtcCompare0] - current;
+                const std::uint64_t delay_ns =
+                    (static_cast<std::uint64_t>(delta) * 1000000000ull + 32767) / 32768;
+                system_sleep_wake_cycle_ = core_.ns_to_cycles(now_ns + delay_ns);
+            }
+            continue;
         }
         if (result.reason != cortexm::StopReason::Halted ||
             !((pc < RomSize) || (pc >= 0x10000000 && pc < 0x10000000 + RomSize))) {
@@ -1062,10 +1113,20 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                     (read_length << 16) | (write_length << 24);
                 control_registers_[SpifModeBit] = mode_bits & 0xffu;
                 control_registers_[SpifDelay] = dummy_cycles & 0xffu;
-                // Flash status commands return ready with WIP clear in this model.
-                if (op == 0x05u)
+                if (op == 0x05u && address_length == 0 && read_length == 2 && write_length == 0)
                     spif_read_data_ = 0;
-                core_.set_reg(0, 0);
+                else if (op == 0x9fu && address_length == 0 && read_length == 3 && write_length == 0)
+                    spif_read_data_ = CapturedFlashJedecId;
+                else {
+                    std::fprintf(stderr,
+                                 "PHY6252: unmodeled ROM spif_cmd opcode=0x%02x addrlen=%u rdlen=%u wrlen=%u\n",
+                                 op, address_length, read_length, write_length);
+                    spif_read_data_ = 0;
+                    core_.set_reg(0, static_cast<std::uint32_t>(-22));
+                }
+                if ((op == 0x05u && address_length == 0 && read_length == 2 && write_length == 0) ||
+                    (op == 0x9fu && address_length == 0 && read_length == 3 && write_length == 0))
+                    core_.set_reg(0, 0);
             }
         } else if (address == 0x1713c) {
             // SDK ROM spif_rddata(destination, length). The model completes
@@ -1633,6 +1694,30 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
     }
     const std::uint32_t aligned = address & ~3u;
     std::uint32_t value;
+    if (aligned == RadioRfBase + 0xf4) {
+        if (!rf_tp_calibration_present_ || !rf_tp_calibration_pending_) {
+            unsupported_register(address, "read", 0, size);
+            return 0;
+        }
+        const unsigned channel = rf_registers_[RadioRfBase + 0xb4] & 0xffu;
+        const unsigned deviation = (rf_registers_[RadioRfBase + 0xd8] >> 18) & 0x7u;
+        unsigned result_index;
+        if (channel == 2 && deviation == 1)
+            result_index = 0;
+        else if (channel == 66 && deviation == 1)
+            result_index = 1;
+        else if (channel == 2 && deviation == 2)
+            result_index = 2;
+        else if (channel == 66 && deviation == 2)
+            result_index = 3;
+        else {
+            unsupported_register(address, "read", 0, size);
+            return 0;
+        }
+        rf_tp_calibration_pending_ = false;
+        value = static_cast<std::uint32_t>(rf_tp_calibration_[result_index]) << 16;
+        return lane_read(value, address, size);
+    }
     if (aligned >= AonEfuseDataBase && aligned < AonEfuseSecurityState) {
         const unsigned block = (aligned - AonEfuseDataBase) / 8;
         const unsigned word = ((aligned - AonEfuseDataBase) % 8) / 4;
@@ -1673,6 +1758,7 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
         switch (aligned - GpioBase) {
         case 0x00: value = gpio_data_; break;
         case 0x04: value = gpio_direction_; break;
+        case 0x08: value = gpio_control_; break;
         case 0x30: value = gpio_interrupt_enable_; break;
         case 0x34: value = gpio_interrupt_mask_; break;
         case 0x38: value = gpio_interrupt_type_; break;
@@ -1785,7 +1871,22 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
                          "PHY6252: RF register 0x40030050 is used by the external ROM setup; retaining writes without modeling its effect\n");
             rf_50_warning_logged_ = true;
         }
-        if (offset == 0xe4 || offset == 0xe8) {
+        if ((offset == 0x78 || offset == 0xa8 || offset == 0xac ||
+             offset == 0xc4 || offset == 0xc8) && !rf_rx_calibration_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF RX DCOC setup registers are retained without analog modeling; RF+0xec reports calibration not ready, matching the captured default g_rfPhyRxDcIQ state\n");
+            rf_rx_calibration_warning_logged_ = true;
+        }
+        if (offset == 0xec) {
+            if (!rf_rx_calibration_warning_logged_) {
+                std::fprintf(stderr,
+                             "PHY6252: RF+0xec reports RX DCOC calibration not ready; captured g_rfPhyRxDcIQ remains at SDK default 0x20200000\n");
+                rf_rx_calibration_warning_logged_ = true;
+            }
+            // The related SDK leaves g_rfPhyRxDcIQ at 0x20200000 when bit 31:30
+            // never reaches 3; the module RAM snapshot contains that default.
+            value = 0;
+        } else if (offset == 0xe4 || offset == 0xe8) {
             if (offset == 0xe8 && !rf_sample_e8_warning_logged_) {
                 std::fprintf(stderr,
                              "PHY6252: RF register 0x400300e8 is read by TS0001 calibration code; returning the virtual-air RSSI sample (inferred)\n");
@@ -1851,6 +1952,9 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
     case SpifRemap: value = control_registers_[aligned]; break;
     case SpifModeBit: value = control_registers_[aligned]; break;
     case SpifWriteCompletionControl: value = control_registers_[aligned]; break;
+    case SpifLowWriteProtection:
+    case SpifUpWriteProtection:
+    case SpifWriteProtection: value = control_registers_[aligned]; break;
     case SpifCommand: value = spif_command_ & ~2u; break; // commands complete immediately
     case SpifCommandAddress: value = control_registers_[aligned]; break;
     case SpifReadData: value = spif_read_data_; break;
@@ -1875,6 +1979,7 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
     case RadioClockControl:
     case RadioClockConfig:
     case AonRtcClock:
+    case AonPmctl1:
     case AonPmctl2_0:
     case AonRtcControl:
     case AonEfuseConfig:
@@ -1885,6 +1990,8 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
     case AonXtal16Control:
     case AonWakeMask0:
     case AonWakeMask1:
+    case AonSleepFlag:
+    case AonPowerSleep:
     case AonWakeSource0:
     case AonWakeSource1:
     case AonRtcCompare0:
@@ -1993,6 +2100,14 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             update_gpio_irq();
             break;
         }
+        case 0x08:
+            gpio_control_ = lane_write(gpio_control_, value, address, size);
+            if (!gpio_control_warning_logged_) {
+                std::fprintf(stderr,
+                             "PHY6252: GPIO SWPORTA_CTL is retained; its pad-control effects are not modeled\n");
+                gpio_control_warning_logged_ = true;
+            }
+            break;
         case 0x30:
             gpio_interrupt_enable_ = lane_write(gpio_interrupt_enable_, value, address, size) & GpioMask;
             update_gpio_irq();
@@ -2026,7 +2141,7 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             unsupported_register(address, "write to read-only GPIO register");
             return;
         default:
-            unsupported_register(address, "write");
+            unsupported_register(address, "write", value, size);
             return;
         }
         return;
@@ -2131,7 +2246,20 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
                          "PHY6252: RF register 0x40030050 is used by the external ROM setup; retaining writes without modeling its effect\n");
             rf_50_warning_logged_ = true;
         }
-        rf_registers_[aligned] = lane_write(rf_registers_[aligned], value, address, size);
+        if ((offset == 0x78 || offset == 0xa8 || offset == 0xac ||
+             offset == 0xc4 || offset == 0xc8) && !rf_rx_calibration_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF RX DCOC setup registers are retained without analog modeling; RF+0xec reports calibration not ready, matching the captured default g_rfPhyRxDcIQ state\n");
+            rf_rx_calibration_warning_logged_ = true;
+        }
+        const std::uint32_t written = lane_write(rf_registers_[aligned], value, address, size);
+        rf_registers_[aligned] = written;
+        if (offset == 0xa4) {
+            if (written == 0x114)
+                rf_tp_calibration_pending_ = true;
+            else if (written == 0)
+                rf_tp_calibration_pending_ = false;
+        }
         return;
     }
     if (aligned >= RadioLlBase && aligned < RadioLlBase + 0x1000) {
@@ -2218,7 +2346,18 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
     case SpifRemap:
     case SpifModeBit:
     case SpifWriteCompletionControl:
+    case SpifLowWriteProtection:
+    case SpifUpWriteProtection:
+    case SpifWriteProtection:
     case SpifCommandAddress:
+        if (aligned >= SpifLowWriteProtection && aligned <= SpifWriteProtection &&
+            !spif_protection_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: AP_SPIF write-protection registers are retained; flash write protection is not enforced\n");
+            spif_protection_warning_logged_ = true;
+        }
+        control_registers_[aligned] = lane_write(control_registers_[aligned], value, address, size);
+        break;
     case SpifWriteData:
     case SpifWriteDataHigh:
     case SpifPollStatus:
@@ -2238,6 +2377,14 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
     case MuxPadEnable:
     case RadioClockControl:
     case RadioClockConfig:
+    case AonPmctl1:
+        if (!aon_pmctl1_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: AON PMCTL1 RC32K cap-bank control is retained; oscillator calibration effects are not modeled\n");
+            aon_pmctl1_warning_logged_ = true;
+        }
+        control_registers_[aligned] = lane_write(control_registers_[aligned], value, address, size);
+        break;
     case AonPmctl2_0:
     case AonChipState:
     case AonCalReadWrite:
@@ -2246,6 +2393,7 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
     case AonXtal16Control:
     case AonWakeMask0:
     case AonWakeMask1:
+    case AonSleepFlag:
     case AonSleepR0:
     case AonSleepR0 + 4:
     case AonSleepR0 + 8:
@@ -2255,6 +2403,17 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             mux_select_register(aligned))
             notify_gpio(GpioMask);
         break;
+    case AonPowerSleep: {
+        const std::uint32_t command = lane_write(control_registers_[aligned], value, address, size);
+        if (command != 0xa5a55a5au || rom_dump_.empty()) {
+            unsupported_register(address, "unsupported AON power command", command, size);
+            return;
+        }
+        control_registers_[aligned] = command;
+        system_sleep_request_ = true;
+        core_.request_reset();
+        break;
+    }
     case AonEfuseConfig: {
         const std::uint32_t previous = control_registers_[aligned];
         const std::uint32_t updated = lane_write(previous, value, address, size);
@@ -2296,12 +2455,14 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
         break;
     case SpifCommand: {
         const std::uint32_t command = lane_write(spif_command_, value, address, size);
-        if (command != SpifReadStatus) {
-            unsupported_register(address, "unsupported SPIF command write");
+        if (command != SpifReadStatus && command != SpifReadId) {
+            unsupported_register(address, "unsupported SPIF command write", command, size);
             return;
         }
         spif_command_ = command;
-        spif_read_data_ = 0; // status register has WIP clear in this non-busy model
+        // Status reports WIP clear; RDID returns the captured module ID in
+        // JEDEC wire order (least-significant byte first in the data register).
+        spif_read_data_ = command == SpifReadId ? CapturedFlashJedecId : 0;
         break;
     }
     case SpifReadData:
