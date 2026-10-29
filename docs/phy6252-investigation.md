@@ -652,13 +652,20 @@ example now exposes GPIO2 as `relay_line` in `relay.vcd`, so local relay state
 can be checked independently of the missing diagnostic callback.
 
 A 1,000,000-instruction standalone run found a runtime data block at
-`0x1fff7f34`: the word `6`, followed by pointers `0x1102ddd9` and
-`0x1102d299`. The supplied flash has the same bytes at file offset `0x17f0c`
-(XIP address `0x11017f0c`), consistent with the RAM block being initialized
-from the image. The callback pointer's presence does not establish dynamic
-registration by the button path. The first pointer targets the counter helper
-above. The meaning of the word and the event path that invokes this callback
-remain unknown.
+`0x1fff7f34`. The saved-state image initializes it from file offset `0x17f0c`
+(XIP address `0x11017f0c`) with two `(event ID, function)` pairs:
+`(6, 0x1102ddd8)` and `(0xe000, 0x1102d298)`. The stored function pointers have
+the Thumb bit set. Startup function `0x1102dc88` registers the table through
+`0x11040940`, which stores the pointer and count in the registry at
+`0x1fff81d0`; the registry also records callback pointer `0x11043375`.
+Dispatcher `0x11041a90` compares the 16-bit event ID at offset
+`+4` in its event object against this table and indirectly calls a matching
+handler. Its only static direct call site in this image is `0x11045ae0` in the
+message-processing routine at `0x11045a34`. A narrow PC trace of an offline
+two-press GPIO8 run records no execution in `0x11041a90..0x11041ad0`. The
+emulated local key path therefore does not reach this registered callback
+dispatcher; the hardware route from button handling to the `On`/`Off` helper
+remains unresolved.
 
 Further disassembly of the saved-network startup path shows a generic record
 directory at `0x1fff8f4c + 0x39c`, with 12 entries spaced `0xa4` bytes apart.
