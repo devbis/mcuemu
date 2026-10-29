@@ -658,11 +658,11 @@ Ghidra analysis of the supplied flash shows `app_device_SW_state_set` passes
 button trace that wrapper calls `0x1103d1ac`, which returns task id `0x20`,
 then enters `0x11038668`. That routine prepares a 0x14-byte queue record using
 the descriptor at `0x1fffc7cc`; its static path reaches the queue insertion
-helper at `0x11038700` when allocation and copy succeed. The current runtime
-trace confirms entry to the wrapper with the expected event and state pointer,
-but does not prove that insertion succeeds or identify the task that consumes
-the record. It still shows no call to `0x1102ddd8`, so the local button's
-hardware `On`/`Off` reports are not yet reproduced.
+helper at `0x11038700` when allocation and copy succeed. A second runtime trace
+reaches that helper from `0x11038668` and reads the queue descriptor at
+`0x1fffc7cc`; it does not establish that the record remains queued or identify
+the task that consumes it. The trace still shows no call to `0x1102ddd8`, so
+the local button's hardware `On`/`Off` reports are not yet reproduced.
 
 Separately, `0x110219b4` reaches `0x11021f34`, which builds a command for
 cluster `0x0006`. Its lookup in `0x1102e1f4` finds the endpoint-1/cluster-6
