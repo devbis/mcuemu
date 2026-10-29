@@ -1390,9 +1390,15 @@ void Watchdog::service(std::uint64_t) {
 }
 
 void Watchdog::power_mode_changed(PowerMode, PowerMode to) {
-    // SWRU191F 16: the counter is retained in all power modes and continues
-    // counting in active mode. Model-defined: it counts in active mode and
-    // Idle (PM0), stops in PM1-PM3 and resumes at the next period boundary.
+    // SWRU191F 16 (introduction): "The contents of the 15-bit counter are
+    // retained during all power modes, and the Watchdog Timer continues
+    // counting when entering active mode again"; 4.1.3 lists the blocks
+    // active in PM2 (POR, external interrupts, the 32-kHz oscillator, Sleep
+    // Timer) without the WDT, although its 32 kHz clock runs (Table 4-1). So
+    // the count advances in active mode and Idle (4.1.1: peripherals work
+    // normally), holds in PM1-PM3 and cannot reset or interrupt there.
+    // Model-defined: counting resumes at the next 32 kHz period boundary
+    // after the wake (the period in progress is not counted).
     const bool stop = hf_stopped(to);
     if (stop && !frozen_) {
         settle();

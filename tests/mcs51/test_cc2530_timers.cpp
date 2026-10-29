@@ -1228,8 +1228,9 @@ void test_wdt_locks() {
     }
 }
 
-// SWRU191F 16: the counter is retained in all power modes and continues
-// counting in active mode. Model-defined: it does not advance in PM1-PM3.
+// SWRU191F 16 (introduction): the counter is "retained during all power
+// modes" and "continues counting when entering active mode again"; 4.1.3:
+// the WDT is not among the blocks active in PM2. It does not advance in PM2.
 void test_wdt_frozen_in_pm2() {
     Program p;
     const std::uint16_t w = p.here();
