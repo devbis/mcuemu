@@ -891,4 +891,90 @@ void test_cc2530_system_spi_loopback() {
         CHECK(xdata(mcu, static_cast<std::uint16_t>(0x0100 + i)) == (i ^ 0x5a));
 }
 
+// SWRU191F 3.1/3.2 through the nets: a debugger on the RESET_N, P2.2 (DC)
+// and P2.1 (DD) nets enters debug mode, reads the status and executes an
+// instruction; the adapter's host port and its errors.
+void test_cc2530_debug_if_pads() {
+    Cc2530F256Mcu mcu("dbgif");
+    mcu.load_firmware(raw_image("dbgif.bin", {0x75, 0x81, 0x60,   // MOV SP,#0x60
+                                              0x80, 0xfe}));      // SJMP $
+    sim::Net reset("reset"), dc("dc"), dd("dd");
+    mcu.connect_pin("RESET_N", reset.attach("dbgif.RESET_N"));
+    mcu.connect_pin("P2.2", dc.attach("dbgif.P2.2"));
+    mcu.connect_pin("P2.1", dd.attach("dbgif.P2.1"));
+    sim::Net spare("spare");
+    CHECK(throws_invalid([&] { mcu.connect_pin("RESET_N", spare.attach("again")); }));
+    CHECK(mcu.pin_names().size() == 21); // RESET_N is not a GPIO pad
+    sim::Pin &rst = reset.attach("probe.reset");
+    sim::Pin &clk = dc.attach("probe.dc");
+    sim::Pin &data = dd.attach("probe.dd");
+
+    // DC at 1 MHz: 500 ns per half period.
+    std::uint64_t t = 1000;
+    const auto drive = [&](sim::Pin &pin, sim::Drive level) {
+        CHECK(mcu.run_until(t) == sim::McuState::Running);
+        pin.set_drive(level, t);
+        t += 500;
+    };
+    const auto pulse = [&] {
+        drive(clk, sim::Drive::High);
+        drive(clk, sim::Drive::Low);
+    };
+    rst.set_drive(sim::Drive::High, 0);
+    drive(clk, sim::Drive::Low);
+    drive(rst, sim::Drive::Low);
+    CHECK(throws_runtime([&] { mcu.debug_if_enter(); })); // RESET_N held low
+    pulse();
+    pulse();
+    drive(rst, sim::Drive::High);
+    CHECK(mcu.device().debug_if_active() && mcu.device().debug_if_halted());
+
+    const auto command = [&](std::vector<std::uint8_t> bytes) {
+        for (const std::uint8_t byte : bytes)
+            for (int bit = 7; bit >= 0; --bit) {
+                drive(data, (byte >> bit) & 1u ? sim::Drive::High : sim::Drive::Low);
+                pulse();
+            }
+        drive(data, sim::Drive::HiZ);
+        unsigned rounds = 0;
+        while (dd.level() != sim::Level::Low && rounds++ < 100)
+            for (unsigned i = 0; i < 8; ++i)
+                pulse();
+        std::vector<std::uint8_t> response;
+        for (unsigned i = 0; i < mcs51emu::Cc2530F256::debug_if_output_length(bytes.front()); ++i) {
+            std::uint8_t value = 0;
+            for (unsigned bit = 0; bit < 8; ++bit) {
+                drive(clk, sim::Drive::High);
+                value = static_cast<std::uint8_t>(value << 1 | (dd.level() == sim::Level::High));
+                drive(clk, sim::Drive::Low);
+            }
+            response.push_back(value);
+        }
+        CHECK(dd.level() == sim::Level::Floating); // DD released after the response
+        return response;
+    };
+    CHECK(command({0x30}) == std::vector<std::uint8_t>{0x22});       // READ_STATUS
+    CHECK(command({0x68}).at(0) == 0xa5);                            // GET_CHIP_ID
+    CHECK(command({0x52, 0x74, 0x3c}) == std::vector<std::uint8_t>{0x3c}); // MOV A,#0x3c
+    CHECK(command({0x58}) == std::vector<std::uint8_t>{0x3c});       // STEP_INSTR
+    CHECK(command({0x28}) == (std::vector<std::uint8_t>{0x00, 0x03})); // GET_PC
+
+    // The host port of the adapter, on the same chip.
+    mcu.debug_if_submit({0x30});
+    CHECK(!mcu.debug_if_take_response());
+    CHECK(mcu.run_until(mcu.debug_if_due_ns()) == sim::McuState::Running);
+    const auto response = mcu.debug_if_take_response();
+    CHECK(response && response->accepted && response->bytes == std::vector<std::uint8_t>{0x22});
+    // A RESET_N pulse without DC edges: the firmware starts.
+    drive(rst, sim::Drive::Low);
+    drive(rst, sim::Drive::High);
+    CHECK(!mcu.device().debug_if_active());
+    CHECK(mcu.run_until(t + 10000) == sim::McuState::Running);
+    CHECK(mcu.device().pc() == 0x0003);
+    mcu.debug_if_enter();
+    CHECK(mcu.device().debug_if_halted() && mcu.device().pc() == 0x0000);
+    mcu.debug_if_reset_pulse();
+    CHECK(!mcu.device().debug_if_active());
+}
+
 } // namespace mcuemu_tests

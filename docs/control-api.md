@@ -61,6 +61,10 @@ example `"0x41 0x42:perr 0x43:fe break"` (see
 | `drive` | `net`, `state` (low, high, hiz, pullup, pulldown), `at?` | `{scheduled}` |
 | `mem.read` | `mcu`, `address`, `length` | `{hex}` |
 | `mem.write` | `mcu`, `address`, `hex` | `true` |
+| `debug_if.enter` | `mcu` | `{time_ns}`; a cc2530f256 enters debug mode (RESET_N low, two DC falling edges, release) with the CPU halted at `0x0000` |
+| `debug_if.command` | `mcu`, `hex` (command byte and its input bytes) | `{hex, accepted, time_ns}`; one SWRU191F Table 3-1 command; a refused command returns the status byte in every output byte with `accepted: false` |
+| `debug_if.reset` | `mcu` | `{time_ns}`; a RESET_N pulse without DC edges: debug mode ends and the firmware runs |
+| `debug_if.program` | `mcu`, `firmware`, `debug_lock?`, `verify?` (default true), `run?` (default true) | `{chip_id, chip_version, was_locked, pages, bytes_verified, commands, time_ns}`; CC-Debugger-style programming through the debug interface |
 | `shutdown` | | `true`, then the server closes the connection |
 
 For a cc2530f256 with `flash:`, `set` on `<mcu>.power` with `"cut"` or
@@ -68,6 +72,12 @@ For a cc2530f256 with `flash:`, `set` on `<mcu>.power` with `"cut"` or
 [system-config.md](system-config.md#flash-faults-power-cuts-and-persistence-cc2530f256)).
 After a run, `unload` saves a `persist` flash image; call it before `load`
 when the next system must start from that image.
+
+The `debug_if.*` methods (cc2530f256 only; see
+[cc2530.md](cc2530.md#debug-interface)) act like a debug probe on the chip's
+RESET_N, DC and DD pins: each call pauses a running simulation and advances
+the whole world synchronously (128 cycles per command byte; programming takes
+seconds of virtual time). `firmware` is confined to the root like `load`.
 
 Errors use the JSON-RPC codes (-32700 parse, -32600 invalid request, -32601
 unknown method, -32602 invalid params) plus -32000 (the YAML is invalid) and

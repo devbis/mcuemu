@@ -338,6 +338,7 @@ void test_cc2530_flash_config();
 void test_cc2530_flash_power_cut_log();
 void test_cc2530_flash_power_endpoint();
 void test_cc2530_flash_persist();
+void test_cc2530_debug_if_pads();
 void test_config_parsing();
 void test_config_errors();
 void test_system_build_and_run();
@@ -367,6 +368,7 @@ void test_websocket_primitives();
 void test_rpc_basics();
 void test_rpc_run_events_and_memory();
 void test_rpc_sandbox();
+void test_rpc_debug_if();
 void test_server_over_websocket();
 void test_server_security_options();
 void test_rpc_realtime();
@@ -428,6 +430,7 @@ int main() {
     RUN(test_rpc_basics);
     RUN(test_rpc_run_events_and_memory);
     RUN(test_rpc_sandbox);
+    RUN(test_rpc_debug_if);
     RUN(test_server_over_websocket);
     RUN(test_server_security_options);
     RUN(test_rpc_realtime);
@@ -479,6 +482,7 @@ int main() {
     RUN(test_cc2530_flash_power_cut_log);
     RUN(test_cc2530_flash_power_endpoint);
     RUN(test_cc2530_flash_persist);
+    RUN(test_cc2530_debug_if_pads);
     if (mcuemu_tests::failures) {
         std::cerr << mcuemu_tests::failures << " sim check(s) failed\n";
         return 1;

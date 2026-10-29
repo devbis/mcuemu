@@ -17,7 +17,9 @@
 
 namespace sim {
 
-// CC2530F256 adapter: pads P0.0-P0.7, P1.0-P1.7, P2.0-P2.4 wired to nets,
+// CC2530F256 adapter: pads P0.0-P0.7, P1.0-P1.7, P2.0-P2.4 and RESET_N
+// wired to nets (RESET_N is an input only and is not listed by pin_names();
+// a floating RESET_N counts as high, model-defined),
 // USART0/USART1 in UART mode as uart0/uart1, and the IEEE 802.15.4 radio on a
 // shared VirtualAir ("zigbee" only). The peripheral models count time in
 // 32 MHz cycles, so the radio can only be attached with the default
@@ -169,6 +171,23 @@ public:
     void set_power_listener(std::function<void(std::uint64_t, std::uint64_t)> listener) {
         power_listener_ = std::move(listener);
     }
+    // Host side of the chip's two-wire debug interface (SWRU191F chapter 3;
+    // unrelated to set_debugger above), for a debugger that is not itself
+    // simulated on the nets. debug_if_enter() performs the entry sequence
+    // (an external reset, then debug mode with the CPU halted at 0x0000)
+    // and returns an MCU stopped by an idle loop or an unwakeable power mode
+    // to Running; it throws std::runtime_error after a fault or while a
+    // RESET_N net holds the pin low. Commands go through
+    // Cc2530F256::debug_if_submit()/debug_if_take_response(); the response
+    // is complete once the MCU has run to debug_if_due_ns().
+    void debug_if_enter();
+    void debug_if_submit(const std::vector<std::uint8_t> &command);
+    std::optional<mcs51emu::Cc2530DebugIfResponse> debug_if_take_response();
+    std::uint64_t debug_if_due_ns() const;
+    // A RESET_N pulse without DC edges: debug mode ends, the firmware starts.
+    void debug_if_reset_pulse();
+    // Virtual time `cycles` 32 MHz cycles after the MCU's current time.
+    std::uint64_t time_after_cycles(std::uint64_t cycles) const;
 
 private:
     static constexpr unsigned PadCount = 24; // index = port * 8 + pin
@@ -185,6 +204,8 @@ private:
     McuState state_{McuState::Running};
     std::string fault_;
     std::array<Pin *, PadCount> pins_{};
+    Pin *reset_pin_{};
+    void debug_if_check_reset_pin(const char *what) const;
     mcuemu::VirtualAir *air_{};
     std::string air_node_;
     bool air_attached_{false};

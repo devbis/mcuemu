@@ -339,6 +339,62 @@ void RpcSession::register_methods() {
                                  from_hex(require_string(params, "hex")));
         return Json(true);
     };
+    // CC2530 two-wire debug interface (SWRU191F chapter 3), as a debugger
+    // probe on RESET_N/DC/DD. Like `step`, each call pauses a running
+    // simulation and advances virtual time synchronously.
+    methods_["debug_if.enter"] = [this](const Json &params) {
+        const std::string mcu = require_string(params, "mcu");
+        simulation_.pause();
+        simulation_.debug_if_enter(mcu);
+        return Json{{"time_ns", simulation_.time_ns()}};
+    };
+    // debug_if.command: {mcu, hex}: one Table 3-1 command (command byte and
+    // its input bytes); the result has the output bytes and whether the
+    // interface accepted the command.
+    methods_["debug_if.command"] = [this](const Json &params) {
+        const std::string mcu = require_string(params, "mcu");
+        const Bytes command = from_hex(require_string(params, "hex"));
+        if (command.empty())
+            throw RpcError{-32602, "'hex' must hold at least the command byte"};
+        simulation_.pause();
+        const mcs51emu::Cc2530DebugIfResponse response =
+            simulation_.debug_if_command(mcu, command);
+        return Json{{"hex", to_hex(response.bytes)},
+                    {"accepted", response.accepted},
+                    {"time_ns", simulation_.time_ns()}};
+    };
+    methods_["debug_if.reset"] = [this](const Json &params) {
+        const std::string mcu = require_string(params, "mcu");
+        simulation_.pause();
+        simulation_.debug_if_reset(mcu);
+        return Json{{"time_ns", simulation_.time_ns()}};
+    };
+    // debug_if.program: {mcu, firmware, [debug_lock], [verify], [run]}
+    methods_["debug_if.program"] = [this](const Json &params) {
+        const std::string mcu = require_string(params, "mcu");
+        const std::string firmware = require_string(params, "firmware");
+        mcs51emu::Cc2530DebugProgramOptions options;
+        const auto flag = [&params](const char *key, bool &value) {
+            if (!params.contains(key))
+                return;
+            if (!params[key].is_boolean())
+                throw RpcError{-32602, std::string("'") + key + "' must be a boolean"};
+            value = params[key].get<bool>();
+        };
+        flag("debug_lock", options.debug_lock);
+        flag("verify", options.verify);
+        flag("run", options.run);
+        simulation_.pause();
+        const mcs51emu::Cc2530DebugProgramResult result =
+            simulation_.debug_if_program(mcu, firmware, options);
+        return Json{{"chip_id", result.chip_id},
+                    {"chip_version", result.chip_version},
+                    {"was_locked", result.was_locked},
+                    {"pages", result.pages},
+                    {"bytes_verified", result.bytes_verified},
+                    {"commands", result.commands},
+                    {"time_ns", simulation_.time_ns()}};
+    };
     methods_["shutdown"] = [this](const Json &) {
         close_requested_ = true;
         return Json(true);

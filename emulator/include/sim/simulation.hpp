@@ -1,5 +1,6 @@
 #pragma once
 
+#include "mcs51emu/cc2530_debug_programmer.hpp"
 #include "sim/system.hpp"
 
 #include <chrono>
@@ -11,6 +12,8 @@
 #include <vector>
 
 namespace sim {
+
+class Cc2530F256Mcu;
 
 // Raised for requests the simulation cannot honor (no system loaded, path
 // outside the sandbox, unknown subscription...). The RPC layer maps it to an
@@ -95,6 +98,22 @@ public:
     Bytes read_memory(const std::string &mcu, std::uint32_t address, std::size_t length);
     void write_memory(const std::string &mcu, std::uint32_t address, const Bytes &data);
 
+    // Host side of a CC2530F256's two-wire debug interface (SWRU191F
+    // chapter 3), as a debugger probe on its RESET_N/DC/DD pins. Each call
+    // advances the whole world synchronously (a command takes 128 cycles per
+    // byte, programming takes seconds of virtual time) and leaves the
+    // run/pause state alone. Throws SimulationError for an unknown MCU, a
+    // model without the interface or a refused request.
+    void debug_if_enter(const std::string &mcu);
+    mcs51emu::Cc2530DebugIfResponse debug_if_command(const std::string &mcu, const Bytes &command);
+    // A RESET_N pulse without DC edges: debug mode ends, the firmware runs.
+    void debug_if_reset(const std::string &mcu);
+    // CC-Debugger-style programming of `firmware` (confined to the root)
+    // through the interface; see cc2530_debug_program().
+    mcs51emu::Cc2530DebugProgramResult debug_if_program(
+        const std::string &mcu, const std::string &firmware,
+        const mcs51emu::Cc2530DebugProgramOptions &options);
+
     // Validates a sink spec against the sandbox and returns the spec with
     // paths made absolute. Throws SimulationError.
     std::string confine_sink(const std::string &spec) const;
@@ -107,6 +126,7 @@ private:
     std::uint64_t allowed_ns();
     void check_config(const SystemConfig &config) const;
     std::vector<McuStop> collect_stops();
+    Cc2530F256Mcu &cc2530(const std::string &mcu);
 
     std::string root_;
     std::unique_ptr<System> system_;
