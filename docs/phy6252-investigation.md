@@ -265,8 +265,8 @@ UART now reports `tpCap[2b 23]`, matching the supplied log. The image runs past
 the `spif_write_dma` NVM update, restores network state 12 and continues through
 timer callbacks.
 
-In a 60 s `sim` run with a locally built Telink sampleGW, the pcap contains 22
-frames: 16 beacon requests and 6 broadcast data frames. Attaching
+In a 65 s `sim` run with a locally built Telink sampleGW, the pcap contains 23
+frames: 16 beacon requests and 7 broadcast data frames. Attaching
 `air0=stdout` shows the gateway scans channels 11–26; a coordinator-only run
 produces the same traffic. The capture contains no TS0001 association request,
 NWK data, ACK or any other TS0001 transmission. The UART reaches the same
@@ -277,9 +277,9 @@ startup milestones as `log.txt`, but the reported values still differ:
 TS0001 relay support until it starts, joins and exchanges Zigbee traffic in a
 captured network scenario.
 
-The 60 s UART trace emits a local-time and stack-statistics report at 30.305 s,
-but does not print the reference relay `On`/`Off` reports by 60 s. It prints no
-further application UART lines after that report in this run.
+The 65 s UART trace emits local-time and stack-statistics reports at 30.305 s
+and 60.305 s. The local time remains zero; the trace does not print
+`ky timer stop!` or the reference relay `On`/`Off` reports by 65 s.
 
 A PC trace of the first `power report time` calculation shows the image combines
 its stored fields with a byte returned by its RAM-resident helper at
