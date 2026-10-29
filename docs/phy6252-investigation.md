@@ -619,9 +619,12 @@ can be checked independently of the missing diagnostic callback.
 
 A 1,000,000-instruction standalone run found a runtime data block at
 `0x1fff7f34`: the word `6`, followed by pointers `0x1102ddd9` and
-`0x1102d299`. The first pointer targets the counter helper above, confirming
-that its registration data is present in SRAM. The meaning of the word and the
-event path that invokes this callback remain unknown.
+`0x1102d299`. The supplied flash has the same bytes at file offset `0x17f0c`
+(XIP address `0x11017f0c`), consistent with the RAM block being initialized
+from the image. The callback pointer's presence does not establish dynamic
+registration by the button path. The first pointer targets the counter helper
+above. The meaning of the word and the event path that invokes this callback
+remain unknown.
 
 Further disassembly of the saved-network startup path shows a generic record
 directory at `0x1fff8f4c + 0x39c`, with 12 entries spaced `0xa4` bytes apart.
