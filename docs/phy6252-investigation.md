@@ -742,6 +742,12 @@ idle high. The offline replay now gives GPIO3 an explicit board pull-up, which
 reproduces that diagnostic; leaving the pad unconnected made the modeled input
 read low even though GPIO8 was biased correctly.
 
+An eight-second offline replay that presses GPIO3 at 6 s also changes GPIO2:
+the UART reports `keyid = 2` and key-level transitions, and the relay output
+goes low on press and high on release. It still emits no `On/Off` counters.
+Both configured local inputs can therefore change relay state in this image;
+neither replay reaches the registered diagnostic callback.
+
 Rerunning that 15-second scenario after correcting `efuse_read` confirms the
 GPIO path still reaches the firmware: UART reports key 1 down/up and key-level
 transitions, but no relay `On`/`Off` counters. The pcap has 19 coordinator
