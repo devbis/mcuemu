@@ -332,11 +332,31 @@ Phy6252::Phy6252() : core_(config()) {
         high_rom[i] = 0x00;
         high_rom[i + 1] = 0xbe;
     }
-    core_.set_write_protect_handler([](std::uint32_t address, unsigned size, std::uint32_t) {
-        return address < 0x100 && static_cast<std::uint64_t>(address) + size <= 0x100;
-    });
     flash_ = core_.map_memory(BootImage::FlashBase, BootImage::FlashSize, false);
     ram_ = core_.map_memory(BootImage::RamBase, BootImage::RamSize, true);
+    core_.set_write_protect_handler([this](std::uint32_t address, unsigned size, std::uint32_t) {
+        if (address < 0x100 && static_cast<std::uint64_t>(address) + size <= 0x100)
+            return true;
+
+        const std::uint64_t flash_end = static_cast<std::uint64_t>(BootImage::FlashBase) +
+                                        BootImage::FlashSize;
+        if (address < BootImage::FlashBase ||
+            static_cast<std::uint64_t>(address) + size > flash_end ||
+            size == 0 || size > sizeof(std::uint32_t) ||
+            control_registers_[SpifWriteProtection] != 0)
+            return false;
+
+        const std::size_t offset = address - BootImage::FlashBase;
+        std::array<std::uint8_t, sizeof(std::uint32_t)> previous{};
+        std::copy_n(flash_ + offset, size, previous.begin());
+        core_.defer([this, offset, size, previous] {
+            // The controller's AHB programming window can clear flash bits,
+            // but programming cannot change a zero bit back to one.
+            for (unsigned i = 0; i < size; ++i)
+                flash_[offset + i] &= previous[i];
+        });
+        return true;
+    });
     core_.map_mmio(TimerBase, 0x1000, *this);
     core_.map_mmio(WatchdogBase, 0x1000, *this);
     core_.map_mmio(UartBase, 0x1000, *this);
@@ -441,6 +461,11 @@ void Phy6252::reset() {
     control_registers_[AonCalReadOnly0] = 0x10c0;
     control_registers_[AonCalReadOnly1] = 0;
     control_registers_[AonCalReadOnly2] = 0x100;
+    // The related SDK's hw_spif_cache_config() starts with this protection
+    // state; its ROM flash-write path temporarily clears WR_PROTECTION.
+    control_registers_[SpifLowWriteProtection] = 0;
+    control_registers_[SpifUpWriteProtection] = 0x10;
+    control_registers_[SpifWriteProtection] = 0x2;
     efuse_read_ready_.fill(false);
     rf_tp_calibration_pending_ = false;
     rf_registers_.clear();
@@ -2391,7 +2416,7 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
         if (aligned >= SpifLowWriteProtection && aligned <= SpifWriteProtection &&
             !spif_protection_warning_logged_) {
             std::fprintf(stderr,
-                         "PHY6252: AP_SPIF write-protection registers are retained; flash write protection is not enforced\n");
+                         "PHY6252: AP_SPIF write-protection registers are retained; CPU XIP stores program flash only while WR_PROTECTION is zero (inferred from the related SDK ROM)\n");
             spif_protection_warning_logged_ = true;
         }
         control_registers_[aligned] = lane_write(control_registers_[aligned], value, address, size);

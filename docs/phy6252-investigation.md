@@ -59,7 +59,10 @@ its clock source and reset details are inferred. PCR software reset and clock
 registers, including SW_CLK1 and APB_CLK, retain writes; clock gating and reset
 effects are not enforced. AP_CACHE and the observed AP_SPIF registers are
 write-backed. AP_SPIF write-protection registers at `0x4000c850..0x4000c858`
-retain their values, but do not prevent flash writes. DMA channel 3 supports the observed
+start at the related SDK's `0, 0x10, 2` cache-init values. CPU stores through
+XIP program flash only while `WR_PROTECTION` is zero; the ROM AHB programming
+loop applies NOR 1-to-0 semantics. This is inferred from the PHY6222 SDK ROM
+and register snapshot, not verified on PB-03F silicon. DMA channel 3 supports the observed
 software-triggered memory copy used with SPIF remapping; other channels and
 request sources are not modeled. The ADC and a complete clock tree are not
 implemented.
@@ -105,12 +108,12 @@ helpers, eFuse read, AES-128 block encryption, OSAL heap and memory functions,
 `__ARM_common_switch8`, `spif_config`, `spif_cmd`, `spif_rddata`,
 `spif_write`, `spif_write_dma`, sector erase, `set_timer`, and `clear_timer`.
 `clear_timer` is modeled with the SDK's `hal_timer_stop_counter()` sequence.
-Both flash write
-calls share the SDK's `(address, RAM source, byte count)` contract and program flash with NOR
-1-to-0 semantics. SPIF command completion is synchronous; status reads report
-WIP clear. Flash timing, write protection, page limits and most opcodes are not
-modeled. Invalid flash and crypto arguments return `-EINVAL`; `efuse_read`
-returns its separate SDK status codes described below.
+Both flash write calls share the SDK's `(address, RAM source, byte count)`
+contract and program flash with NOR 1-to-0 semantics. SPIF command completion
+is synchronous; status reads report WIP clear. The host-trap APIs do not model
+flash timing, protection ranges, page limits or most opcodes. Invalid flash
+and crypto arguments return `-EINVAL`; `efuse_read` returns its separate SDK
+status codes described below.
 
 The SDK declares ROM `set_timer(AP_TIM_TypeDef *, int)` at `0x16c2c`, but its
 body is not included. The model follows the SDK `hal_timer_set_loadtimer()`
@@ -273,9 +276,22 @@ another has source and destination `0x1100a000`, size `0x6000`. ROM function
 `memcpy`, producing the invalid `0x22010000` source. `SoC_info.txt` identifies
 the ROM as PHY6222M005, while the firmware is the TS0001 PHY6252 image. The
 evidence points to an image/ROM loader-format or revision mismatch; the model
-does not map the invalid address or patch the firmware table. A 5-second pcap
-check fails with no successful association response, so relay network support
-remains unverified.
+does not map the invalid address or patch the firmware table. A 2-second
+repeat still faults at 1.463 s on wake with no successful association response,
+so relay network support remains unverified.
+
+Using the same external ROM with the PB-03F Zephyr image reaches the Zephyr
+boot banner and Zigbee thread. Its first flash update exposed a CPU store at
+`PC=0x17558` to `0x1103dff0`. The Thumb routine at `0x17504` is the ROM's
+memory-mapped flash program path: it clears `WR_PROTECTION`, copies bytes
+through the XIP window, then restores protection. The model applies that store
+path with NOR semantics. With the supplied zero-valued eFuse blocks and the
+four RF calibration bytes derived from the register/RAM snapshot, the 10-second
+air-check now passes: association at 7.80 s, 15 uplink NWK frames (11 unicast)
+and 8 downlink frames. The UART still reports an invalid factory IEEE address
+and uses its chip-ID fallback. This verifies the supplied ROM for this PB-03F
+Zephyr scenario; it does not establish that ROM/image combinations or Zigbee
+network stacks are interchangeable in general.
 
 With the default host-trap ROM, the corrected ABI and no eFuse dump, an
 8-second saved-state TS0001 run reads
@@ -394,6 +410,12 @@ saw association at 7.80 s, 15 uplink NWK frames (11 unicast), and 8 downlink
 NWK frames. This is an emulator-to-emulator result, not a hardware comparison.
 The runnable system is `examples/phy6252-zephyr.yaml`; its image remains a
 local input under `firmware/`.
+
+The same 10-second air-check passes when `rom:` selects the supplied PHY6222
+dump, with external eFuse and RF-calibration inputs reconstructed from its
+module snapshot. It joins at 7.80 s and exchanges the same 15 uplink (11
+unicast) and 8 downlink NWK frames. This is the strongest evidence so far that
+the two parts share the low-level ROM contracts used by this Zephyr build.
 
 The TS0001 dump contains Zigbee and FreeRTOS code, including retained source
 path strings for the Zigbee LMAC, PHY62 radio driver and OS task sources. The

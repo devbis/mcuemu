@@ -125,6 +125,27 @@ int main() {
     Phy6252 chip;
     chip.load_firmware(image);
     chip.reset();
+    CHECK(chip.read(0x4000c858, 4) == 2); // SDK cache init locks the XIP write aperture
+    constexpr std::uint32_t flash_store_code = BootImage::RamBase + 0x2f00;
+    constexpr std::uint32_t flash_store_target = BootImage::FlashBase + 0x3dff0;
+    const std::array<std::uint8_t, 4> flash_store_instructions{0x08, 0x70, 0xfe, 0xe7};
+    CHECK(chip.core().write_memory(flash_store_code, flash_store_instructions.data(),
+                                   flash_store_instructions.size()));
+    auto *flash_store_byte = chip.core().host_pointer(flash_store_target, 1);
+    CHECK(flash_store_byte != nullptr);
+    *flash_store_byte = 0xff;
+    chip.write(0x4000c858, 0, 4); // the ROM temporarily clears WR_PROTECTION
+    chip.core().set_reg(0, 0x35);
+    chip.core().set_reg(1, flash_store_target);
+    chip.core().set_reg(15, flash_store_code);
+    CHECK(chip.run(chip.core().cycles() + 8).reason == cortexm::StopReason::Deadline);
+    CHECK(*flash_store_byte == 0x35);
+    chip.core().set_reg(0, 0x0f);
+    chip.core().set_reg(15, flash_store_code);
+    CHECK(chip.run(chip.core().cycles() + 8).reason == cortexm::StopReason::Deadline);
+    CHECK(*flash_store_byte == 0x05); // a second program can only clear more bits
+    chip.write(0x4000c858, 2, 4);
+    chip.reset(); // restore the timer epoch after exercising the flash programming loop
     CHECK(chip.read(0x4000102c, 4) == 0xffffffffu); // AP_TIM3 free-running CurrentCount
     const std::uint64_t wait_timer_start = chip.core().cycles();
     CHECK(chip.run(wait_timer_start + 16).reason == cortexm::StopReason::Deadline);
