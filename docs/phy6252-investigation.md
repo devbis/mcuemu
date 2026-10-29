@@ -621,6 +621,13 @@ This confirms that GPIO sampling, debounce, timer delivery, and the generic key
 dispatcher all execute. It does not yet identify why the hardware run proceeds
 to a local relay state change while this emulated run does not.
 
+The down-event path also reaches the image helper at `0x110219b4`. In this run
+it calls `0x11030fac`, which reads the byte at `0x1fff81d0` and returns zero;
+the helper then exits before its later state-change calls. The purpose of that
+byte is not identified. This narrows the missing transition to application
+state gating after key dispatch; it does not establish a missing PHY6252 ROM
+function or justify forcing relay state from the GPIO input.
+
 For a separate first-boot probe, a temporary copy of the TS0001 dump had its
 `0x6000`-byte NVM range at `0x11079000` erased. The image reported
 `Device started for the first time` with network state 0. Holding GPIO8 from
