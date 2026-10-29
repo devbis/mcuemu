@@ -364,7 +364,14 @@ outbound Zigbee frame remains unknown. In a separate 20 s run, gateway startup
 was delayed so its first beacon request began at 6.416 s, about 4.5 ms after the
 TS0001 SRX start at 6.411 s. The pcap still contained 19 gateway frames and no
 TS0001 frame. Keep the cleared-NVM image outside the repository with the other
-local test inputs.
+local test inputs. A further 20 s first-boot run added `samplelight_tb03f.bin`
+at 5 s. The light completed MAC association with the sampleGW (request at
+7.694 s, response at 8.190 s) and exchanged NWK data from short address
+`0x7054`. The TS0001 reached `devNetOpt = 0` at 6.409 s, but emitted no frame;
+the pcap has 76 frames, with addressable sources only from the coordinator and
+sampleLight. A joinable network was therefore active in the same simulation,
+though overlap with the TS0001 scan channel at the association time remains
+unverified.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
