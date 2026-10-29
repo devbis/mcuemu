@@ -20,9 +20,11 @@
 #include "mcs51emu/cc2530_debug_programmer.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <cstdint>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -836,6 +838,109 @@ void test_dbglock() {
     CHECK_EQ(accepted(device, {HALT}).at(0), Halted);
 }
 
+// A CHIP_ERASE is a flash operation of the fault model (docs/cc2530.md
+// "Flash fault injection"): completed, it is logged and restarts the 6.2.2
+// tracking of every page; cut by a power cut, it gets the configured
+// outcome over the whole main flash, not over a stale page-erase page.
+void test_chip_erase_fault_model() {
+    using mcs51emu::Cc2530FlashCut;
+    using mcs51emu::Cc2530FlashFaultConfig;
+    using mcs51emu::Cc2530FlashInterrupted;
+    using mcs51emu::Cc2530FlashOpKind;
+    using mcs51emu::Cc2530FlashOutcome;
+    Flash flash = counter_program();
+    flash.at(0x20000).op({0x00, 0x0f, 0xf0, 0x00}); // bank 4
+    flash.at(0x3fff0).op({0x00, 0x00});             // lock bits of pages 0-15
+    std::uint64_t zeros = 0;
+    for (const std::uint8_t byte : flash.bytes)
+        zeros += static_cast<std::uint64_t>(8 - std::popcount(byte));
+
+    auto erase_and_cut = [&](Cc2530FlashInterrupted mode, std::uint64_t seed,
+                             std::optional<std::uint64_t> cut_after) {
+        auto device = std::make_unique<Cc2530F256>();
+        Cc2530FlashFaultConfig config;
+        config.interrupted = mode;
+        config.seed = seed;
+        config.log = true;
+        device->set_flash_fault_config(config);
+        load(*device, flash);
+        device->debug_if_enter();
+        const Cc2530DebugIfResponse erase = send(*device, {CHIP_ERASE});
+        CHECK(erase.accepted);
+        if (cut_after) {
+            advance_to(*device, erase.cycle + *cut_after);
+            device->power_cut();
+        } else {
+            advance_to(*device, erase.cycle + ChipEraseCycles);
+        }
+        return device;
+    };
+    auto erased_bits = [&](const Cc2530F256 &device) {
+        std::uint64_t erased = 0;
+        for (std::uint32_t address = 0; address < Cc2530F256::FlashSize; ++address)
+            erased += static_cast<std::uint64_t>(
+                std::popcount(static_cast<std::uint8_t>(device.read_flash(address) & ~flash.bytes[address])));
+        return erased;
+    };
+
+    {   // Completed.
+        auto device = erase_and_cut(Cc2530FlashInterrupted::Abandon, 0, std::nullopt);
+        CHECK_EQ(erased_bits(*device), zeros);
+        const auto &log = device->flash_log();
+        CHECK_EQ(log.size(), 1u);
+        CHECK(log.at(0).op == Cc2530FlashOpKind::ChipErase);
+        CHECK(log.at(0).outcome == Cc2530FlashOutcome::Completed);
+        CHECK_EQ(log.at(0).changed_bits, zeros);
+        CHECK_EQ(log.at(0).elapsed_cycles, ChipEraseCycles);
+        for (const std::uint64_t count : device->diagnostics().flash_page_erases)
+            CHECK_EQ(count, 1u);
+    }
+    {   // Abandoned (default): no change, no erase counted, debug mode left.
+        auto device = erase_and_cut(Cc2530FlashInterrupted::Abandon, 0, ChipEraseCycles / 2);
+        CHECK_EQ(erased_bits(*device), 0u);
+        CHECK_EQ(device->diagnostics().flash_interrupted_erases, 1u);
+        CHECK_EQ(device->diagnostics().flash_page_erases[0], 0u);
+        const auto &log = device->flash_log();
+        CHECK_EQ(log.size(), 1u);
+        CHECK(log.at(0).op == Cc2530FlashOpKind::ChipErase);
+        CHECK(log.at(0).outcome == Cc2530FlashOutcome::Abandoned);
+        CHECK(log.at(0).cut == Cc2530FlashCut::PowerCut);
+        CHECK_EQ(log.at(0).elapsed_cycles, ChipEraseCycles / 2);
+        CHECK(!device->debug_if_active());
+    }
+    {   // Partial: about half of the 0 bits of the whole flash, the same
+        // bits for the same seed, other bits for another seed.
+        auto a = erase_and_cut(Cc2530FlashInterrupted::Partial, 7, ChipEraseCycles / 2);
+        auto b = erase_and_cut(Cc2530FlashInterrupted::Partial, 7, ChipEraseCycles / 2);
+        auto c = erase_and_cut(Cc2530FlashInterrupted::Partial, 8, ChipEraseCycles / 2);
+        const std::uint64_t erased = erased_bits(*a);
+        CHECK(erased > zeros / 4 && erased < 3 * zeros / 4);
+        CHECK_EQ(a->flash_log().at(0).changed_bits, erased);
+        CHECK(a->flash_log().at(0).outcome == Cc2530FlashOutcome::Partial);
+        CHECK(a->flash_log().at(0).op == Cc2530FlashOpKind::ChipErase);
+        bool same = true;
+        bool differs = false;
+        bool beyond_page0 = false;
+        for (std::uint32_t address = 0; address < Cc2530F256::FlashSize; ++address) {
+            same = same && a->read_flash(address) == b->read_flash(address);
+            differs = differs || a->read_flash(address) != c->read_flash(address);
+            beyond_page0 = beyond_page0 ||
+                           (address >= 2048 && a->read_flash(address) != flash.bytes[address]);
+        }
+        CHECK(same);
+        CHECK(differs);
+        CHECK(beyond_page0);
+        CHECK_EQ(a->diagnostics().flash_page_erases[0], 0u);
+    }
+    {   // Complete: the full erase, counted as an erase of every page.
+        auto device = erase_and_cut(Cc2530FlashInterrupted::Complete, 0, ChipEraseCycles / 4);
+        CHECK_EQ(erased_bits(*device), zeros);
+        CHECK(device->flash_log().at(0).outcome == Cc2530FlashOutcome::Forced);
+        for (const std::uint64_t count : device->diagnostics().flash_page_erases)
+            CHECK_EQ(count, 1u);
+    }
+}
+
 // Table 3-2 configuration effects and Table 3-3 power-mode/stack bits.
 void test_config_effects() {
     {
@@ -1274,6 +1379,7 @@ int main() {
         test_debug_instr();
         test_burst_write_dma();
         test_chip_erase();
+        test_chip_erase_fault_model();
         test_dbglock();
         test_config_effects();
         test_wire_protocol();
