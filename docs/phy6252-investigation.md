@@ -37,9 +37,11 @@ memory-map guarantees.
 UART0 supports polling byte input/output, without interrupt or bit timing.
 GPIO0..GPIO22 support data, direction, input, AON pulls and basic edge/level
 interrupts; alternate pad functions are not modeled. Timer1..Timer6 share the
-SDK's AP_TIM register layout, use four core cycles per tick, and provide
-down-counting, one-shot alarms and IRQs 20..25. The 4 MHz rate is observed in
-the SDK Timer5/6 driver and applied to Timer1..Timer4 by inference. Their
+SDK's AP_TIM register layout and a 4 MHz timer source, providing down-counting,
+one-shot alarms and IRQs 20..25. The SDK Timer5/6 driver documents the 4 MHz
+source and applies a factor of four when programming microsecond intervals;
+the model applies the same rate to Timer1..Timer4 by inference. Timer ticks
+therefore take four HCLK cycles at 16 MHz and eight at 32 MHz. Their
 current-count registers are writable, as required by the SDK timer stop path.
 The AON RTC counter advances at 32.768 kHz when `RTCCTL.RUN` is set;
 direct image boot starts it in the state inferred for the skipped ROM board-init

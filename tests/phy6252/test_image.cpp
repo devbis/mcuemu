@@ -91,6 +91,17 @@ int main() {
     CHECK(chip.run(wait_timer_start + 16).reason == cortexm::StopReason::Deadline);
     CHECK(chip.read(0x4000102c, 4) == 0xfffffffbu); // one tick per four core cycles
     chip.reset();
+    chip.core().set_clock_hz(32000000);
+    const std::uint64_t fast_clock_start = chip.core().cycles();
+    chip.core().advance_to(fast_clock_start + 32);
+    CHECK(chip.read(0x4000102c, 4) == 0xfffffffbu); // still four AP_TIM ticks at 32 MHz HCLK
+    chip.write(0x40001064, 3, 4); // Timer5 load count
+    chip.write(0x4000106c, 3, 4); // enable one-shot
+    const std::uint64_t fast_timer_start = chip.core().cycles();
+    chip.core().advance_to(fast_timer_start + 24);
+    CHECK(chip.read(0x40001068, 4) == 0);
+    CHECK(chip.read(0x40001074, 4) == 1); // three 4 MHz ticks took 24 HCLK cycles
+    chip.reset();
     std::array<std::uint8_t, 2> rf_tp_cal{};
     CHECK(chip.core().read_memory(0x1fff0a44, rf_tp_cal.data(), rf_tp_cal.size()));
     CHECK(rf_tp_cal[0] == 0x2b); // ROM-owned g_rfPhyTpCal0

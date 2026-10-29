@@ -146,7 +146,11 @@ constexpr std::uint32_t GpioMask = 0x007fffff;
 constexpr std::uint32_t TimerEnable = 1u << 0;
 constexpr std::uint32_t TimerUserMode = 1u << 1;
 constexpr std::uint32_t TimerInterruptMask = 1u << 2;
-constexpr std::uint64_t TimerCyclesPerTick = 4; // Zephyr configures both counters at 4 MHz
+constexpr std::uint32_t TimerClockHz = 4000000; // SDK hal_timer_set_loadtimer documents a 4 MHz source
+
+std::uint64_t timer_cycles_per_tick(std::uint32_t core_clock_hz) {
+    return std::max<std::uint64_t>(1, core_clock_hz / TimerClockHz);
+}
 
 bool mux_select_register(std::uint32_t address) {
     return address >= MuxSelectBase && address <= MuxSelectBase + 5 * 4 &&
@@ -486,6 +490,14 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                 64000000, 96000000, 8000000, 4000000};
             const std::uint32_t selection = core_.reg(0);
             if (selection < SystemClockHz.size()) {
+                const std::uint64_t old_cycles_per_tick = timer_cycles_per_tick(core_.clock_hz());
+                const std::uint64_t new_cycles_per_tick = timer_cycles_per_tick(SystemClockHz[selection]);
+                for (unsigned timer = 0; timer < timers_.size(); ++timer) {
+                    sync_timer(timer, core_.cycles());
+                    TimerState &state = timers_[timer];
+                    state.cycle_remainder = state.cycle_remainder * new_cycles_per_tick /
+                        old_cycles_per_tick;
+                }
                 core_.set_clock_hz(SystemClockHz[selection]);
                 core_.set_reg(0, 0);
             } else {
@@ -2295,7 +2307,8 @@ std::uint64_t Phy6252::service_peripherals(std::uint64_t now) {
         const TimerState &state = timers_[timer];
         if (state.control & TimerEnable) {
             const std::uint64_t ticks = state.current == 0 ? 1 : state.current;
-            const std::uint64_t cycles = ticks * TimerCyclesPerTick - state.cycle_remainder;
+            const std::uint64_t cycles = ticks * timer_cycles_per_tick(core_.clock_hz()) -
+                state.cycle_remainder;
             next = std::min(next, now + std::max<std::uint64_t>(1, cycles));
         }
     }
@@ -2332,8 +2345,9 @@ void Phy6252::sync_timer(unsigned timer, std::uint64_t now) {
     if ((state.control & TimerEnable) == 0)
         return;
     const std::uint64_t accumulated = elapsed + state.cycle_remainder;
-    const std::uint64_t ticks = accumulated / TimerCyclesPerTick;
-    state.cycle_remainder = accumulated % TimerCyclesPerTick;
+    const std::uint64_t cycles_per_tick = timer_cycles_per_tick(core_.clock_hz());
+    const std::uint64_t ticks = accumulated / cycles_per_tick;
+    state.cycle_remainder = accumulated % cycles_per_tick;
     if (ticks == 0)
         return;
 
