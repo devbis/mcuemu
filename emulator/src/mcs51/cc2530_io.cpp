@@ -21,6 +21,9 @@
 //      PxINP/P2INP (MDPx = 1: 3-state; P2INP.PDUPx selects pullup or
 //      pulldown per port). P1_0 and P1_1 have no pull (P1INP bits 1:0 are
 //      reserved).
+//   0. In debug mode (SWRU191F Chapter 3) P2_1 is DD, driven by the debug
+//      interface (3-state while it receives), and P2_2 is the DC input;
+//      this overrides all of the above.
 // The level of a pad is the host's external level, else the chip's own
 // output or pull; a floating pad reads 1 (public header contract).
 //
@@ -37,6 +40,7 @@
 #include "cc2530_io.hpp"
 
 #include "cc2530_analog.hpp"
+#include "cc2530_debug.hpp"
 #include "cc2530_timers.hpp"
 #include "cc2530_usart.hpp"
 
@@ -316,6 +320,11 @@ void Io::comparator_changed(bool output) {
 bool Io::cko_level() const { return (half_periods(bus_.lf_now()) & 1u) != 0; }
 
 PinDrive Io::compute_drive(unsigned port, unsigned pin) const {
+    // SWRU191F 3.1/3.2: in debug mode P2.1 is the debug data line DD
+    // (driven by the debug interface or an input) and P2.2 the debug clock
+    // input DC, whatever the port registers say.
+    if (port == 2 && (pin == 1 || pin == 2) && bus_.soc().debug && bus_.soc().debug->active())
+        return pin == 1 ? bus_.soc().debug->dd_drive() : PinDrive::HiZ;
     auto reg = [this](std::uint8_t sfr) { return bus_.storage(sfr_reg(sfr)); };
     const std::uint8_t pmux = reg(SfrPmux);
     if (port == 0 && (pmux & 0x80u) && ((pmux >> 4) & 7u) == pin)
@@ -503,8 +512,23 @@ void Io::refresh(bool notify, std::uint64_t at) {
     if (!notify)
         return;
 
-    // Peripheral inputs read their pads whatever PxSEL is (7.6).
     Soc &soc = bus_.soc();
+    // DC/DD go to the debug interface (debug-mode entry edges are counted
+    // while RESET_N is low).
+    if ((level_changes[2] & 0x06u) && soc.debug)
+        soc.debug->pads_changed(at);
+    // Model-defined: a chip held in reset by RESET_N sees no pad events.
+    if (bus_.reset_held())
+        return;
+    // In debug mode DC/DD are not general-purpose inputs: no port
+    // interrupt or capture edges from them.
+    if (soc.debug && soc.debug->active()) {
+        level_changes[2] = static_cast<std::uint8_t>(level_changes[2] & ~0x06u);
+        rising[2] = static_cast<std::uint8_t>(rising[2] & ~0x06u);
+        falling[2] = static_cast<std::uint8_t>(falling[2] & ~0x06u);
+    }
+
+    // Peripheral inputs read their pads whatever PxSEL is (7.6).
     const std::uint8_t percfg = bus_.storage(sfr_reg(SfrPercfg));
     for (unsigned port = 0; port < 3; ++port) {
         for (unsigned pin = 0; pin < PadCount[port]; ++pin) {

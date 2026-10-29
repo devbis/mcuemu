@@ -2,6 +2,7 @@
 
 #include "cc2530_aes.hpp"
 #include "cc2530_analog.hpp"
+#include "cc2530_debug.hpp"
 #include "cc2530_dma.hpp"
 #include "cc2530_flash.hpp"
 #include "cc2530_io.hpp"
@@ -200,10 +201,7 @@ std::uint8_t hex_byte(std::string_view text, std::size_t offset,
     return static_cast<std::uint8_t>(value);
 }
 
-struct FlashImage {
-    std::vector<std::uint8_t> bytes;
-    std::vector<bool> programmed;
-};
+using FlashImage = Cc2530FlashImage;
 
 FlashImage load_intel_hex(const std::string &path) {
     std::ifstream input(path);
@@ -413,7 +411,9 @@ public:
         c_.refresh_flash(begin, end);
     }
     bool cpu_executing_from_flash() const override {
-        return c_.code_physical(c_.pc()).has_value();
+        // A CPU halted by the debug interface (or in reset) fetches nothing;
+        // a RESUME/STEP_INSTR re-checks (FlashController::cpu_resumed).
+        return !c_.cpu_held() && c_.code_physical(c_.pc()).has_value();
     }
 
     void stall_cpu_until(std::uint64_t until) override {
@@ -432,6 +432,42 @@ public:
     void note_unmodeled(cc2530::Reg reg, bool write) override {
         ++(write ? c_.diagnostics_.unmodeled_feature_writes
                  : c_.diagnostics_.unmodeled_feature_reads)[reg];
+    }
+    bool reset_held() const override { return c_.reset_held_; }
+    bool sleep_requested() const override { return c_.sleep_requested_; }
+    std::uint16_t cpu_pc() const override { return c_.pc(); }
+    bool engine_running() const override { return c_.engine_running_; }
+    std::uint8_t debug_execute(const std::uint8_t *code, unsigned length) override {
+        return c_.debug_execute(code, length);
+    }
+    void wake_for_debug_halt() override {
+        if (c_.sleep_requested_)
+            c_.wake_from_power_mode();
+    }
+    void set_timers_suspended(bool suspended) override {
+        if (suspended == c_.timers_suspended_)
+            return;
+        // Settle Timer 1/3/4 on the old time base first.
+        const std::uint64_t now = c_.engine_cycles();
+        static_cast<cc2530::Peripheral *>(c_.soc_->timer1)->service(now);
+        static_cast<cc2530::Peripheral *>(c_.soc_->timer34)->service(now);
+        const std::uint64_t hf = c_.hf_now();
+        if (suspended)
+            c_.timers_suspended_since_ = hf;
+        else
+            c_.timers_suspended_total_ += hf - c_.timers_suspended_since_;
+        c_.timers_suspended_ = suspended;
+        reschedule();
+    }
+    bool timers_suspended() const override { return c_.timers_suspended_; }
+    std::uint64_t timer_hf_now() const override {
+        return (c_.timers_suspended_ ? c_.timers_suspended_since_ : c_.hf_now()) -
+               c_.timers_suspended_total_;
+    }
+    std::uint64_t timer_hf_deadline(std::uint64_t hf) const override {
+        if (hf == cc2530::Never || c_.timers_suspended_)
+            return cc2530::Never;
+        return hf_deadline(hf + c_.timers_suspended_total_);
     }
     cc2530::Soc &soc() override { return *c_.soc_; }
 
@@ -574,6 +610,8 @@ void Cc2530F256::create_peripherals() {
                       [this](Cc2530FaultAction action) { request_power_fault(action); });
     soc_->aes = add(std::make_unique<cc2530::Aes>(bus));
     soc_->radio = add(std::make_unique<cc2530::Radio>(bus));
+    // Last: its reset reads the pads and DBGLOCK after the others reset.
+    soc_->debug = add(std::make_unique<cc2530::Debug>(bus));
 }
 
 Cc2530F256::~Cc2530F256() {
@@ -608,9 +646,13 @@ void Cc2530F256::load_firmware(const std::string &path) {
         diagnostics_.load_warnings.push_back(
             "image programs the lock bits at " + hex(LockBitsStart, 5) +
             "; PAGELOCK bits are enforced by the flash controller, the debug-lock bit (DBGLOCK) "
-            "is not modeled (no debug interface)");
+            "by the debug interface from the next reset");
     rebuild_views();
     power_on_reset();
+}
+
+Cc2530FlashImage Cc2530F256::read_firmware_image(const std::string &path) {
+    return load_firmware_file(path);
 }
 
 void Cc2530F256::load_flash(std::uint32_t address, const std::vector<std::uint8_t> &image) {
@@ -657,6 +699,9 @@ void Cc2530F256::power_on_reset() {
     osc_stop_at_.fill(UINT64_MAX);
     osc_stops_applied_ = 0;
     cld_since_ = 0;
+    timers_suspended_ = false;
+    timers_suspended_since_ = 0;
+    timers_suspended_total_ = 0;
     reset_core(Cc2530ResetCause::PowerOn);
 }
 
@@ -676,11 +721,13 @@ bool Cc2530F256::apply_pending_reset() {
     return true;
 }
 
-void Cc2530F256::reset_core(Cc2530ResetCause cause) {
+void Cc2530F256::reset_core(Cc2530ResetCause cause, bool count) {
     auto *engine = reinterpret_cast<uc_engine *>(uc_);
     // A flash operation in flight ends with the configured interrupted
     // outcome (no-op after power_cut(), which ended it already).
     soc_->flash->interrupt_operation(Cc2530FlashCut::Reset, cause);
+    if (soc_->debug)
+        soc_->debug->before_reset(cause);
     const std::uint64_t now = engine_cycles();
     // A reset in PM1-PM3 ends the power mode: close the clock-domain books.
     if (power_mode_ != Cc2530PowerMode::Active) {
@@ -693,7 +740,8 @@ void Cc2530F256::reset_core(Cc2530ResetCause cause) {
     pending_reset_.reset();
     pending_power_cut_ = false;
     stall_until_ = 0;
-    ++diagnostics_.resets_by_cause[static_cast<unsigned>(cause)];
+    if (count)
+        ++diagnostics_.resets_by_cause[static_cast<unsigned>(cause)];
     const auto reset_cause = static_cast<std::uint8_t>(cause);
     // Register reset values (SWRU191F): storage is zeroed, the core sets its
     // own registers, then every peripheral writes its reset values.
@@ -1142,6 +1190,12 @@ void Cc2530F256::apply_due_events() {
         }
         if (!due)
             return;
+        if (due == soc_->debug && engine_running_) {
+            // A debug command may halt the CPU or execute DEBUG_INSTR on the
+            // core: it is processed between engine runs, at this boundary.
+            uc_emu_stop(reinterpret_cast<uc_engine *>(uc_));
+            return;
+        }
         if (++services > MaxServicesPerBoundary) {
             request_stop(std::string(due->name()) +
                          ": more than 100000 services at one instruction boundary");
@@ -1361,8 +1415,9 @@ Cc2530F256::Request Cc2530F256::pending_interrupt() const {
 bool Cc2530F256::sync_interrupt_consumption() {
     // The core clears its pending vector when it vectors to it. Every run
     // stops right at the vector (BREAK_PC, or the code hook), so the flag is
-    // cleared before the first ISR instruction executes.
-    if (posted_vector_ == 0 || engine_irq_vector() != 0)
+    // cleared before the first ISR instruction executes. A DEBUG_INSTR runs
+    // with the vector withdrawn; debug_execute() re-posts it.
+    if (debug_executing_ || posted_vector_ == 0 || engine_irq_vector() != 0)
         return false;
     const IrqSource &irq = IrqSources[static_cast<std::size_t>(posted_source_)];
     if (irq.hardware_clear)
@@ -1385,6 +1440,8 @@ void Cc2530F256::check_interrupts_at_boundary() {
 }
 
 void Cc2530F256::update_interrupts() {
+    if (debug_executing_)
+        return; // debug_execute() re-evaluates afterwards
     sync_interrupt_consumption();
     const Request request = pending_interrupt();
     const std::uint16_t vector = request.source < 0 ? 0 : irq_vector(request.source);
@@ -1572,22 +1629,34 @@ void Cc2530F256::code_hook(uc_struct *opaque_uc, std::uint64_t address, std::uin
     // between fast-mode stops: cycle limit, then breakpoint. The first call
     // is the start address, which run() has already checked.
     auto *self = static_cast<Cc2530F256 *>(user_data);
+    if (self->debug_executing_)
+        return; // a DEBUG_INSTR is not a firmware instruction boundary
     auto *engine = reinterpret_cast<uc_engine *>(opaque_uc);
     const auto pc = static_cast<std::uint16_t>(address);
     self->apply_due_events();
     self->check_interrupts_at_boundary();
-    // A reset, CPU stall, power mode or fault requested by the previous
-    // instruction or by a peripheral serviced at this boundary takes effect
-    // before this instruction; run() handles it.
+    // A reset, CPU stall, power mode, debug command, RESET_N change or fault
+    // requested by the previous instruction or by a peripheral serviced at
+    // this boundary takes effect before this instruction; run() handles it.
+    cc2530::Debug &debug = *self->soc_->debug;
     if (self->pending_reset_ || self->sleep_requested_ || !self->stop_error_.empty() ||
-        self->stall_until_ > self->engine_cycles() || self->cpu_clock_stopped()) {
+        self->stall_until_ > self->engine_cycles() || self->cpu_clock_stopped() ||
+        debug.deadline() <= self->engine_cycles() || !self->pending_reset_levels_.empty()) {
         uc_emu_stop(engine);
         return;
     }
     if (self->hook_calls_++ != 0) {
+        debug.progressed();
         std::uint64_t cycles = 0;
         uc_reg_read(engine, UC_MCS51_REG_CYCLES, &cycles);
         if (cycles >= self->trace_cycle_limit_) {
+            uc_emu_stop(engine);
+            return;
+        }
+        // Debug-interface hardware breakpoints come before the emulator's
+        // own breakpoint, as in run().
+        if (debug.breakpoint_at(pc, self->sfr_[SfrFmap])) {
+            debug.breakpoint_hit();
             uc_emu_stop(engine);
             return;
         }
@@ -1658,15 +1727,32 @@ Cc2530RunResult Cc2530F256::run(std::size_t instruction_limit, std::uint64_t cyc
 
     uc_err error = UC_ERR_OK;
     bool idled = false;
+    cc2530::Debug &debug = *soc_->debug;
     while (result.instructions < instruction_limit) {
+        apply_pending_reset_pin();
         apply_pending_reset();
         apply_due_events();
         if (!stop_error_.empty())
             break;
-        if (pending_reset_)
+        if (pending_reset_ || !pending_reset_levels_.empty())
             continue;
         check_interrupts_at_boundary();
         std::uint64_t cycles = engine_cycles();
+        if (cpu_held()) {
+            // RESET_N low, or halted by the debug interface (SWRU191F 3.3):
+            // no instruction or interrupt entry; time and the peripherals
+            // (as the debug configuration allows) advance to the next event.
+            if (result.instructions != 0)
+                break; // the CPU was halted during this call
+            const std::uint64_t until = std::min(cycle_limit, next_deadline());
+            if (until == UINT64_MAX || until <= cycles)
+                break;
+            (reset_held_ ? diagnostics_.reset_pin_cycles : diagnostics_.debug_halted_cycles) +=
+                until - cycles;
+            check_error(uc_reg_write(engine, UC_MCS51_REG_CYCLES, &until), "advance halted time");
+            idled = true;
+            continue;
+        }
         if (stall_until_ > cycles) {
             // SWRU191F 6.3.1: the CPU waits for a flash write/erase started
             // from flash; time and peripherals advance, no instruction or
@@ -1711,23 +1797,56 @@ Cc2530RunResult Cc2530F256::run(std::size_t instruction_limit, std::uint64_t cyc
             break;
         std::uint16_t pc = 0;
         check_error(uc_reg_read(engine, UC_MCS51_REG_PC, &pc), "read PC");
+        if (debug.breakpoint_at(pc, sfr_[SfrFmap])) {
+            debug.breakpoint_hit(); // HALT_STATUS (Table 3-3)
+            continue;
+        }
         if (breakpoint_ && *breakpoint_ == pc && result.instructions != 0) {
             break_hit_ = true;
             break;
         }
 
+        // STEP_INSTR executes exactly one instruction (or interrupt entry).
+        const bool stepping = debug.stepping();
         if (tracing) {
             hook_calls_ = 0;
             trace_cycle_limit_ = cycle_limit;
+            engine_running_ = true;
             error = uc_emu_start(engine, pc, CodeSpace, 0,
-                                 instruction_limit - result.instructions);
+                                 stepping ? 1 : instruction_limit - result.instructions);
+            engine_running_ = false;
         } else {
             std::uint64_t current = before + result.instructions;
             std::uint64_t instruction_stop =
                 instruction_limit > UINT64_MAX - before ? UINT64_MAX
                                                         : before + instruction_limit;
             std::uint32_t break_pc = NoBreak;
-            if (posted_vector_ != 0 && breakpoint_)
+            if (stepping) {
+                instruction_stop = std::min(instruction_stop, current + 1);
+            } else if (debug.breakpoints_armed()) {
+                // Every address the engine must stop at: the posted vector,
+                // the emulator breakpoint and the enabled hardware
+                // breakpoints (any bank: run() compares FMAP). One is the
+                // break address; more are single-stepped.
+                std::array<std::uint32_t, 6> stops{};
+                unsigned count = 0;
+                const auto add_stop = [&](std::uint32_t address) {
+                    if (std::find(stops.begin(), stops.begin() + count, address) ==
+                        stops.begin() + count)
+                        stops[count++] = address;
+                };
+                if (posted_vector_ != 0)
+                    add_stop(posted_vector_);
+                if (breakpoint_)
+                    add_stop(*breakpoint_);
+                for (const cc2530::Debug::Breakpoint &hardware : debug.breakpoints())
+                    if (hardware.enabled)
+                        add_stop(hardware.address);
+                if (count > 1)
+                    instruction_stop = std::min(instruction_stop, current + 1);
+                else if (count == 1)
+                    break_pc = stops[0];
+            } else if (posted_vector_ != 0 && breakpoint_)
                 instruction_stop = std::min(instruction_stop, current + 1); // single-step
             else if (posted_vector_ != 0)
                 break_pc = posted_vector_;
@@ -1746,7 +1865,9 @@ Cc2530RunResult Cc2530F256::run(std::size_t instruction_limit, std::uint64_t cyc
             check_error(uc_reg_write(engine, UC_MCS51_REG_BREAK_PC, &break_pc),
                         "set break address");
             running_fast_ = true;
+            engine_running_ = true;
             error = uc_emu_start(engine, pc, CodeSpace, 0, 0);
+            engine_running_ = false;
             running_fast_ = false;
         }
         std::uint64_t current = 0;
@@ -1755,8 +1876,14 @@ Cc2530RunResult Cc2530F256::run(std::size_t instruction_limit, std::uint64_t cyc
         const auto executed = static_cast<std::size_t>(current - before);
         if (error != UC_ERR_OK || !stop_error_.empty())
             break;
+        if (executed != result.instructions) {
+            debug.progressed();
+            if (stepping)
+                debug.step_completed(sfr_[SfrAcc]);
+        }
         if (executed == result.instructions && !break_hit_ && !sleep_requested_ &&
-            !pending_reset_ && stall_until_ <= engine_cycles() && !cpu_clock_stopped()) {
+            !pending_reset_ && stall_until_ <= engine_cycles() && !cpu_clock_stopped() &&
+            !cpu_held() && debug.deadline() > engine_cycles() && pending_reset_levels_.empty()) {
             error = UC_ERR_EXCEPTION; // no progress
             break;
         }
@@ -1769,15 +1896,26 @@ Cc2530RunResult Cc2530F256::run(std::size_t instruction_limit, std::uint64_t cyc
     // instruction or cycle limit: pending reset, due events, a power mode
     // taking effect and a wake request.
     if (stop_error_.empty() && error == UC_ERR_OK) {
+        apply_pending_reset_pin();
         apply_pending_reset();
         apply_due_events();
         apply_pending_reset();
     }
     check_interrupts_at_boundary();
-    if (sleep_requested_ && stop_error_.empty()) {
+    if (sleep_requested_ && stop_error_.empty() && !cpu_held()) {
         settle_power_mode();
         if (wake_request(power_mode_))
             wake_from_power_mode();
+    }
+    // A hardware breakpoint at the closing boundary halts the CPU in this
+    // call, as at any boundary inside a longer run, so where an instruction
+    // or cycle limit ended the call does not move the halt.
+    if (stop_error_.empty() && error == UC_ERR_OK && !cpu_held() && !sleep_requested_ &&
+        !pending_reset_ && stall_until_ <= engine_cycles()) {
+        std::uint16_t pc = 0;
+        check_error(uc_reg_read(engine, UC_MCS51_REG_PC, &pc), "read PC");
+        if (debug.breakpoint_at(pc, sfr_[SfrFmap]))
+            debug.breakpoint_hit();
     }
     std::uint64_t after = 0;
     check_error(uc_reg_read(engine, UC_MCS51_REG_INSTRUCTIONS, &after),
@@ -1788,6 +1926,8 @@ Cc2530RunResult Cc2530F256::run(std::size_t instruction_limit, std::uint64_t cyc
     result.fmap = sfr_[SfrFmap];
     result.break_hit = break_hit_;
     result.sleeping = sleep_requested_;
+    result.debug_halted = debug.halted();
+    result.reset_held = reset_held_;
     if (error != UC_ERR_OK)
         result.error = std::string(uc_strerror(error)) + " at pc=" + hex(result.pc, 4) +
                        " fmap=" + std::to_string(result.fmap);
@@ -1796,6 +1936,216 @@ Cc2530RunResult Cc2530F256::run(std::size_t instruction_limit, std::uint64_t cyc
     result.step_limit_reached = result.error.empty() && !result.break_hit &&
                                 result.instructions >= instruction_limit;
     return result;
+}
+
+// ---- RESET_N and the debug interface ----
+
+bool Cc2530F256::cpu_held() const { return reset_held_ || soc_->debug->cpu_held(); }
+
+void Cc2530F256::set_reset_pin(bool high) {
+    if (engine_running_) {
+        // A pad change made by the running firmware (a GPIO wired to the
+        // chip's own RESET_N): applied at the next instruction boundary.
+        pending_reset_levels_.push_back(high);
+        uc_emu_stop(reinterpret_cast<uc_engine *>(uc_));
+        return;
+    }
+    if (reset_held_ == !high)
+        return;
+    if (!high) {
+        // SWRU191F 4.3: RESET_N low resets the chip; it stays in reset (no
+        // instruction executes) while the pin is low. The debug interface
+        // counts DC falling edges from here on (3.1).
+        reset_held_ = true;
+        reset_core(Cc2530ResetCause::External);
+        return;
+    }
+    // Model-defined: the chip restarts from a fresh reset state at the
+    // release (time advanced while held), counted as one external reset.
+    const unsigned edges = soc_->debug->entry_edges();
+    reset_held_ = false;
+    reset_core(Cc2530ResetCause::External, false);
+    if (edges >= 2)
+        soc_->debug->enter(); // 3.1: two DC falling edges while RESET_N low
+}
+
+void Cc2530F256::apply_pending_reset_pin() {
+    if (pending_reset_levels_.empty())
+        return;
+    const std::vector<bool> levels = std::move(pending_reset_levels_);
+    pending_reset_levels_.clear();
+    for (const bool high : levels)
+        set_reset_pin(high);
+}
+
+void Cc2530F256::debug_if_enter() {
+    if (engine_running_)
+        throw std::logic_error("debug_if_enter() inside run()");
+    pending_reset_levels_.clear();
+    reset_held_ = false;
+    reset_core(Cc2530ResetCause::External);
+    soc_->debug->enter();
+}
+
+bool Cc2530F256::debug_if_active() const { return soc_->debug->active(); }
+bool Cc2530F256::debug_if_halted() const { return soc_->debug->halted(); }
+bool Cc2530F256::debug_if_locked() const { return soc_->debug->locked(); }
+std::uint8_t Cc2530F256::debug_if_status() const { return soc_->debug->status(); }
+std::uint8_t Cc2530F256::debug_if_config() const { return soc_->debug->config(); }
+
+unsigned Cc2530F256::debug_if_input_length(std::uint8_t command, std::uint8_t second) {
+    return cc2530::Debug::input_length(command, second);
+}
+
+unsigned Cc2530F256::debug_if_output_length(std::uint8_t command) {
+    return cc2530::Debug::output_length(command);
+}
+
+void Cc2530F256::debug_if_submit(const std::vector<std::uint8_t> &command) {
+    if (engine_running_)
+        throw std::logic_error("debug_if_submit() inside run()");
+    soc_->debug->host_submit(command);
+}
+
+std::uint64_t Cc2530F256::debug_if_due_cycle() const { return soc_->debug->host_due(); }
+
+std::optional<Cc2530DebugIfResponse> Cc2530F256::debug_if_take_response() {
+    std::optional<cc2530::Debug::Response> response = soc_->debug->host_take();
+    if (!response)
+        return std::nullopt;
+    return Cc2530DebugIfResponse{std::move(response->bytes), response->accepted, response->at};
+}
+
+Cc2530DebugIfResponse Cc2530F256::debug_if_command(const std::vector<std::uint8_t> &command) {
+    constexpr std::uint64_t Timeout = 32000000; // one second of virtual time
+    debug_if_submit(command);
+    const std::uint64_t start = engine_cycles();
+    for (;;) {
+        if (std::optional<Cc2530DebugIfResponse> response = debug_if_take_response())
+            return std::move(*response);
+        const std::uint64_t now = engine_cycles();
+        if (now - start > Timeout)
+            throw std::runtime_error("CC2530 debug interface: no response to command " +
+                                     hex(command.front(), 2) + " within 1 s");
+        const Cc2530RunResult result =
+            run(SIZE_MAX, std::max(now + 1, soc_->debug->host_due()));
+        if (!result.error.empty())
+            throw std::runtime_error("CC2530 debug interface: " + result.error);
+    }
+}
+
+std::uint8_t Cc2530F256::debug_execute(const std::uint8_t *code, unsigned length) {
+    auto *engine = reinterpret_cast<uc_engine *>(uc_);
+    if (engine_running_ || length == 0 || length > 3) {
+        request_stop("DEBUG_INSTR outside an instruction boundary");
+        return sfr_[SfrAcc];
+    }
+    // Model-defined: 0xA5 is the one undefined MCS-51 opcode; SWRU191F does
+    // not say what the CPU does with it, so it is not executed.
+    if (code[0] == 0xa5) {
+        ++diagnostics_.debug_instructions;
+        return sfr_[SfrAcc];
+    }
+    // SWRU191F Table 3-1: "the supplied instruction will be executed by the
+    // CPU without incrementing the program counter". The model feeds the
+    // bytes to the real core by placing them at PC in the CODE view in use,
+    // runs one instruction without interrupts and in zero virtual time
+    // (model-defined), and restores the view.
+    const std::uint16_t start_pc = pc();
+    std::uint64_t instructions = 0;
+    std::uint64_t cycles = 0;
+    check_error(uc_reg_read(engine, UC_MCS51_REG_INSTRUCTIONS, &instructions),
+                "read instruction counter");
+    check_error(uc_reg_read(engine, UC_MCS51_REG_CYCLES, &cycles), "read cycles");
+    const std::uint8_t inhibit = engine_inhibit() ? 1 : 0;
+    const bool xmap = (sfr_[SfrMemctr] & MemctrXmap) != 0;
+    std::uint8_t *buffer =
+        xmap ? xmap_view_.data() : views_.data() + (sfr_[SfrFmap] & 0x07u) * CodeSpace;
+    const auto at = [&](unsigned i) { return static_cast<std::uint16_t>(start_pc + i); };
+    // The instruction comes from the debug interface, not from memory: a
+    // MOVC that reads one of the patched addresses gets the memory byte.
+    std::optional<std::uint16_t> movc_target;
+    if (code[0] == 0x93) { // MOVC A,@A+DPTR
+        const bool dptr1 = (sfr_[SfrDps] & 1u) != 0;
+        const std::uint16_t dptr = static_cast<std::uint16_t>(
+            sfr_[dptr1 ? SfrDph1 : SfrDph0] << 8 | sfr_[dptr1 ? SfrDpl1 : SfrDpl0]);
+        movc_target = static_cast<std::uint16_t>(dptr + sfr_[SfrAcc]);
+    } else if (code[0] == 0x83) { // MOVC A,@A+PC
+        movc_target = static_cast<std::uint16_t>(start_pc + 1 + sfr_[SfrAcc]);
+    }
+    std::array<std::uint8_t, 3> original{};
+    for (unsigned i = 0; i < length; ++i) {
+        original[i] = buffer[at(i)];
+        buffer[at(i)] = code[i];
+    }
+    debug_executing_ = true;
+    const std::uint16_t no_vector = 0;
+    check_error(uc_reg_write(engine, UC_MCS51_REG_IRQ_VECTOR, &no_vector),
+                "withdraw interrupt");
+    uc_err error = UC_ERR_OK;
+    engine_running_ = true;
+    if (code_hook_installed_) {
+        error = uc_emu_start(engine, start_pc, CodeSpace, 0, 1);
+    } else {
+        const std::uint64_t no_event = UINT64_MAX;
+        const std::uint64_t one = instructions + 1;
+        const std::uint32_t no_break = NoBreak;
+        check_error(uc_reg_write(engine, UC_MCS51_REG_EVENT_CYCLES, &no_event), "set cycle limit");
+        check_error(uc_reg_write(engine, UC_MCS51_REG_INSTRUCTION_LIMIT, &one),
+                    "set instruction limit");
+        check_error(uc_reg_write(engine, UC_MCS51_REG_BREAK_PC, &no_break), "set break address");
+        error = uc_emu_start(engine, start_pc, CodeSpace, 0, 0);
+    }
+    engine_running_ = false;
+    for (unsigned i = 0; i < length; ++i) {
+        const std::uint16_t address = at(i);
+        // Through XMAP the patched bytes are SRAM: keep a byte the
+        // instruction itself wrote.
+        if (xmap && address >= BankSize && address < BankSize + SramSize &&
+            buffer[address] != code[i])
+            continue;
+        buffer[address] = original[i];
+    }
+    install_code_view(); // the XMAP view may have copied patched bytes
+    if (movc_target) {
+        for (unsigned i = 0; i < length; ++i) {
+            if (*movc_target != at(i))
+                continue;
+            const std::uint8_t value = original[i];
+            sfr_[SfrAcc] = value;
+            unsigned ones = 0;
+            for (std::uint8_t bits = value; bits != 0; bits &= static_cast<std::uint8_t>(bits - 1))
+                ++ones;
+            sfr_[SfrPsw] = static_cast<std::uint8_t>((sfr_[SfrPsw] & 0xfeu) | (ones & 1u));
+        }
+    }
+    // Zero virtual time, not a firmware instruction.
+    check_error(uc_reg_write(engine, UC_MCS51_REG_INSTRUCTIONS, &instructions),
+                "restore instruction counter");
+    check_error(uc_reg_write(engine, UC_MCS51_REG_CYCLES, &cycles), "restore cycles");
+    if (code[0] != 0x32) // RETI sets the post-RETI rule itself
+        check_error(uc_reg_write(engine, UC_MCS51_REG_INTERRUPT_INHIBIT, &inhibit),
+                    "restore post-RETI inhibit");
+    // Re-post the request the core had, then re-evaluate it.
+    check_error(uc_reg_write(engine, UC_MCS51_REG_IRQ_LEVEL, &posted_level_),
+                "restore interrupt level");
+    check_error(uc_reg_write(engine, UC_MCS51_REG_IRQ_VECTOR, &posted_vector_),
+                "restore interrupt");
+    debug_executing_ = false;
+    update_interrupts();
+    // The PC stays unless the instruction transfers control: an
+    // unconditional jump, call or return, or a taken conditional branch.
+    std::uint16_t new_pc = 0;
+    check_error(uc_reg_read(engine, UC_MCS51_REG_PC, &new_pc), "read PC");
+    const std::uint8_t opcode = code[0];
+    const bool transfer = opcode == 0x02 || opcode == 0x12 || (opcode & 0x0fu) == 0x01u ||
+                          opcode == 0x22 || opcode == 0x32 || opcode == 0x80 || opcode == 0x73;
+    if (!transfer && new_pc == at(length))
+        check_error(uc_reg_write(engine, UC_MCS51_REG_PC, &start_pc), "restore PC");
+    if (error != UC_ERR_OK)
+        request_stop(std::string("DEBUG_INSTR ") + hex(opcode, 2) + ": " + uc_strerror(error));
+    ++diagnostics_.debug_instructions;
+    return sfr_[SfrAcc];
 }
 
 namespace {

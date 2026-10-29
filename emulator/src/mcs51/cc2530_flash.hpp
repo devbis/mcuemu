@@ -2,9 +2,10 @@
 
 // CC2530F256 flash controller (SWRU191F Chapter 6): FCTL, FADDRH/L, FWDATA,
 // page erase, word programming (CPU from SRAM or DMA trigger FLASH),
-// write-protection lock bits, plus the flash fault model: SWRU191F 6.2.2
-// write-limit tracking, outcomes of operations cut by a reset or power cut,
-// power-cut injection and the per-page / per-operation instrumentation.
+// write-protection lock bits, the debug interface's chip erase (3.3), plus
+// the flash fault model: SWRU191F 6.2.2 write-limit tracking, outcomes of
+// operations cut by a reset or power cut, power-cut injection and the
+// per-page / per-operation instrumentation.
 
 #include "cc2530_soc.hpp"
 
@@ -64,6 +65,16 @@ public:
     const std::vector<Cc2530FlashLogEntry> &log() const noexcept { return log_; }
     std::vector<Cc2530FlashLogEntry> take_log();
 
+    // Debug command CHIP_ERASE (SWRU191F Table 3-1): erases the whole main
+    // flash, lock bits included, in the chip-erase time; an operation in
+    // progress is abandoned.
+    void start_chip_erase();
+    // Table 3-3 CHIP_ERASE_BUSY.
+    bool chip_erase_busy() const noexcept { return op_ == Op::Erase && chip_erase_; }
+    // The debug interface let a halted CPU run again: it stalls like a CPU
+    // that started the operation from flash (6.3.1).
+    void cpu_resumed();
+
 private:
     // Events are processed by Dma::advance() together with the DMA events
     // (the FLASH DMA trigger and DMA writes to FWDATA interleave exactly).
@@ -79,12 +90,16 @@ private:
     void set_faddr(std::uint16_t word_address);
     void start_erase(std::uint64_t at, bool then_write);
     void finish_erase(std::uint64_t at);
+    // Fills flash [begin, end) with 0xFF and refreshes the CODE views.
+    void erase_range(std::uint32_t begin, std::uint32_t end);
     void start_write(std::uint64_t at);
     void start_word(std::uint64_t at, const std::uint8_t *data);
     void finish_word(std::uint64_t at);
     void end_write();
     void stall_if_executing_from_flash(std::uint64_t until);
     void request_data();
+    // Number of 0 bits in [begin, end), i.e. the bits an erase changes.
+    std::uint32_t erased_bits(std::uint32_t begin, std::uint32_t end) const;
 
     // 6.2.2 bookkeeping since the last erase of one page.
     struct PageWear {
@@ -115,6 +130,7 @@ private:
 
     Op op_ = Op::None;
     bool write_after_erase_ = false; // ERASE and WRITE set together
+    bool chip_erase_ = false;        // the erase is a debug CHIP_ERASE
     std::uint64_t erase_end_ = 0;
     unsigned erase_page_ = 0;
     std::uint64_t window_end_ = 0; // the write sequence times out here

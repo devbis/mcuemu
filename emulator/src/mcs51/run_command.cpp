@@ -1,6 +1,7 @@
 #include "mcs51emu/run_command.hpp"
 
 #include "mcs51emu/ca51f253l3.hpp"
+#include "mcs51emu/cc2530_debug_programmer.hpp"
 #include "mcs51emu/cc2530_hit_report.hpp"
 #include "mcs51emu/cc2530f256.hpp"
 
@@ -26,7 +27,7 @@ void usage(std::ostream &out) {
            "       mcuemu run --model CC2530F256 --firmware IMAGE [--steps N]\n"
            "       [--trace] [--state] [--until-pc ADDR [--hits N] [--report-hits]\n"
            "       [--write-xdata HIT:ADDR:HEX]...] [--dump-xdata ADDR:LEN]...\n"
-           "       [--ieee-address HEX]\n"
+           "       [--ieee-address HEX] [--program-via-debug-if [--debug-lock]]\n"
            "\n"
            "IMAGE may be a raw binary or Intel HEX file.\n"
            "Model: CA51F253L3 (32 KiB code flash, 512-byte data flash, "
@@ -40,7 +41,11 @@ void usage(std::ostream &out) {
            "N-th arrival at --until-pc instead of the first; --report-hits prints a\n"
            "'hit:' block (with the --dump-xdata regions and, with --state, IDATA and\n"
            "SFRs) at every arrival. --write-xdata stores HEX bytes to XDATA SRAM at\n"
-           "ADDR on arrival HIT, after its report, as a halted debugger would.\n";
+           "ADDR on arrival HIT, after its report, as a halted debugger would.\n"
+           "--program-via-debug-if starts from an erased chip and programs IMAGE\n"
+           "through the two-wire debug interface as a CC Debugger does (CHIP_ERASE,\n"
+           "BURST_WRITE and DMA to the flash controller, read-back), then releases\n"
+           "RESET_N and runs it; --debug-lock also programs DBGLOCK = 0.\n";
 }
 
 std::size_t parse_count(const std::string &text) {
@@ -79,6 +84,8 @@ struct Cc2530Options {
     std::vector<XdataWrite> write_xdata;
     std::vector<std::pair<std::uint16_t, std::uint32_t>> dump_xdata;
     std::optional<std::uint64_t> ieee_address;
+    bool program_via_debug_if{};
+    bool debug_lock{};
 };
 
 mcs51emu::Cc2530HitDump hit_dump(const Cc2530Options &options) {
@@ -97,7 +104,30 @@ void print_hit(std::ostream &out, const mcs51emu::Cc2530F256 &device,
 
 int run_cc2530(const Cc2530Options &options) {
     mcs51emu::Cc2530F256 device;
-    device.load_firmware(options.firmware);
+    if (options.program_via_debug_if) {
+        mcs51emu::Cc2530FlashImage image =
+            mcs51emu::Cc2530F256::read_firmware_image(options.firmware);
+        mcs51emu::Cc2530DebugProgramOptions program;
+        program.debug_lock = options.debug_lock;
+        const mcs51emu::Cc2530DebugProgramResult programmed =
+            mcs51emu::cc2530_debug_program(mcs51emu::cc2530_debug_if_link(device), image, program);
+        if (options.debug_lock)
+            image.bytes.back() &= 0x7f;
+        std::size_t differing = 0;
+        for (std::uint32_t address = 0; address < mcs51emu::Cc2530F256::FlashSize; ++address)
+            differing += device.read_flash(address) != image.bytes[address];
+        std::cout << "debug-if-program: chip-id=0x" << std::hex << unsigned(programmed.chip_id)
+                  << " chip-version=0x" << unsigned(programmed.chip_version) << std::dec
+                  << " pages=" << programmed.pages << " verified=" << programmed.bytes_verified
+                  << " commands=" << programmed.commands << " cycles=" << programmed.start_cycle
+                  << ".." << programmed.end_cycle << '\n'
+                  << "debug-if-flash: " << (differing == 0 ? "matches the image" : "differs from the image")
+                  << " (" << differing << " bytes differ)\n";
+        if (differing != 0)
+            return 1;
+    } else {
+        device.load_firmware(options.firmware);
+    }
     if (options.ieee_address)
         device.set_ieee_address(*options.ieee_address);
     if (options.trace)
@@ -278,6 +308,12 @@ int run_command(int argc, char **argv) {
                 text = "0x" + text;
             cc2530.ieee_address = parse_number(text, UINT64_MAX, "--ieee-address");
             cc2530_only = true;
+        } else if (option == "--program-via-debug-if") {
+            cc2530.program_via_debug_if = true;
+            cc2530_only = true;
+        } else if (option == "--debug-lock") {
+            cc2530.debug_lock = true;
+            cc2530_only = true;
         }
         else if (option == "--help" || option == "-h") {
             usage(std::cout);
@@ -295,6 +331,8 @@ int run_command(int argc, char **argv) {
         if ((cc2530.hits != 1 || cc2530.report_hits || !cc2530.write_xdata.empty()) &&
             !cc2530.until_pc)
             throw std::invalid_argument("--hits, --report-hits and --write-xdata need --until-pc");
+        if (cc2530.debug_lock && !cc2530.program_via_debug_if)
+            throw std::invalid_argument("--debug-lock needs --program-via-debug-if");
         for (const Cc2530Options::XdataWrite &write : cc2530.write_xdata)
             if (write.hit > cc2530.hits)
                 throw std::invalid_argument("--write-xdata hit " + std::to_string(write.hit) +
@@ -308,8 +346,8 @@ int run_command(int argc, char **argv) {
     }
     if (cc2530_only)
         throw std::invalid_argument(
-            "--until-pc, --hits, --report-hits, --write-xdata, --dump-xdata and "
-            "--ieee-address need --model CC2530F256");
+            "--until-pc, --hits, --report-hits, --write-xdata, --dump-xdata, "
+            "--ieee-address, --program-via-debug-if and --debug-lock need --model CC2530F256");
 
     mcs51emu::Ca51F253L3 device;
     if (trace)

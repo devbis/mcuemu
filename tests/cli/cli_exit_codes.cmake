@@ -56,3 +56,17 @@ expect_run(0 "xdata 0x0100: 5a" run --model CC2530F256 --firmware "${WORK}/loop.
 expect_run(2 "--report-hits" run --model CA51F253L3 --firmware "${WORK}/loop.hex"
            --report-hits)
 expect_run(2 "NRF52840" run --firmware "${WORK}/fault.hex")
+# Programming through the debug interface: the image is flash-identical, and
+# the firmware runs from the RESET_N release. --debug-lock adds the lock-bit
+# page (page 127) to page 0.
+expect_run(0 "debug-if-flash: matches the image (0 bytes differ)" run --model CC2530F256
+           --firmware "${WORK}/loop.hex" --steps 100 --program-via-debug-if)
+# 100 instructions from the release: 50 times INC 0x30, as with a direct load.
+expect_run(0 "idata 0x0030: 32" run --model CC2530F256 --firmware "${WORK}/loop.hex"
+           --steps 100 --program-via-debug-if --state)
+expect_run(0 "pages=2 verified=4096" run --model CC2530F256 --firmware "${WORK}/loop.hex" --steps 100
+           --program-via-debug-if --debug-lock)
+expect_run(2 "--debug-lock needs --program-via-debug-if" run --model CC2530F256
+           --firmware "${WORK}/loop.hex" --debug-lock)
+expect_run(2 "--program-via-debug-if and --debug-lock need --model CC2530F256"
+           run --model CA51F253L3 --firmware "${WORK}/loop.hex" --program-via-debug-if)

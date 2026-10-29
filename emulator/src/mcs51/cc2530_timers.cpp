@@ -1,7 +1,9 @@
 // CC2530 Timer 1 (SWRU191F Chapter 9), Timer 3/Timer 4 (Chapter 10), sleep
 // timer (Chapter 11) and watchdog timer (Chapter 16).
 //
-// Timer 1, 3 and 4 count ticks of the HF domain (hf_now()): the tick is
+// Timer 1, 3 and 4 count ticks of the HF domain (Bus::timer_hf_now(), the
+// HF time minus the time the debug interface suspended the timers, SWRU191F
+// Table 3-2 TIMERS_OFF/TIMER_SUSPEND): the tick is
 // 32 MHz >> CLKCONSTA.TICKSPD (SWRU191F 4.4, 9.1, 10.1), divided by the
 // timer's prescaler. Between events the counters are not stepped one by one:
 // a counter keeps the HF time of its last step (anchor) and is advanced in
@@ -295,7 +297,7 @@ std::uint64_t Timer1::unit_deadline(const Bus &bus, const Unit &unit) {
     const std::uint64_t ticks = ticks_to_event(unit);
     if (ticks == 0)
         return Never;
-    return bus.hf_deadline(unit.c.anchor + ticks * unit.c.period);
+    return bus.timer_hf_deadline(unit.c.anchor + ticks * unit.c.period);
 }
 
 // ===========================================================================
@@ -375,7 +377,7 @@ void Timer1::reset(ResetCause) {
     unit_.channels = 5;
     unit_.timer1 = true;
     unit_.c.period = tick_period();
-    unit_.c.anchor = bus_.hf_now();
+    unit_.c.anchor = bus_.timer_hf_now();
     ir_prescale_ = 0;
     // SWRU191F 9.12: T1CCTLn reset 0x40 (IM = 1), everything else 0x00.
     for (unsigned n = 0; n < 5; ++n)
@@ -428,7 +430,7 @@ void Timer1::sync_storage() {
 }
 
 void Timer1::settle() {
-    advance(unit_, bus_.hf_now(), [this](std::uint8_t events) { handle_events(events); });
+    advance(unit_, bus_.timer_hf_now(), [this](std::uint8_t events) { handle_events(events); });
     sync_storage();
 }
 
@@ -447,7 +449,7 @@ void Timer1::notify_outputs(std::uint8_t before) {
 
 std::uint16_t Timer1::count_now() const {
     Unit copy = unit_;
-    advance(copy, bus_.hf_now(), [](std::uint8_t) {});
+    advance(copy, bus_.timer_hf_now(), [](std::uint8_t) {});
     return copy.c.count;
 }
 
@@ -523,7 +525,7 @@ void Timer1::write(Reg reg, std::uint8_t value) {
         // phase restarts at the write and the count direction is up.
         c.count = 0;
         c.down = false;
-        c.anchor = bus_.hf_now();
+        c.anchor = bus_.timer_hf_now();
         ir_prescale_ = 0;
         load_pending(unit_);
         for (unsigned n = 0; n < 5; ++n)
@@ -543,7 +545,7 @@ void Timer1::write(Reg reg, std::uint8_t value) {
         // Model-defined: starting or changing the prescaler restarts the
         // tick phase at the write.
         if ((c.mode == CountMode::Stopped && mode != CountMode::Stopped) || period != c.period)
-            c.anchor = bus_.hf_now();
+            c.anchor = bus_.timer_hf_now();
         if (mode == CountMode::UpDown && c.mode != CountMode::UpDown)
             c.down = false;
         c.mode = mode;
@@ -572,7 +574,7 @@ void Timer1::write(Reg reg, std::uint8_t value) {
         bus_.storage(reg) = value;
         if (irgen != c.external) {
             c.external = irgen;
-            c.anchor = bus_.hf_now();
+            c.anchor = bus_.timer_hf_now();
             ir_prescale_ = 0;
         }
         break;
@@ -612,7 +614,7 @@ void Timer1::clock_changed() {
     const std::uint64_t period = tick_period();
     if (period != unit_.c.period) {
         unit_.c.period = period;
-        unit_.c.anchor = bus_.hf_now();
+        unit_.c.anchor = bus_.timer_hf_now();
     }
     notify_outputs(before);
 }
@@ -652,7 +654,8 @@ bool Timer1::output(unsigned channel) const {
 
 // SWRU191F 9.7: after the timer has been started, the selected edge
 // captures the counter; the input is synchronized to the system clock.
-// Model-defined: no capture while suspended or in PM1-PM3, where Table 4-1
+// Model-defined: no capture while suspended (also by the debug interface)
+// or in PM1-PM3, where Table 4-1
 // stops the system clock that both the counter and the input synchronizer
 // use. Sets T1STAT.CHnIF; returns whether the counter was captured.
 bool Timer1::capture(unsigned channel, bool rising) {
@@ -660,7 +663,7 @@ bool Timer1::capture(unsigned channel, bool rising) {
     const unsigned cap = ch.ctl & 3u;
     const bool edge_selected = rising ? (cap & 1u) : (cap & 2u);
     if ((ch.ctl & 0x04u) || !edge_selected || unit_.c.mode == CountMode::Stopped ||
-        hf_stopped(bus_.power_mode()))
+        hf_stopped(bus_.power_mode()) || bus_.timers_suspended())
         return false;
     ch.value = unit_.c.count;
     ch.has_pending = false;
@@ -774,7 +777,7 @@ void Timer34::reset(ResetCause) {
         bus_.storage(sfr_reg(t34_sfr(SfrT3cctl0, index))) = 0x40;
         bus_.storage(sfr_reg(t34_sfr(SfrT3cctl1, index))) = 0x40;
         unit.c.period = tick_period(index);
-        unit.c.anchor = bus_.hf_now();
+        unit.c.anchor = bus_.timer_hf_now();
     }
     // SWRU191F 10.8: TIMIF 0x40 (T1OVFIM = 1).
     bus_.storage(sfr_reg(SfrTimif)) = TimifT1ovfim;
@@ -829,7 +832,7 @@ void Timer34::sync_storage() {
 
 void Timer34::settle() {
     for (unsigned index = 0; index < 2; ++index)
-        Timer1::advance(unit_[index], bus_.hf_now(),
+        Timer1::advance(unit_[index], bus_.timer_hf_now(),
                         [this, index](std::uint8_t events) { handle_events(index, events); });
     sync_storage();
 }
@@ -863,7 +866,7 @@ std::uint8_t Timer34::peek(Reg reg) const {
     const T34Reg r = decode_t34(reg);
     if (r.kind == T34Kind::Cnt) {
         Unit copy = unit_[r.index];
-        Timer1::advance(copy, bus_.hf_now(), [](std::uint8_t) {});
+        Timer1::advance(copy, bus_.timer_hf_now(), [](std::uint8_t) {});
         return static_cast<std::uint8_t>(copy.c.count);
     }
     return bus_.storage(reg);
@@ -893,7 +896,7 @@ void Timer34::write(Reg reg, std::uint8_t value) {
             // direction to up and initializes all channel outputs.
             c.count = 0;
             c.down = false;
-            c.anchor = bus_.hf_now();
+            c.anchor = bus_.timer_hf_now();
             Timer1::load_pending(unit);
             for (unsigned n = 0; n < 2; ++n)
                 Timer1::initialize_output(unit.ch[n]);
@@ -901,7 +904,7 @@ void Timer34::write(Reg reg, std::uint8_t value) {
         // Model-defined: starting or changing the prescaler restarts the
         // tick phase at the write.
         if (starting || period != c.period)
-            c.anchor = bus_.hf_now();
+            c.anchor = bus_.timer_hf_now();
         if (mode == CountMode::Down && (starting || c.mode != CountMode::Down)) {
             // SWRU191F 10.2.2: once started, the counter is loaded from TxCC0.
             c.count = unit.ch[0].value;
@@ -994,7 +997,7 @@ void Timer34::clock_changed() {
         const std::uint64_t period = tick_period(index);
         if (period != unit_[index].c.period) {
             unit_[index].c.period = period;
-            unit_[index].c.anchor = bus_.hf_now();
+            unit_[index].c.anchor = bus_.timer_hf_now();
         }
     }
     notify_outputs(before);
@@ -1030,12 +1033,12 @@ void Timer34::input_changed(unsigned timer, unsigned channel, bool level) {
     settle();
     Unit &unit = unit_[index];
     Timer1::Channel &ch = unit.ch[channel];
-    // SWRU191F 10.4. Model-defined: no capture while the timer is stopped or
-    // in PM1-PM3.
+    // SWRU191F 10.4. Model-defined: no capture while the timer is stopped,
+    // suspended by the debug interface or in PM1-PM3.
     const unsigned cap = ch.ctl & 3u;
     const bool edge_selected = level ? (cap & 1u) : (cap & 2u);
     if ((ch.ctl & 0x04u) || !edge_selected || unit.c.mode == Timer1::CountMode::Stopped ||
-        hf_stopped(bus_.power_mode())) {
+        hf_stopped(bus_.power_mode()) || bus_.timers_suspended()) {
         notify_outputs(before);
         return;
     }

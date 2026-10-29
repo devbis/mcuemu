@@ -72,7 +72,27 @@ struct Cc2530RunResult {
     // interrupt request is pending and no scheduled event within the cycle
     // limit has woken it (see Cc2530F256::run).
     bool sleeping{};
+    // At the return: the debug interface holds the CPU halted (SWRU191F
+    // 3.3), or RESET_N is held low (Cc2530F256::set_reset_pin).
+    bool debug_halted{};
+    bool reset_held{};
     std::string error; // CPU exception or unsupported SoC behavior
+};
+
+// Response to one debug-interface command (SWRU191F Table 3-1).
+struct Cc2530DebugIfResponse {
+    std::vector<std::uint8_t> bytes;
+    // False: the command was undefined or refused (DEBUG_LOCKED, a chip
+    // erase in progress, a power mode, CPU not halted, ...); the response
+    // then repeats the status byte (model-defined).
+    bool accepted{};
+    std::uint64_t cycle{}; // virtual time at which it was executed
+};
+
+// A firmware image as Cc2530F256::load_firmware reads it.
+struct Cc2530FlashImage {
+    std::vector<std::uint8_t> bytes; // 256 KiB, 0xff where not programmed
+    std::vector<bool> programmed;    // bytes the image file defines
 };
 
 struct Cc2530Registers {
@@ -209,6 +229,12 @@ struct Cc2530Diagnostics {
     // always enables the interrupt source"; modeled as a sleep timer
     // interrupt request, Figure 2-4).
     std::uint64_t ircon_bit6_writes{};
+    // Debug interface: virtual time with the CPU halted by it, with RESET_N
+    // held low, and DEBUG_INSTR instructions executed (not counted in
+    // registers().instructions).
+    std::uint64_t debug_halted_cycles{};
+    std::uint64_t reset_pin_cycles{};
+    std::uint64_t debug_instructions{};
     // XREGs no peripheral model owns (plain latches).
     std::map<std::uint16_t, std::uint64_t> unmodeled_xreg_reads;
     std::map<std::uint16_t, std::uint64_t> unmodeled_xreg_writes;
@@ -302,6 +328,8 @@ public:
     // Erases the flash, programs `image` at physical `address` and performs a
     // power-on reset (used by tests).
     void load_flash(std::uint32_t address, const std::vector<std::uint8_t> &image);
+    // Parses an image file the way load_firmware does, without loading it.
+    static Cc2530FlashImage read_firmware_image(const std::string &path);
 
     // Power-on reset: virtual time and SRAM cleared (SRAM power-on content is
     // undefined; the model fills it with flash_fault_config().sram_fill, 0 by
@@ -334,6 +362,47 @@ public:
     void set_breakpoint(std::optional<std::uint16_t> logical_pc) noexcept {
         breakpoint_ = logical_pc;
     }
+
+    // ---- RESET_N and the two-wire debug interface (SWRU191F Chapter 3) ----
+    // Not related to set_breakpoint() above, which is the emulator's own
+    // breakpoint. The debug interface works on the pads: DC is P2.2 and DD
+    // is P2.1 (set_pin_input / pin_drive), see docs/cc2530.md.
+    //
+    // Level on the RESET_N pin (true: high, released). Low resets the chip
+    // (SLEEPSTA.RST = External) and holds it in reset; releasing it starts
+    // the CPU at 0x0000, or enters debug mode with the CPU halted if DC
+    // fell twice while RESET_N was low (3.1). Inside run() the change is
+    // applied at the next instruction boundary.
+    void set_reset_pin(bool high);
+    bool reset_pin_held() const noexcept { return reset_held_; }
+    // The RESET_N / DC entry sequence in one step: an external reset, then
+    // debug mode with the CPU halted at 0x0000.
+    void debug_if_enter();
+    bool debug_if_active() const;
+    bool debug_if_halted() const;
+    // DBGLOCK as latched at the last reset (DEBUG_LOCKED, 3.4.1).
+    bool debug_if_locked() const;
+    std::uint8_t debug_if_status() const; // Table 3-3
+    std::uint8_t debug_if_config() const; // Table 3-2
+    // Command-level host port (model-defined): queues one complete command
+    // whose bytes reach the interface one every 128 cycles (DC at 2 MHz)
+    // from now; run() processes it, and debug_if_take_response() returns
+    // the response once it is complete. Throws std::logic_error when not in
+    // debug mode or while a command is outstanding or the DC/DD wire is in
+    // a command, std::invalid_argument for a malformed command.
+    void debug_if_submit(const std::vector<std::uint8_t> &command);
+    std::optional<Cc2530DebugIfResponse> debug_if_take_response();
+    // Cycle at which the last submitted command's final byte arrives; its
+    // response is complete then (STEP_INSTR: after the stepped instruction).
+    std::uint64_t debug_if_due_cycle() const;
+    // debug_if_submit(), then run() until the response is available. Throws
+    // std::runtime_error on a run error or without a response within one
+    // second of virtual time.
+    Cc2530DebugIfResponse debug_if_command(const std::vector<std::uint8_t> &command);
+    // Table 3-1 lengths: input bytes including the command byte (for
+    // BURST_WRITE pass the second byte too), output bytes.
+    static unsigned debug_if_input_length(std::uint8_t command, std::uint8_t second = 0);
+    static unsigned debug_if_output_length(std::uint8_t command);
 
     // An unconditional branch to itself with no interrupt deliverable and no
     // scheduled event left: nothing can make the CPU leave it.
@@ -548,7 +617,7 @@ private:
     std::uint16_t engine_irq_vector() const;
     std::uint8_t engine_levels() const;
     bool engine_inhibit() const;
-    void reset_core(Cc2530ResetCause cause);
+    void reset_core(Cc2530ResetCause cause, bool count = true);
     void create_peripherals();
     void request_power_fault(Cc2530FaultAction action);
     void power_on_sram_fill();
@@ -563,6 +632,11 @@ private:
     void set_clock_status(std::uint8_t status);
     // Freezes or resumes the 32 kHz domain at `at` (PM3, stopped clock).
     void refresh_lf_domain(std::uint64_t at);
+    // The CPU must not execute: RESET_N low or halted by the debug interface.
+    bool cpu_held() const;
+    // DEBUG_INSTR (cc2530::Bus::debug_execute).
+    std::uint8_t debug_execute(const std::uint8_t *code, unsigned length);
+    void apply_pending_reset_pin();
 
     uc_struct *uc_{};
     std::size_t code_hook_{};
@@ -629,6 +703,16 @@ private:
     std::uint64_t trace_cycle_limit_{UINT64_MAX};
     bool sleep_requested_{};
     bool running_fast_{};
+    // Inside uc_emu_start (run() or a DEBUG_INSTR).
+    bool engine_running_{};
+    bool debug_executing_{};
+    bool reset_held_{};
+    // RESET_N changes made inside the engine, applied at the next boundary.
+    std::vector<bool> pending_reset_levels_;
+    // Timer 1/3/4 time base suspended by the debug interface (Table 3-2).
+    bool timers_suspended_{};
+    std::uint64_t timers_suspended_since_{}; // hf_now() when suspended
+    std::uint64_t timers_suspended_total_{}; // completed suspended HF time
     std::string stop_error_;
     Cc2530Diagnostics diagnostics_;
     std::ostream *trace_output_{};
