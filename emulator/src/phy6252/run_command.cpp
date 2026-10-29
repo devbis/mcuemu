@@ -32,6 +32,7 @@ int run_command(int argc, char **argv) {
     std::optional<std::string> rf_calibration_path;
     std::uint64_t steps = 0, duration_ns = 0;
     bool trace_stack = false;
+    bool boot_from_rom = false;
     std::optional<std::pair<std::uint32_t, std::uint32_t>> trace_range;
     std::vector<std::pair<std::uint32_t, std::size_t>> memory_dumps;
     for (int i = 2; i < argc; ++i) {
@@ -40,6 +41,7 @@ int run_command(int argc, char **argv) {
         else if (option == "--rom" && i + 1 < argc) rom_path = argv[++i];
         else if (option == "--efuse" && i + 1 < argc) efuse_path = argv[++i];
         else if (option == "--rf-calibration" && i + 1 < argc) rf_calibration_path = argv[++i];
+        else if (option == "--boot-from-rom") boot_from_rom = true;
         else if (option == "--model" && i + 1 < argc) ++i;
         else if (option == "--steps" && i + 1 < argc) {
             const std::string value = argv[++i];
@@ -87,6 +89,7 @@ int run_command(int argc, char **argv) {
         } else if (option == "--help" || option == "-h") {
             std::cout << "Usage: mcuemu run --model PHY6252 --firmware IMAGE [--steps N] [--for DURATION]\n"
                          "       [--rom DUMP] [--efuse DUMP] [--rf-calibration DUMP]\n"
+                         "       [--boot-from-rom]\n"
                          "       [--trace-pc-range START:END] [--trace-stack]\n"
                          "       [--dump-memory ADDRESS:COUNT]...\n"
                          "--dump-memory prints bytes from the end of the run.\n";
@@ -122,6 +125,7 @@ int run_command(int argc, char **argv) {
             (std::istreambuf_iterator<char>(calibration_input)), std::istreambuf_iterator<char>());
         chip.load_rf_calibration_dump(dump);
     }
+    chip.set_boot_from_rom(boot_from_rom);
     chip.load_firmware(image);
     chip.reset();
     if (trace_range)

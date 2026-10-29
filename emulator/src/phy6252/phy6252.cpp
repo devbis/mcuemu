@@ -405,6 +405,12 @@ void Phy6252::load_rom_dump(const std::vector<std::uint8_t> &dump) {
               core_.host_pointer(0x10000000, RomSize));
 }
 
+void Phy6252::set_boot_from_rom(bool enabled) {
+    if (enabled && rom_dump_.empty())
+        throw std::invalid_argument("PHY6252 ROM boot requires an external ROM dump");
+    boot_from_rom_ = enabled;
+}
+
 void Phy6252::load_efuse_dump(const std::vector<std::uint8_t> &dump) {
     constexpr std::size_t BlockSize = 8;
     constexpr std::size_t BlockCount = 4;
@@ -450,12 +456,16 @@ void Phy6252::reset() {
             std::memcpy(vector_alias_ + vector * sizeof handler, &handler, sizeof handler);
         }
     }
-    std::copy(boot_ram_.begin(), boot_ram_.end(), ram_);
-    // The board ROM's RF startup calibration runs before the image's reset
-    // entry. Direct image boot skips it; these two outputs are observed in
-    // the supplied PHY6252 TS0001 boot log and at the SDK ROM data symbols.
-    ram_[RfTpCal0 - BootImage::RamBase] = ObservedRfTpCal0;
-    ram_[RfTpCal1 - BootImage::RamBase] = ObservedRfTpCal1;
+    if (boot_from_rom_) {
+        // The ROM must populate the image's RAM segments during cold boot.
+        std::fill_n(ram_, BootImage::RamSize, 0);
+    } else {
+        std::copy(boot_ram_.begin(), boot_ram_.end(), ram_);
+        // Direct image boot skips the board ROM's RF startup calibration; seed
+        // the observed outputs from the supplied TS0001 boot log and SDK map.
+        ram_[RfTpCal0 - BootImage::RamBase] = ObservedRfTpCal0;
+        ram_[RfTpCal1 - BootImage::RamBase] = ObservedRfTpCal1;
+    }
     lcr_ = ier_ = dll_ = dlm_ = mcr_ = scratch_ = 0;
     rx_.clear();
     tx_.clear();
@@ -492,13 +502,14 @@ void Phy6252::reset() {
     timers_ = {};
     for (TimerState &timer : timers_)
         timer.last_cycle = core_.cycles();
-    // The SDK's WaitUs() polls AP_TIM3->CurrentCount continuously. ROM board
-    // init enables this down-counter before handing control to the image, so
-    // seed the state direct boot skips; otherwise WaitUs() never returns.
-    TimerState &wait_timer = timers_[2];
-    wait_timer.load = std::numeric_limits<std::uint32_t>::max();
-    wait_timer.current = wait_timer.load;
-    wait_timer.control = TimerEnable | TimerInterruptMask;
+    if (!boot_from_rom_) {
+        // The SDK's WaitUs() polls AP_TIM3->CurrentCount continuously. ROM
+        // board init enables this down-counter before direct image startup.
+        TimerState &wait_timer = timers_[2];
+        wait_timer.load = std::numeric_limits<std::uint32_t>::max();
+        wait_timer.current = wait_timer.load;
+        wait_timer.control = TimerEnable | TimerInterruptMask;
+    }
     gpio_data_ = gpio_direction_ = gpio_control_ = gpio_interrupt_enable_ = 0;
     gpio_interrupt_mask_ = GpioMask;
     gpio_interrupt_type_ = gpio_interrupt_polarity_ = 0;
@@ -530,14 +541,14 @@ void Phy6252::reset() {
     core_.set_clock_hz(16000000);
     // Direct image boot supplies board-init state that is not initialized by
     // running the captured ROM reset path in this model.
-    core_.reset(run_address_);
+    core_.reset(boot_from_rom_ ? 0 : run_address_);
     core_.set_vtor(0);
     rtc_epoch_ns_ = core_.cycles_to_ns(core_.cycles());
     rtc_epoch_count_ = 0;
-    // The SDK ROM board init starts the always-on RTC before handing control
-    // to this image. Direct image boot skips that path; retain the observed
-    // running state required by the early RF startup wait loop.
-    control_registers_[AonRtcControl] = 1;
+    if (!boot_from_rom_) {
+        // Direct image boot skips the ROM's always-on RTC startup.
+        control_registers_[AonRtcControl] = 1;
+    }
     update_radio_irq();
     update_gpio_irq();
     core_.set_irq_line(WatchdogIrq, false);

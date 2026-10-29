@@ -54,6 +54,8 @@ int main() {
 
     std::vector<std::uint8_t> rom_image(0x18000, 0xff);
     put(rom_image, 0x50, 0x12345679); // external ROM vectors are preserved
+    put(rom_image, 0, 0x1fff1800);
+    put(rom_image, 4, 0x00000201);
     rom_image[0x200] = 0x34;
     rom_image[0x201] = 0x12;
     Phy6252 dump_rom_chip;
@@ -72,6 +74,25 @@ int main() {
     CHECK(dump_rom_chip.core().read_memory(0x22010108, aliased_flash_code.data(),
                                            aliased_flash_code.size()));
     CHECK((aliased_flash_code == std::array<std::uint8_t, 2>{0xfe, 0xe7}));
+
+    Phy6252 cold_boot_chip;
+    cold_boot_chip.load_rom_dump(rom_image);
+    cold_boot_chip.load_firmware(image);
+    cold_boot_chip.set_boot_from_rom(true);
+    cold_boot_chip.reset();
+    CHECK(cold_boot_chip.core().reg(13) == 0x1fff1800);
+    CHECK(cold_boot_chip.core().pc() == 0x200);
+    CHECK(cold_boot_chip.core().read_memory(BootImage::RamBase + 0x1838,
+                                           rom_code.data(), rom_code.size()));
+    CHECK((rom_code == std::array<std::uint8_t, 2>{0, 0}));
+    bool missing_rom_rejected = false;
+    try {
+        Phy6252 missing_rom_chip;
+        missing_rom_chip.set_boot_from_rom(true);
+    } catch (const std::invalid_argument &) {
+        missing_rom_rejected = true;
+    }
+    CHECK(missing_rom_rejected);
 
     std::vector<std::uint8_t> padded_rom(0x20000, 0xff);
     std::copy(rom_image.begin(), rom_image.end(), padded_rom.begin());

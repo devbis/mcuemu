@@ -354,7 +354,7 @@ PartConfig parse_part(const YAML::Node &node, const std::string &base_dir) {
 McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
     require_map(node, "mcu");
     check_keys(node, "mcu",
-               {"id", "model", "variant", "firmware", "efuse", "rom", "rf_calibration", "clock_hz", "supply_mv",
+               {"id", "model", "variant", "firmware", "efuse", "rom", "boot_from_rom", "rf_calibration", "clock_hz", "supply_mv",
                 "start_at", "radio", "rtt", "flash_timing"});
     McuConfig mcu;
     mcu.line = node.Mark().line + 1;
@@ -411,6 +411,16 @@ McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
         if (mcu.model != "phy6252")
             fail(rom, "'rom' is only supported by phy6252");
         mcu.rom = resolve(scalar(rom, "'rom'"));
+    }
+    if (const YAML::Node boot_from_rom = node["boot_from_rom"]) {
+        if (mcu.model != "phy6252")
+            fail(boot_from_rom, "'boot_from_rom' is only supported by phy6252");
+        const std::string text = scalar(boot_from_rom, "'boot_from_rom'");
+        if (text != "true" && text != "false")
+            fail(boot_from_rom, "boot_from_rom must be true or false");
+        mcu.boot_from_rom = text == "true";
+        if (mcu.boot_from_rom && !mcu.rom)
+            fail(boot_from_rom, "'boot_from_rom: true' requires 'rom'");
     }
     if (const YAML::Node calibration = node["rf_calibration"]) {
         if (mcu.model != "phy6252")

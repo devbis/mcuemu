@@ -132,6 +132,7 @@ const McuRegistry &McuRegistry::builtin() {
                     (std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
                 mcu->chip().load_rom_dump(dump);
             }
+            mcu->chip().set_boot_from_rom(config.boot_from_rom);
             if (config.efuse) {
                 std::ifstream input(*config.efuse, std::ios::binary);
                 if (!input)

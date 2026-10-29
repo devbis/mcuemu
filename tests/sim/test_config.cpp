@@ -100,6 +100,17 @@ void test_config_parsing() {
         "      - {id: m, model: phy6252, firmware: fw/relay.bin, rom: data/rom.bin}\n",
         "/base/dir");
     CHECK(rom_config.devices[0].mcus[0].rom == "/base/dir/data/rom.bin");
+    const sim::SystemConfig rom_boot_config = sim::parse_system_config(
+        "version: 1\ndevices:\n  - id: d\n    mcus:\n"
+        "      - {id: m, model: phy6252, firmware: fw/relay.bin, rom: data/rom.bin, boot_from_rom: true}\n",
+        "/base/dir");
+    CHECK(rom_boot_config.devices[0].mcus[0].boot_from_rom);
+    CHECK(error_of([&] {
+        sim::parse_system_config(
+            "version: 1\ndevices:\n  - id: d\n    mcus:\n"
+            "      - {id: m, model: phy6252, firmware: fw/relay.bin, boot_from_rom: true}\n",
+            "/base/dir");
+    }).find("requires 'rom'") != std::string::npos);
 
     CHECK(sim::parse_duration_ns("2.5s") == 2500000000ull);
     CHECK(sim::parse_duration_ns("750ns") == 750u);
