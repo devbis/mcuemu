@@ -337,26 +337,24 @@ A separate two-second saved-flash run used the four zero eFuse blocks recorded
 in `SoC_info.txt` and the inferred RF calibration bytes `2b 21 45 43` from the
 RAM snapshot. It produced no UART output. A PC trace shows the image reaches
 ROM helper `0xafa0` with `r0=1` near 454.7 ms. The helper reads a null indirect
-callback pointer at `0x1fff0100` and falls through to `0xafb8`; at 600 ms the
-CPU remains in the resulting fallback loop at `PC=0xafc6`. The callback owner
-and why it is unset remain unknown. The same trace shows the dumped ROM's
+pointer at `0x1fff0100` and falls through to `0xafb8`; at 600 ms the CPU remains
+in that fallback loop at `PC=0xafc6`. The SDK's `JUMP_FUNCTION` macro maps
+`0x1fff0100` to slot 64, `ENTER_SLEEP_OFF_MODE`; the ROM map names `0xafa1`
+`enter_sleep_off_mode` and `0xafb9` `enter_sleep_off_mode0`. The PHY62XX
+power-manager source calls the former for RTC-reset sleep after preparing
+retained state. The TS0001 initializer writes other entries around this jump
+table slot but leaves slot 64 zero, as does the saved hardware RAM snapshot.
+The trace therefore follows the documented null-slot fallback; it is not
+evidence that a Zigbee callback failed to register. The fallback's infinite
+loop and the cold-wake handoff still need hardware validation. The same trace
+shows the dumped ROM's
 `efuse_read` at `0xace0` reads zero words from `0x4000f168..0x4000f16c`, writes
 them to the output buffer, and returns `PPlus_ERR_UNINITIALIZED` (24). The host
 ROM trap now reproduces that result for a supplied all-zero block.
 
 Follow-up Ghidra analysis of the TS0001 initializer at `0x110204e0` finds it
-sets the separate ROM-dispatch slot at `0x1fff0118`; its nearby pointer
-arithmetic does not write the callback slot at `0x1fff0100`. The saved hardware
-RAM snapshot also contains zero at `0x1fff0100`, and static analysis has not
-identified a firmware store to that slot. This narrows the stall to a callback
-that is absent in the available runtime state, but does not identify who should
-register it or establish whether normal ROM-reset startup supplies it. Do not
-fill the slot with a guessed callback.
-
-The PHY62XX SDK 3.1.1 ROM map names Thumb entry `0xafa1`
-`enter_sleep_off_mode`; its power-manager source calls that helper for
-RTC-reset sleep after preparing retained state. This identifies the observed
-external-ROM stall as a low-power entry/wake path. It does not account for the
+sets the separate ROM-dispatch slot at `0x1fff0118`. The external-ROM stall is
+therefore in the low-power entry/wake path. It does not account for the
 separate host-ROM commissioning run, whose first-boot trace still stops before
 any LL transmit setup.
 
