@@ -196,7 +196,9 @@ struct Cc2530Diagnostics {
     // Entries that break the SWRU191F 4.2 placement rule: the instruction
     // after the one setting PCON.IDLE starts on a 4-byte boundary.
     std::uint64_t idle_alignment_violations{};
-    // Writes of 1 to IRCON bit 6 ("must be written 0"; effect not modeled).
+    // Writes of 1 to IRCON bit 6 (SWRU191F: "Must be written 0. Writing a 1
+    // always enables the interrupt source"; modeled as a sleep timer
+    // interrupt request, Figure 2-4).
     std::uint64_t ircon_bit6_writes{};
     // XREGs no peripheral model owns (plain latches).
     std::map<std::uint16_t, std::uint64_t> unmodeled_xreg_reads;
