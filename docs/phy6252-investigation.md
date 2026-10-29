@@ -121,11 +121,50 @@ caller state, not additional arguments: the related PHY6222 SDK declares the
 function as `efuse_read(block, uint32_t *buf)`.
 
 Two calls are deliberately visible limitations. The image reaches unexported
-ROM entry `0xa2e0`, inside the SDK symbol range for `ble_crc24_gen`; its body is
-not present in the SDK package, so the current return-only approximation logs
-a warning. `LL_InitConnectContext` returns success for the unused BLE context
-and logs that BLE connection state is not modeled. Neither behavior establishes
-BLE or Zigbee stack compatibility.
+ROM entry `0xa2e0`, inside the SDK symbol range for `ble_crc24_gen`; the SDK
+package has no body or contract for this entry, so the current return-only
+approximation logs a warning. The external ROM dump discussed below contains
+code at this address, but its state changes and version match have not been
+confirmed against the TS0001 image. `LL_InitConnectContext` returns success for
+the unused BLE context and logs that BLE connection state is not modeled.
+Neither behavior establishes BLE or Zigbee stack compatibility.
+
+### External ROM dump analysis
+
+The supplied `rom_10000000_20000.bin` file is 128 KiB. Its last `0x8000` bytes
+are erased (`0xff`); the first `0x18000` bytes are the 96 KiB ROM window used by
+the model. The dump's SHA-256 is
+`430b26391488ad95451310526aaff9ec9df4321897282fc7cd9d1865611517f4`. Ghidra
+12.2 with the Homebrew OpenJDK 25 runtime analyzed the 96 KiB as ARM Cortex
+Thumb code at address zero, matching the ROM's low-address vector pointers. The
+dump starts with SP `0x1fff1830` and reset vector `0x00000d91`.
+
+The ROM contains radio and link-layer code, not just boot support. Ghidra finds
+several routines that access the RF block at `0x40030000` and LL block at
+`0x40031000`; one packet-processing routine has a 6.6 KiB body and inspects
+packet fields while using the LL registers. A setup routine at `0x178bc` also
+writes the RF and LL register blocks. These are disassembly observations; they
+do not identify a Zigbee NWK, APS, or BDB implementation. The ASCII strings
+include boot-monitor commands such as `uartbin`, `uartrun`, `wrreg`, `clock`,
+and `reset`, but no explicit Zigbee or IEEE 802.15.4 stack names. The lack of
+such strings does not prove that higher layers are absent.
+
+The dump confirms the model's NMI (`0x8481`), HardFault (`0x28f1`), and PendSV
+(`0x84cd`) vector targets. It also has a full interrupt vector table: IRQ4
+points to `0x8871`, whose code dispatches through a callback pointer and falls
+back to `0x4e24`. The current direct-boot model instead places a host trap at
+`0x4e25` in the IRQ4 vector slot and dispatches `JUMP_FUNCTION(228)` there.
+This keeps the observed Zephyr and TS0001 paths running, but the relationship
+between the dump's full vector wrappers and the direct-boot callback table has
+not been resolved. The dump remains an external analysis input; no ROM bytes
+or Ghidra project files are stored in the repository.
+
+At `0xa2e0`, Ghidra sees a real function prologue, global-pointer setup, a
+switch-helper call, and a later return in the ROM dump. The current shim skips
+those effects. The SDK places this address within its `ble_crc24_gen` symbol
+range, while the TS0001 image calls it as a zero-argument entry. Until the ROM
+revision and the resulting globals are matched to the TS0001 call path, keep
+the warning and do not treat this address as a Zigbee radio API.
 
 The SDK declares `phy_sec_encrypt` and `phy_sec_decrypt` at ROM entries
 `0x15338` and `0x1531c`. It also contains a disabled (`#if 0`) implementation
@@ -213,8 +252,9 @@ inside the modeled 2 KiB RX FIFO range. Its RF effect is unknown. The PHY6222
 SDK header declares `__VTOR_PRESENT` as zero, and its vector source provides only
 the initial SP and reset entry. The model therefore ignores VTOR reads/writes
 and initializes NMI, HardFault and PendSV entries in the low vector alias from
-the SDK's `bb_rom_sym_m0` addresses. This fixed-vector mapping is inferred:
-the ROM image and its full vector table are not included in the SDK.
+the SDK's `bb_rom_sym_m0` addresses. The external dump independently confirms
+these three addresses, but the model's IRQ dispatch traps have not been
+reconciled with the dump's full vector table.
 
 After the 300 ms RF startup wait, TS0001 reaches PCR setup and pends PendSV from
 `0x1fff66e6` by writing `0x10000000` to `ICSR`. The ROM symbol body is not in
