@@ -647,9 +647,10 @@ supplied hardware UART log, `power report time`, `set read local time`, and
 `330785`; the hardware log's relay-counter lines are absent as well. The user
 confirms that the `On`/`Off` lines in the hardware log follow pressing the
 relay's local toggle button; they are not evidence of a remote Zigbee command.
-The emulator recognizes the GPIO8 key press and release, but its application
-path still does not reach the local relay state changes that produce those
-counters.
+The emulator recognizes the GPIO8 key press and release. At the time of these
+runs the local relay state had not yet been traced; the instruction-level
+probe below later showed that the press updates the relay state and GPIO2
+output, while the `On`/`Off` diagnostic callback still does not run.
 
 After adding the `0x3fc4` ROM wrapper, a 12-second run using the hardware's
 full-flash dump and saved NVM reaches both GPIO8 key events and stays running.
