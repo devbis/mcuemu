@@ -673,7 +673,17 @@ To execute or compare an external ROM, pass it with `--rom DUMP` or the YAML
 `rom:` option. It must be 96 KiB or a 128 KiB dump with an erased 32 KiB tail;
 the ROM bytes and vector table are mapped from that file. Firmware still starts
 at its parsed application entry, because a complete cold boot from the ROM
-reset vector is not yet supported.
+reset vector is not established. The supplied PHY6222 dump has been exercised
+with the PB-03F Zephyr image using that direct-image path; the Zephyr image joins
+and exchanges NWK traffic. For a reproducible YAML setup, see
+`examples/phy6252-zephyr-external-rom.yaml`; it expects local ROM, eFuse and RF
+calibration files under `firmware/`.
+
+`--boot-from-rom` or YAML `boot_from_rom: true` starts at the external ROM's
+reset vector instead. This is an experimental ROM-analysis mode: with the
+supplied dump and TS0001 image it remains in ROM (PC `0xac52`) for a one-second
+run and emits no UART output. It does not yet hand off to the image, so use the
+default direct-image path for the verified Zephyr compatibility scenario.
 Firmware inputs can be the package beginning at physical flash offset `0x2000`
 or a 512 KiB full flash dump; keep local images outside the repository.
 For the TS0001 capture setup, place the full dump at
