@@ -297,13 +297,13 @@ direct AP_TIM clock error; the reason those inputs differ from the supplied
 run remains unknown. Keep the measured timer source model and do not tune it to
 force these application log values to match.
 
-There is also a likely network-identity mismatch in this probe: the TS0001
-startup log prints `0x87DB` in its restored-network fields, while the sampleGW
-data frames carry MAC PAN ID `0xA75C` (wire bytes `5c a7`). The log field is
-inferred to be the stored PAN ID. This can explain why the saved TS0001 state
-does not attach to this gateway, but it does not explain the absence of any
-outbound frame during first-boot commissioning; that radio path remains
-unverified.
+The sampleGW data frames carry MAC PAN ID `0xA75C` (wire bytes `5c a7`). The
+TS0001 startup log also prints `0x87DB` in the restored-network line, but its
+periodic stack report labels the same value `devID`; interpreting it as a PAN
+ID was unsupported. The saved PAN, channel and security parameters have not
+been decoded, so a network-identity mismatch remains possible but unconfirmed.
+It also cannot explain the absence of any outbound frame during first-boot
+commissioning; that radio path remains unverified.
 
 An instrumented 10 s saved-state probe confirms that the PHY receive path is
 active: while the TS0001 was listening on channel 25, the emulator accepted the
