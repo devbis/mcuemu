@@ -633,8 +633,16 @@ The image reads a 16-bit record type at entry `+4`, a 16-bit payload length at
 entries 9 and 10 have types 4 and 5, payload lengths of 72 bytes, and trailer
 words `6` and `0x36`. The startup path also prints
 `Restored nwk success on reboot,1,0,87DB`. These are useful bounds for further
-NVM analysis, but the record payloads and the meaning of `0x87DB` remain
-unidentified; none can yet be treated as the network PAN, channel or key.
+NVM analysis. The ZB-info record header at flash offset `0x7923c` declares a
+112-byte payload beginning at `0x79240` with bytes
+`03 00 00 00 4a 01 00 00 d9 a9 db 87 00 f8 ff 07`. The
+adjacent 16-bit values are consistent with PAN ID `0xa9d9` and short address
+`0x87db`; the latter also matches the log's `devID` label. The following word
+is the all-channel mask `0x07fff800`. Later in the same payload are the
+candidate extended PAN ID `b2:06:0c:7a:9d:3a:16:2c` and 16-byte network key
+`54:78:b1:4c:c6:f6:d7:ae:71:2e:63:38:0d:f0:ad:6e`. This field mapping is
+inferred from the record layout and SDK structures; the saved operating
+channel and complete security state are still unconfirmed.
 
 A PC trace of the first `power report time` calculation shows the image combines
 its stored fields with a byte returned by its RAM-resident helper at
@@ -646,12 +654,13 @@ direct AP_TIM clock error; the reason those inputs differ from the supplied
 run remains unknown. Keep the measured timer source model and do not tune it to
 force these application log values to match.
 
-The sampleGW data frames carry MAC PAN ID `0xA75C` (wire bytes `5c a7`). The
-TS0001 startup log also prints `0x87DB` in the restored-network line, but its
-periodic stack report labels the same value `devID`; interpreting it as a PAN
-ID was unsupported. The saved PAN, channel and security parameters have not
-been decoded, so a network-identity mismatch remains possible but unconfirmed.
-It also cannot explain the absence of any outbound frame during first-boot
+The earlier sampleGW data frames carried MAC PAN ID `0xA75C` (wire bytes
+`5c a7`). A later scratch coordinator used the candidate PAN ID `0xA9D9`,
+short address `0x87DB`, candidate extended PAN ID and candidate NWK key. Its
+pcap confirms that the coordinator transmitted with PAN ID `0xA9D9`, but the
+TS0001 still emitted no frame during the 10-second run. The test does not
+confirm the extended-PAN/key mapping or restore the module's parent state.
+It also does not explain the absence of an outbound frame during first-boot
 commissioning; that radio path remains unverified.
 
 An instrumented 10 s saved-state probe confirms that the PHY receive path is
@@ -887,14 +896,17 @@ the coordinator or sampleLight; TS0001 transmitted none. This verifies that a
 joinable network was active on channel 25, but does not establish that its PAN,
 extended PAN, or security state matches the saved TS0001 network.
 
-To test whether the trailing `0x87DB` in the UART line was the saved PAN ID, a
-second scratch coordinator set both its MAC PIB and NWK NIB PAN ID to `0x87DB`
-after formation, while remaining on channel 25. The pcap again has 75 frames;
+An earlier scratch test treated the trailing `0x87DB` in the UART line as the
+saved PAN ID and set both the MAC PIB and NWK NIB PAN ID to `0x87DB` after
+formation, while remaining on channel 25. Later NVM inspection shows that this
+value is more likely the relay's short address and identifies `0xA9D9` as the
+candidate PAN ID. The earlier pcap had 75 frames;
 the transmitted data frames use PAN `0x87DB`, sampleLight associated at 9.045 s
 as `0x3d34`, and it exchanged 9 uplink and 7 downlink NWK data frames. TS0001
-still transmitted no frame. Therefore channel 25 plus PAN `0x87DB` is not
-sufficient to restore the relay's network path; the saved extended PAN,
-security material, or another stack initialization state remains unresolved.
+still transmitted no frame. That run did not match the decoded candidate PAN
+and cannot establish the relay's network identity. The 10-second candidate
+identity run above also had no TS0001 transmission, so its saved parent state
+or another stack initialization issue remains unresolved.
 
 An LL helper trace of the same-channel first-boot run for 10 s saw 317
 `ll_hw_set_srx` calls and 317 radio triggers: 302 on channel 11 and 15 on
