@@ -264,18 +264,27 @@ int main() {
     rom_test_chip.write(0x40031000, 0, 4); // PHY_ABORT stops the receive operation
     CHECK(!rom_test_chip.radio_receiving());
     invoke_radio_rom(0x10adc); // ll_hw_clr_irq
-    invoke_radio_rom(0x11174, 1u << 2); // enable LIRQ_RTO for the timeout check
+    const std::uint32_t enable_radio_irq = 1u << 4;
+    CHECK(rom_test_chip.core().write_memory(0xe000e280, &enable_radio_irq,
+                                             sizeof enable_radio_irq)); // clear stale pending IRQ
+    CHECK(rom_test_chip.core().write_memory(0xe000e100, &enable_radio_irq,
+                                             sizeof enable_radio_irq));
+    invoke_radio_rom(0x11174, 1u); // firmware waits for LIRQ_MD on receive completion
     invoke_radio_rom(0x11278, 33); // ll_hw_set_rx_timeout(33 us)
     invoke_radio_rom(0x112a4); // ll_hw_set_srx
     invoke_radio_rom(0x11420); // ll_hw_trigger
     CHECK(rom_test_chip.radio_receiving());
+    rom_test_chip.core().set_interrupts_masked(true); // inspect NVIC pending without a test vector
     const std::uint64_t rx_timeout = rom_test_chip.core().cycles() + 33 * 16 + 128;
     CHECK(rom_test_chip.run(rx_timeout).reason == cortexm::StopReason::Deadline);
     CHECK(!rom_test_chip.radio_receiving());
-    CHECK(rom_test_chip.read(0x40031010, 4) == ((1u << 2) | (1u << 3)));
+    CHECK(rom_test_chip.read(0x40031010, 4) ==
+          (1u | (1u << 2) | (1u << 3))); // MD completion plus SDK/Zephyr RTO aliases
+    CHECK(rom_test_chip.core().interrupt_pending()); // MD mask raises the radio IRQ
     // SDK and PB-03F Zephyr expose RTO at bits 2 and 3 respectively.
-    rom_test_chip.write(0x40031014, 1u << 3, 4);
+    rom_test_chip.write(0x40031014, (1u << 0) | (1u << 3), 4);
     CHECK(rom_test_chip.read(0x40031010, 4) == 0);
+    rom_test_chip.core().set_interrupts_masked(false);
 
     Phy6252 cca_chip;
     cca_chip.load_firmware(image);

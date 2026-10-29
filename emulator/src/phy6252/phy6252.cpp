@@ -2399,7 +2399,9 @@ std::uint64_t Phy6252::service_radio(std::uint64_t now) {
         if (now >= radio_rx_deadline_cycle_) {
             radio_rx_active_ = false;
             radio_rx_deadline_cycle_ = 0;
-            ll_registers_[RadioLlBase + 0x10] |= RadioIrqRto | RadioIrqRtoZephyr;
+            // RTO identifies the cause; MD signals that the radio operation completed.
+            ll_registers_[RadioLlBase + 0x10] |=
+                RadioIrqMd | RadioIrqRto | RadioIrqRtoZephyr;
             update_radio_irq();
         } else {
             next = std::min(next, radio_rx_deadline_cycle_);
