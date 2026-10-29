@@ -544,6 +544,22 @@ CPU fault but produced no UART0 output for this TS0001 image; the startup result
 above uses the default host ROM traps. The cause of this ROM/application
 difference is not isolated.
 
+A second 65 s run used the module's 512 KiB full-flash dump
+`flash_11000000_80000.bin` (SHA-256
+`def028f783aac9d3d648b32d7e7b250180e3aa8c7c04bd506858ce0109b5770a`), its
+all-zero eFuse dump and the supplied four-byte RF calibration, with the same
+host ROM traps and a GPIO8 press. With the coordinator alone, UART again reaches
+`network state=12` and reports key 1 down/up. It reports `power report time =
+4744`, `set read local time: 39`, and `fix Report time = 323030`; the reference
+values are `3288`, `44`, and `330785`. At 30.305 s and 60.305 s it reports
+`MiF=0x18C8`, `Tim=131`, and `lMac=210`, versus `MiF=0x18A0`, `Tim=122`, and
+`lMac=154` in the supplied log. There are no local `On/Off` lines by 65 s.
+The 23-frame pcap has no successful association response and no TS0001 frame;
+the Zigbee air checker reports no joined device. A three-device replay with
+sampleLight yields its association and NWK exchange, but those frames must not
+be attributed to TS0001. The two-device capture confirms that the saved-network
+relay path is still unverified with this coordinator.
+
 The 65 s UART trace emits local-time and stack-statistics reports at 30.305 s
 and 60.305 s. The local time remains zero; the trace does not print
 the reference relay `On`/`Off` reports by 65 s. It prints `key timer stop!`
