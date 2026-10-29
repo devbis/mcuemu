@@ -353,6 +353,13 @@ that is absent in the available runtime state, but does not identify who should
 register it or establish whether normal ROM-reset startup supplies it. Do not
 fill the slot with a guessed callback.
 
+The PHY62XX SDK 3.1.1 ROM map names Thumb entry `0xafa1`
+`enter_sleep_off_mode`; its power-manager source calls that helper for
+RTC-reset sleep after preparing retained state. This identifies the observed
+external-ROM stall as a low-power entry/wake path. It does not account for the
+separate host-ROM commissioning run, whose first-boot trace still stops before
+any LL transmit setup.
+
 An AON snapshot while that ROM is asleep at 600 ms reads `RTCCTL=0x148001`,
 `CMP0=0xba74`, and `RTC count=19493`; the saved compare corresponds to about
 1.46 s at 32.768 kHz. At 1.5 s the count is 48951 and the PC has advanced to
