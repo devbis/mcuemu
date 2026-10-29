@@ -604,6 +604,14 @@ The emulator recognizes the GPIO8 key press and release, but its application
 path still does not reach the local relay state changes that produce those
 counters.
 
+The key path in the image samples the GPIO state in `0x110242ac`, reports the
+Down/Up transition, and schedules key events (`0x1010` for key 1 down,
+`0x1002` for key 1 up) through its timer wrapper when an application callback
+is registered. The emulator produces both `keyid` reports for GPIO8. A PC trace
+around the registered `On`/`Off` handler at `0x1102ddd8` shows that it is not
+called during that press; the missing step is after key-event delivery and
+before the local relay state update.
+
 For a separate first-boot probe, a temporary copy of the TS0001 dump had its
 `0x6000`-byte NVM range at `0x11079000` erased. The image reported
 `Device started for the first time` with network state 0. Holding GPIO8 from
