@@ -781,6 +781,15 @@ that the queue stores state for later restoration; they do not show that it
 dispatches the runtime `0x1102ddd8` diagnostic callback. The callback's route
 from the local button state change remains unresolved.
 
+Forced Thumb disassembly of `0x1102ddd8` identifies the missing diagnostic
+handler. It passes the event code at `param[1]` to `0x110221b0`, increments
+one of three counters, then prints the format string at `0x1102de38`
+(`On:%d, Off:%d, toggle:%d`). Event code 1 increments `On`, codes 0 and
+`0x40` increment `Off`, and code 2 increments `toggle`. This matches the
+counter labels in the supplied UART log and confirms the absent lines are
+caused by this handler not running; it does not reveal which dispatcher should
+call it after the GPIO8 event.
+
 A 15-second run traces the receive wrapper at `0x1103d1f0`. The startup routine
 `0x11020890` polls event IDs `0x7001`, `0x7002`, and `0x7003` successfully, then
 finds `0x7005` empty. Those four reads all happen around cycle 14.46 million,
