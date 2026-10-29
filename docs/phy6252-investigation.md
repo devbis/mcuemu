@@ -344,6 +344,13 @@ and why it is unset remain unknown. The same trace shows the dumped ROM's
 them to the output buffer, and returns `PPlus_ERR_UNINITIALIZED` (24). The host
 ROM trap now reproduces that result for a supplied all-zero block.
 
+An AON snapshot while that ROM is asleep at 600 ms reads `RTCCTL=0x148001`,
+`CMP0=0xba74`, and `RTC count=19493`; the saved compare corresponds to about
+1.46 s at 32.768 kHz. At 1.5 s the count is 48951 and the PC has advanced to
+`0x892e`, inside the ROM's elapsed-time wait routine. This confirms the
+modeled compare0 wake occurs; the no-UART result remains in the ROM/application
+startup after that wake.
+
 The image table stores XIP source addresses such as `0x11010000` and
 `0x1100a000`. ROM loader code adds `0x11000000` before reading them, so the
 first post-wake read is at `0x22010000`. This is the uncached XIP alias, not an
