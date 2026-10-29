@@ -103,7 +103,8 @@ Both flash write
 calls share the SDK's `(address, RAM source, byte count)` contract and program flash with NOR
 1-to-0 semantics. SPIF command completion is synchronous; status reads report
 WIP clear. Flash timing, write protection, page limits and most opcodes are not
-modeled. Invalid arguments return `-EINVAL`.
+modeled. Invalid flash and crypto arguments return `-EINVAL`; `efuse_read`
+returns its separate SDK status codes described below.
 
 The SDK declares ROM `set_timer(AP_TIM_TypeDef *, int)` at `0x16c2c`, but its
 body is not included. The model follows the SDK `hal_timer_set_loadtimer()`
