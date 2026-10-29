@@ -393,11 +393,13 @@ TS0001 frame. Keep the cleared-NVM image outside the repository with the other
 local test inputs. A further 20 s first-boot run added `samplelight_tb03f.bin`
 at 5 s. The light completed MAC association with the sampleGW (request at
 7.694 s, response at 8.190 s) and exchanged NWK data from short address
-`0x7054`. The TS0001 reached `devNetOpt = 0` at 6.409 s, but emitted no frame;
-the pcap has 76 frames, with addressable sources only from the coordinator and
-sampleLight. A joinable network was therefore active in the same simulation,
-though overlap with the TS0001 scan channel at the association time remains
-unverified.
+`0x7054`. In the post-eFuse-fix rerun, the long-press TS0001 reached
+`devNetOpt = 0` and the sampleLight associated at 9.045 s with short address
+`0x2554`; it then exchanged 9 uplink NWK frames (5 unicast) and 6 downlink
+frames. The pcap has 76 frames. A simultaneous `air0=file:` trace attributes
+every frame to either `coordinator.mcu` or `sampleLight.mcu`; TS0001 transmitted
+none. A joinable, active network was therefore present, but the transition from
+the TS0001 steering callback to its first outbound frame remains unknown.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
