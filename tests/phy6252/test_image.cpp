@@ -313,8 +313,8 @@ int main() {
     rom_test_chip.core().set_reg(2, radio_foot0);
     rom_test_chip.core().set_reg(3, radio_foot1);
     invoke_radio_rom(0x10f50, radio_packet); // ll_hw_read_rfifo_zb
-    CHECK(rom_test_chip.core().reg(0) == 0);
-    std::array<std::uint8_t, 6> received_packet{};
+    CHECK(rom_test_chip.core().reg(0) == 2); // two FIFO words copied by ll_hw_read_rfifo_zb
+    std::array<std::uint8_t, 8> received_packet{};
     std::uint16_t received_length = 0;
     std::uint32_t received_foot0 = 0, received_foot1 = 0;
     CHECK(rom_test_chip.core().read_memory(radio_packet, received_packet.data(),
@@ -325,15 +325,28 @@ int main() {
                                            sizeof received_foot0));
     CHECK(rom_test_chip.core().read_memory(radio_foot1, &received_foot1,
                                            sizeof received_foot1));
-    CHECK(received_length == 5); // PHR length includes the two-byte FCS
+    CHECK(received_length == 6); // blen + 1 includes the leading length byte
     CHECK(received_packet[0] == 5 && received_packet[1] == 0x01 &&
           received_packet[2] == 0x00 && received_packet[3] == 0xa5);
+    CHECK(received_packet[6] == 0 && received_packet[7] == 0);
     CHECK((received_foot0 & 0x00ffffffu) == 2);
     CHECK(received_foot1 == 0);
     rom_test_chip.write(0x40031014, 1u << 1, 4); // Zephyr W1C clears the SDK COK alias too
     CHECK(rom_test_chip.read(0x40031010, 4) == 1u); // LIRQ_MD remains pending
     invoke_radio_rom(0x110b0); // ll_hw_rst_rfifo
     CHECK(rom_test_chip.read(0x40031c00, 1) == 0);
+    invoke_radio_rom(0x10f50, radio_packet); // empty FIFO returns zero and clears outputs
+    CHECK(rom_test_chip.core().reg(0) == 0);
+    CHECK(rom_test_chip.core().read_memory(radio_packet, received_packet.data(),
+                                           received_packet.size()));
+    CHECK(rom_test_chip.core().read_memory(radio_length, &received_length,
+                                           sizeof received_length));
+    CHECK(rom_test_chip.core().read_memory(radio_foot0, &received_foot0,
+                                           sizeof received_foot0));
+    CHECK(rom_test_chip.core().read_memory(radio_foot1, &received_foot1,
+                                           sizeof received_foot1));
+    CHECK(received_packet[0] == 0 && received_length == 0 &&
+          received_foot0 == 0 && received_foot1 == 0);
     rom_test_chip.write(0x40031000, 0, 4); // PHY_ABORT stops the receive operation
     CHECK(!rom_test_chip.radio_receiving());
     invoke_radio_rom(0x10adc); // ll_hw_clr_irq

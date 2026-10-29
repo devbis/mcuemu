@@ -304,8 +304,10 @@ IRQ status/mask/clear, FIFO reset, `ll_hw_get_irq_status`,
 `ll_hw_read_rfifo_zb`, and `read_current_fine_time` against the modeled
 baseband registers and FIFOs. Only standalone TX and RX modes currently drive
 the shared air; `TRX` and `RTX` remain register-only. The Zigbee FIFO helper
-copies the length byte, PSDU and FCS to firmware memory and returns the packet
-length and inferred RSSI footer. The status register exposes the SDK ROM
+copies FIFO words containing the length byte, PSDU and FCS to firmware memory;
+it returns the copied word count (`1 + (blen >> 2)`) and writes `blen + 1` to
+`pktLen`, matching the SDK helper contract. The model supplies an inferred RSSI
+footer. The status register exposes the SDK ROM
 layout (`MD` bit 0, `RTO` bit 2, `COK` bit 10) and the PB-03F Zephyr driver's compact layout
 (`COK` bit 1, `RTO` bit 3) for the same completion; clearing either alias
 clears the shared event. This reconciles the two checked firmware contracts,

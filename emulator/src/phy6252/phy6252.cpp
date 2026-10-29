@@ -711,7 +711,8 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             write_register(RadioLlBase + 0x0c, core_.reg(0), 4);
         } else if (address == 0x10f50) {
             // ll_hw_read_rfifo_zb(rxPkt, pktLen, pktFoot0, pktFoot1) copies
-            // the FIFO's length byte followed by the PSDU and its FCS.
+            // FIFO words and returns their count; pktLen includes the leading
+            // length byte, as in the SDK implementation.
             const std::uint32_t packet = core_.reg(0);
             const std::uint32_t length_out = core_.reg(1);
             const std::uint32_t foot0_out = core_.reg(2);
@@ -720,18 +721,31 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             const std::uint32_t foot0 =
                 (static_cast<std::uint32_t>(static_cast<std::uint8_t>(radio_rx_rssi_)) << 24) | 2u;
             constexpr std::uint32_t foot1 = 0;
-            const std::size_t fifo_bytes = static_cast<std::size_t>(packet_length) + 1;
+            const std::size_t fifo_words = 1 + (packet_length >> 2);
+            const std::size_t fifo_bytes = fifo_words * sizeof(std::uint32_t);
+            const std::uint16_t reported_length = packet_length + 1;
             const bool valid = packet_length >= 2 && packet_length <= 127 &&
                 packet != 0 && length_out != 0 && foot0_out != 0 && foot1_out != 0 &&
                 core_.write_memory(packet, rx_fifo_.data(), fifo_bytes) &&
-                core_.write_memory(length_out, &packet_length, sizeof packet_length) &&
+                core_.write_memory(length_out, &reported_length, sizeof reported_length) &&
                 core_.write_memory(foot0_out, &foot0, sizeof foot0) &&
                 core_.write_memory(foot1_out, &foot1, sizeof foot1);
             if (valid) {
                 rx_fifo_read_ = fifo_bytes;
-                core_.set_reg(0, 0); // LL_STATUS_SUCCESS
+                core_.set_reg(0, static_cast<std::uint32_t>(fifo_words));
             } else {
-                core_.set_reg(0, 1);
+                const std::uint8_t empty_packet = 0;
+                const std::uint16_t empty_length = 0;
+                const std::uint32_t empty_footer = 0;
+                if (packet != 0)
+                    core_.write_memory(packet, &empty_packet, sizeof empty_packet);
+                if (length_out != 0)
+                    core_.write_memory(length_out, &empty_length, sizeof empty_length);
+                if (foot0_out != 0)
+                    core_.write_memory(foot0_out, &empty_footer, sizeof empty_footer);
+                if (foot1_out != 0)
+                    core_.write_memory(foot1_out, &empty_footer, sizeof empty_footer);
+                core_.set_reg(0, 0); // The SDK returns zero when its RX FIFO is empty.
             }
         } else if (address == 0x10bbc) {
             // ll_hw_get_irq_status() returns LL_HW+0x10, whose bit layout is
