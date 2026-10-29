@@ -687,15 +687,16 @@ candidate extended PAN ID `b2:06:0c:7a:9d:3a:16:2c` and 16-byte network key
 inferred from the record layout and SDK structures; the saved operating
 channel and complete security state are still unconfirmed.
 
-A PC trace of the first `power report time` calculation shows the image combines
-its stored fields with a byte returned by its RAM-resident helper at
-`0x1fff7b0c`: `3 * 1000 + 4 * (5 - 3) * 218 = 4744`. The helper output is
-`0xda` in this emulator run. The later `fix Report time` path similarly
-computes `5 * 60000 + (6 - 5) * 235 * 114 = 326790`. These values are built
-from image state and helper results, so the UART mismatch does not identify a
-direct AP_TIM clock error; the reason those inputs differ from the supplied
-run remains unknown. Keep the measured timer source model and do not tune it to
-force these application log values to match.
+A PC trace shows that the image's helper at `0x1fff7b0c` calls the ROM
+`LL_Rand` entry (`0x5e04`) to fill a one-byte result. The first report computes
+`3 * 1000 + 4 * (5 - 3) * random_byte`; this run's `0xda` gives `4744`, while
+the reference's `3288` corresponds to byte `0x24`. The later fix-report
+calculation is `5 * 60000 + (6 - 5) * 235 * random_byte`; this run's `0x72`
+gives `326790`, while the reference's `330785` corresponds to `0x83`. The
+emulator's LL_Rand is deterministic, while the board ROM supplies
+hardware-dependent values, so these two timing differences are expected and
+do not indicate an AP_TIM clock error. The separate `set read local time` value
+and stack counters still differ and have not been explained.
 
 The earlier sampleGW data frames carried MAC PAN ID `0xA75C` (wire bytes
 `5c a7`). A later scratch coordinator used the candidate PAN ID `0xA9D9`,
@@ -1078,3 +1079,10 @@ the relay GPIO2 transition to `relay.vcd`. The scenario keeps GPIO3, the
 firmware's second key input, pulled high at idle. The firmware toggles the local
 relay state, but the `On/Off` diagnostic callback seen in the reference UART
 remains unreproduced.
+When the TS0001 image and local eFuse/RF-calibration dumps are present, CMake
+also registers `firmware_phy6252_ts0001_boot`. Run it with
+`ctest --test-dir build -R firmware_phy6252_ts0001_boot --output-on-failure`.
+It checks the ordered startup, Tuya and GPIO key UART messages and a GPIO2
+transition after the button press. It does not assert the uncertain `On/Off`
+trigger or Zigbee network support; the captured-network criterion remains
+separate.

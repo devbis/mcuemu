@@ -378,6 +378,34 @@ if(MCUEMU_BUILD_TESTS)
             "Skipping firmware_phy6252_zephyr_join: local PB-03F Zephyr, PHY6222 ROM/calibration or sampleGW inputs not found in firmware/")
     endif()
 
+    set(MCUEMU_PHY6252_TS0001_FIRMWARE
+        "${CMAKE_CURRENT_SOURCE_DIR}/firmware/phy6252-ts0001.bin")
+    if(EXISTS "${MCUEMU_PHY6252_TS0001_FIRMWARE}" AND
+       EXISTS "${MCUEMU_PHY6252_EFUSE}" AND
+       EXISTS "${MCUEMU_PHY6252_RF_CALIBRATION}")
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            add_test(
+                NAME firmware_phy6252_ts0001_boot
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_phy6252_ts0001_boot.py"
+                        "$<TARGET_FILE:mcuemu>"
+                        "${MCUEMU_PHY6252_TS0001_FIRMWARE}"
+                        "${MCUEMU_PHY6252_EFUSE}"
+                        "${MCUEMU_PHY6252_RF_CALIBRATION}")
+            set_tests_properties(firmware_phy6252_ts0001_boot PROPERTIES
+                TIMEOUT 900
+                LABELS "firmware;phy6252;tuya"
+            )
+        else()
+            message(STATUS
+                "Skipping firmware_phy6252_ts0001_boot: Python 3 interpreter not found")
+        endif()
+    else()
+        message(STATUS
+            "Skipping firmware_phy6252_ts0001_boot: local TS0001 image and PHY6222 calibration inputs not found in firmware/")
+    endif()
+
     set(MCUEMU_ZEPHYR_PM_FIRMWARE
         "${CMAKE_CURRENT_SOURCE_DIR}/firmware/zephyr-pmtest.bin")
     if(EXISTS "${MCUEMU_ZEPHYR_PM_FIRMWARE}")
