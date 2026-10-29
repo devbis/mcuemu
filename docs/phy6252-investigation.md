@@ -645,14 +645,17 @@ the missing relay callback.
 
 The helper then reaches `0x11021f34`, which builds a command for cluster
 `0x0006`. Its lookup in `0x1102e1f4` finds the endpoint-1/cluster-6 entry in
-the three-row table at `0x1fffc0f8`. After that successful lookup, the helper
-reads a local halfword at `sp+44`; it is zero and the code branches around
+the three-row table at `0x1fffc0f8`. In the selected row, byte `+6` is `3`, so
+the lookup takes its special branch through `0x1102cb98`, which copies a
+two-byte value from a per-index runtime table into the caller's output
+halfword. That value is zero at `sp+44`; the caller branches around
 `0x11043bf0`, the send path. The second lookup returns zero to end the row
 iteration. A two-second GPIO8 hold still produces Down/Up without a `longPress`
 or relay `On`/`Off` report. The callback at `0x1102ddd8` remains uncalled, and
-the pcap has no TS0001 transmission. The meaning and source of the zero
-halfword, and why the hardware run proceeds past this gate, remain unknown.
-Do not force relay state from the GPIO input based on this trace.
+the pcap has no TS0001 transmission. This traces the immediate source of the
+zero to the runtime table lookup; why the hardware run proceeds past this gate
+remains unresolved. Do not force relay state from the GPIO input based on this
+trace.
 
 For a separate first-boot probe, a temporary copy of the TS0001 dump had its
 `0x6000`-byte NVM range at `0x11079000` erased. The image reported
