@@ -174,6 +174,14 @@ int main() {
         CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 64).reason ==
               cortexm::StopReason::Deadline);
     };
+    rom_test_chip.core().set_reg(0, 88); // BB settle
+    rom_test_chip.core().set_reg(1, 8); // AFE settle
+    rom_test_chip.core().set_reg(2, 40); // PLL settle
+    rom_test_chip.core().set_reg(14, 0x11010109);
+    rom_test_chip.core().set_reg(15, 0x113dc); // ll_hw_set_trx_settle
+    CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 64).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(rom_test_chip.read(0x400300bc, 4) == 0x00580828);
     invoke_radio_rom(0x112a4); // ll_hw_set_srx
     CHECK(rom_test_chip.read(0x40031004, 4) == 1);
     invoke_radio_rom(0x10cdc); // ll_hw_get_tr_mode

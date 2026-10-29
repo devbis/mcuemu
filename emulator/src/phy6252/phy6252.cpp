@@ -114,6 +114,7 @@ constexpr std::uint32_t AonEfuseProgram1 = 0x4000f144;
 constexpr std::uint32_t AonXtal16Control = 0x4000f0bc;
 constexpr std::uint32_t AonSleepR0 = 0x4000f0c0;
 constexpr std::uint32_t RadioRfBase = 0x40030000;
+constexpr std::uint32_t RadioRfSettle = RadioRfBase + 0xbc;
 constexpr std::uint32_t RadioLlBase = 0x40031000;
 constexpr std::uint32_t RadioTxFifo = 0x40031400;
 constexpr std::uint32_t RadioRxFifo = 0x40031c00;
@@ -160,7 +161,7 @@ constexpr std::array<std::uint8_t, 23> GpioPullShift = {
 bool phy_rf_register(std::uint32_t offset) {
     switch (offset) {
     case 0x00: case 0x0c: case 0x40: case 0x48: case 0x4c:
-    case 0x80: case 0x90: case 0x94: case 0xb0: case 0xb4: case 0xb8:
+    case 0x80: case 0x90: case 0x94: case 0xb0: case 0xb4: case 0xb8: case 0xbc:
     case 0xcc: case 0xd0: case 0xd4: case 0xd8: case 0xdc: case 0xe0:
     case 0xe4: case 0xe8: case 0x104: case 0x108: case 0x10c:
         return true;
@@ -408,7 +409,6 @@ void Phy6252::reset() {
     gpio_irq_dispatch_warning_logged_ = false;
     timer_irq_dispatch_warning_logged_.fill(false);
     ll_context_warning_logged_ = false;
-    ll_settle_warning_logged_ = false;
     rf_sample_e8_warning_logged_ = false;
     heap_start_ = heap_size_ = 0;
     random_state_ = 0x6d2b79f5u;
@@ -623,14 +623,11 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             if (radio_rx_active_)
                 schedule_radio_rx_timeout();
         } else if (address == 0x113dc) {
-            // The SDK exposes three settle values, but the available sources
-            // do not identify their backing registers or clock units.
-            if (!ll_settle_warning_logged_) {
-                std::fprintf(stderr,
-                             "PHY6252: ll_hw_set_trx_settle reached (bb=%u afe=%u pll=%u); timing effect is not modeled\n",
-                             core_.reg(0), core_.reg(1), core_.reg(2));
-                ll_settle_warning_logged_ = true;
-            }
+            // The related PHY62xx SDK driver packs these values into BB_HW+0xbc.
+            // Preserve the register contract; PHY6252 timing remains unverified.
+            const std::uint32_t packed = ((core_.reg(0) & 0xffu) << 16) |
+                ((core_.reg(1) & 0xffu) << 8) | (core_.reg(2) & 0xffu);
+            write_register(RadioRfSettle, packed, 4);
         } else if (address == 0x10cdc) {
             // Return the current LL_HW operation mode; the symbol is exported
             // by the SDK ROM map but its declaration is omitted from headers.

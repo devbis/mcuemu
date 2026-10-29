@@ -174,10 +174,12 @@ timeout parameter `rxTimeOutUs`, so the model treats it as microseconds and comp
 an empty receive with both `MD` (operation complete) and `RTO` (timeout cause)
 when no frame arrives. This pairing is inferred from the PHY62xx SDK link-layer
 driver: its IRQ handler only processes `MD`, while its receive-timeout path checks
-`RTO`. The TS0001 image also enables only `MD` before its first receive. Settle
-timing remains unmodeled because the available sources do not identify its
-backing registers or clock units. These operations do not establish Zigbee stack
-compatibility.
+`RTO`. The TS0001 image also enables only `MD` before its first receive. The ROM
+helper `ll_hw_set_trx_settle(bb, afe, pll)` packs its byte arguments as
+`bb << 16 | afe << 8 | pll` at `0x400300bc`, matching the related PHY62xx SDK
+driver. The model retains this register value but does not delay radio operation
+for settling; PHY6252 timing behavior is unverified. These operations do not
+establish Zigbee stack compatibility.
 The Zephyr PHY driver samples `RF+0xe4` after its 128 us CCA settling delay;
 the model returns the strongest shared-air signal at that time. Zephyr performs
 frame filtering in software, and its ISR constructs requested ACKs in the TX
