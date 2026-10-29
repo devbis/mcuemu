@@ -1,7 +1,7 @@
 # TS0001 Zigbee relay dump with the TLSR8258 sample gateway.
-# Keep the user-supplied 512 KiB image outside git at
-# firmware/phy6252-ts0001.bin. This is an investigation scenario; a boot or
-# UART log does not establish Zigbee relay support.
+# Keep the user-supplied application package or 512 KiB full-flash image outside
+# git at firmware/phy6252-ts0001.bin. A boot or UART log does not establish
+# Zigbee relay support.
 version: 1
 
 world:
@@ -30,17 +30,19 @@ devices:
         radio: { air: air0, position: [3, 0, 1], tx_power_dbm: 0, protocols: [zigbee] }
     nets:
       - { id: key1_line, pull: up, pins: [mcu.GPIO8] }
-      - { id: key3_line, pull: up, pins: [mcu.GPIO3] }
+      - { id: key2_line, pull: up, pins: [mcu.GPIO3] }
+      - { id: relay_line, pins: [mcu.GPIO2] }
     parts:
       - { id: key1, type: button, pins: { out: key1_line } }
-      - { id: key3, type: button, pins: { out: key3_line } }
+      - { id: key2, type: button, pins: { out: key2_line } }
 
 attach:
   - { endpoint: air0, sink: "pcap:air.pcap" }
+  - { endpoint: ts0001.relay_line, sink: "vcd:relay.vcd" }
 
 scenario:
   events:
     - { at: 1s, endpoint: ts0001.key1.pressed, set: true }
     - { at: 1500ms, endpoint: ts0001.key1.pressed, set: false }
-    - { at: 3s, endpoint: ts0001.key3.pressed, set: true }
-    - { at: 3500ms, endpoint: ts0001.key3.pressed, set: false }
+    - { at: 3s, endpoint: ts0001.key2.pressed, set: true }
+    - { at: 3500ms, endpoint: ts0001.key2.pressed, set: false }

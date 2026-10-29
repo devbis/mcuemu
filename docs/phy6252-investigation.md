@@ -571,6 +571,14 @@ then passes the counters to the UART formatter. The supplied log associates
 these reports with pressing the relay's local toggle button. The route from
 the button event to this helper remains unresolved in the emulator.
 
+A four-second VCD probe of the module full-flash image confirms the physical
+GPIO path. Startup logs `relay_LED[0] = 2,0`; GPIO2 is initially driven low,
+then goes high when GPIO8 key 1 is pressed at 1.009 s. GPIO3 is the second key:
+it reports key 2 transitions and changes GPIO2 low on press at 3.049 s and high
+on release at 3.549 s. The `On/Off` UART helper remains uncalled. The TS0001
+example now exposes GPIO2 as `relay_line` in `relay.vcd`, so local relay state
+can be checked independently of the missing diagnostic callback.
+
 A 1,000,000-instruction standalone run found a runtime data block at
 `0x1fff7f34`: the word `6`, followed by pointers `0x1102ddd9` and
 `0x1102d299`. The first pointer targets the counter helper above, confirming

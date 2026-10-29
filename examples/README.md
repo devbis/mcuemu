@@ -16,7 +16,7 @@
 | `nrf52840_zigbee.yaml` | The same board with the SHT31 image on one radio medium with the TLSR8258 sampleGW coordinator: the nRF52840 joins the network, completes the TCLK exchange and reports temperature and humidity read from a simulated SHT31 on P0.26/P0.27. Different chips and cores in one world. |
 | `phy6252-zephyr.yaml` | PB-03F Zephyr Zigbee end device with the TLSR8258 sample gateway; joins and exchanges NWK data in the current emulator. |
 | `phy6252-zephyr-external-rom.yaml` | The same PB-03F image with the external PHY6222 ROM, eFuse and RF calibration inputs. This pairing joins and exchanges NWK data; the binary inputs stay local. |
-| `phy6252-ts0001.yaml` | TS0001 relay firmware investigation with the sample gateway and GPIO8/GPIO3 button probes. The relay image is a local input; the current run reaches Zigbee task startup but has not joined or exchanged frames. |
+| `phy6252-ts0001.yaml` | TS0001 relay investigation with GPIO8/GPIO3 buttons and the GPIO2 relay output recorded to VCD. The current two-node run reaches Zigbee task startup but has not joined or exchanged frames. |
 | `parts/shtc3.lua`, `parts/sht4x.lua`, `parts/lcd_lywsd03mmc.lua` | The two sensors and the I2C segment display of the LYWSD03MMC. |
 | `parts/bl0937.lua` | The BL0937 as a scripted part (CF / CF1 pulse outputs, SEL input). |
 | `parts/ds18b20.lua`, `parts/sht3x.lua` | Reference sensor scripts (see `docs/scripting.md`). |
@@ -57,7 +57,7 @@ No firmware image is stored in the repository. Put the images where the
 | PHY6222 ROM for PB-03F compatibility run | supplied `rom_10000000_20000.bin` dump | `firmware/phy6222-rom.bin` (used by `phy6252-zephyr-external-rom.yaml`) |
 | PHY6222 eFuse input | 32-byte four-block dump for the captured module | `firmware/phy6222-efuse.bin` |
 | PHY6222 RF calibration input | four observed `kCal` bytes for the captured module | `firmware/phy6222-rfcal.bin` |
-| TS0001 relay | the user-supplied 512 KiB full flash dump | `firmware/phy6252-ts0001.bin` (used by the investigation scenario) |
+| TS0001 relay | the user-supplied application package or 512 KiB full-flash dump | `firmware/phy6252-ts0001.bin` (used by the investigation scenario) |
 | thermostat, ZT3L module | the application built by the thermostat project | `firmware/osrctherm_r02_zrd.bin` |
 | thermostat, main board | the CA51F253L3 image | `firmware/osrctherm_r02_v1.02_CA51F253L3.bin` |
 | LYWSD03MMC | `z03mmc.bin` from the z03mmc project | `firmware/z03mmc.bin` |
