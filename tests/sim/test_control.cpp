@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 
 #include <filesystem>
+#include <initializer_list>
 #include <fstream>
 #include <string>
 #include <thread>
@@ -316,6 +317,66 @@ void test_rpc_run_events_and_memory() {
     CHECK(code_of(call(rpc, "mem.read", {{"mcu", "x.y"}, {"address", 0}, {"length", 1}})) == -32001);
     CHECK(code_of(call(rpc, "mem.write", {{"mcu", "d.m"}, {"address", 0x840010}, {"hex", "abc"}})) == -32602);
     CHECK(code_of(call(rpc, "mem.read", {{"mcu", "d.m"}, {"address", 0}, {"length", 99999999}})) == -32001);
+}
+
+// The CC2530 debug interface over JSON-RPC: entry, single commands, the
+// CC-Debugger-style programming flow and its parameter errors.
+void test_rpc_debug_if() {
+    const auto write = [](const std::string &name, std::initializer_list<int> bytes) {
+        std::ofstream out(root_dir() / name, std::ios::binary);
+        for (const int byte : bytes)
+            out.put(static_cast<char>(byte));
+    };
+    write("cc2530_spin.bin", {0x75, 0x81, 0x60, 0x80, 0xfe}); // MOV SP,#0x60; SJMP $
+    write("cc2530_new.bin", {0x90, 0x10, 0x00,                 // MOV DPTR,#0x1000
+                             0x74, 0x5e,                       // MOV A,#0x5e
+                             0xf0,                             // MOVX @DPTR,A
+                             0x80, 0xfe});                     // SJMP $
+    sim::RpcSession rpc(root_dir().string());
+    const std::string yaml =
+        "version: 1\ndevices:\n"
+        "  - id: d\n    mcus:\n      - {id: m, model: tlsr8258, firmware: idle.bin}\n"
+        "  - id: e\n    mcus:\n      - {id: c, model: cc2530f256, firmware: cc2530_spin.bin}\n";
+    CHECK(code_of(call(rpc, "load", {{"yaml", yaml}})) == 0);
+    call(rpc, "step", {{"duration", "100us"}});
+
+    CHECK(result_of(call(rpc, "debug_if.enter", {{"mcu", "e.c"}})).contains("time_ns"));
+    Json status = result_of(call(rpc, "debug_if.command", {{"mcu", "e.c"}, {"hex", "30"}}));
+    CHECK(status["hex"] == "22" && status["accepted"] == true); // CPU_HALTED | OSCILLATOR_STABLE
+    CHECK(result_of(call(rpc, "debug_if.command", {{"mcu", "e.c"}, {"hex", "52743c"}}))["hex"] == "3c");
+    CHECK(result_of(call(rpc, "debug_if.command", {{"mcu", "e.c"}, {"hex", "28"}}))["hex"] == "0000");
+    CHECK(result_of(call(rpc, "debug_if.command", {{"mcu", "e.c"}, {"hex", "48"}}))["accepted"] == true); // RESUME
+    // STEP_INSTR is refused on a running CPU.
+    CHECK(result_of(call(rpc, "debug_if.command", {{"mcu", "e.c"}, {"hex", "58"}}))["accepted"] == false);
+    CHECK(code_of(call(rpc, "debug_if.command", {{"mcu", "e.c"}, {"hex", ""}})) == -32602);
+    CHECK(code_of(call(rpc, "debug_if.command", {{"mcu", "e.c"}})) == -32602);
+    CHECK(code_of(call(rpc, "debug_if.command", {{"mcu", "e.c"}, {"hex", "18"}})) == -32001); // WR_CONFIG needs 2 bytes
+    CHECK(contains(message_of(call(rpc, "debug_if.enter", {{"mcu", "d.m"}})), "no CC2530 debug interface"));
+    CHECK(code_of(call(rpc, "debug_if.enter", {{"mcu", "x.y"}})) == -32001);
+
+    // Programming: erase, DMA through DBGDATA and FWDATA, read-back, run.
+    CHECK(code_of(call(rpc, "debug_if.program", {{"mcu", "e.c"}, {"firmware", "../x.bin"}})) == -32001);
+    CHECK(code_of(call(rpc, "debug_if.program", {{"mcu", "e.c"}, {"firmware", "cc2530_new.bin"},
+                                                 {"debug_lock", "yes"}})) == -32602);
+    const Json programmed =
+        result_of(call(rpc, "debug_if.program", {{"mcu", "e.c"}, {"firmware", "cc2530_new.bin"}}));
+    CHECK(programmed["chip_id"] == 0xa5 && programmed["pages"] == 1 &&
+          programmed["bytes_verified"] == 2048 && programmed["was_locked"] == false);
+    CHECK(result_of(call(rpc, "status"))["running"] == false);
+    call(rpc, "step", {{"duration", "100us"}});
+    CHECK(result_of(call(rpc, "mem.read", {{"mcu", "e.c"}, {"address", 0x01000000}, {"length", 8}}))["hex"] ==
+          "901000745ef080fe");
+    CHECK(result_of(call(rpc, "mem.read", {{"mcu", "e.c"}, {"address", 0x00011000}, {"length", 1}}))["hex"] == "5e");
+
+    // With DBGLOCK: the chip runs, and only the allowed commands remain.
+    CHECK(code_of(call(rpc, "debug_if.program", {{"mcu", "e.c"}, {"firmware", "cc2530_new.bin"},
+                                                 {"debug_lock", true}})) == 0);
+    call(rpc, "debug_if.enter", {{"mcu", "e.c"}});
+    CHECK(result_of(call(rpc, "debug_if.command", {{"mcu", "e.c"}, {"hex", "30"}}))["hex"] == "26");
+    CHECK(result_of(call(rpc, "debug_if.command", {{"mcu", "e.c"}, {"hex", "28"}}))["accepted"] == false);
+    CHECK(code_of(call(rpc, "debug_if.reset", {{"mcu", "e.c"}})) == 0);
+    call(rpc, "step", {{"duration", "100us"}});
+    CHECK(result_of(call(rpc, "mem.read", {{"mcu", "e.c"}, {"address", 0x00011000}, {"length", 1}}))["hex"] == "5e");
 }
 
 void test_rpc_sandbox() {

@@ -124,7 +124,8 @@ std::uint64_t Cc2530F256Mcu::cycle_ns(std::uint64_t cycle) const {
 }
 
 bool Cc2530F256Mcu::externally_driven() const {
-    if (air_ || uart_used_)
+    // A host using the debug interface keeps a halted chip alive as well.
+    if (air_ || uart_used_ || reset_pin_ || device_.debug_if_active())
         return true;
     for (const Pin *pin : pins_)
         if (pin)
@@ -448,10 +449,22 @@ std::vector<std::string> Cc2530F256Mcu::pin_names() const {
 }
 
 void Cc2530F256Mcu::connect_pin(std::string_view pad, Pin &pin) {
+    if (pad == "RESET_N") {
+        if (reset_pin_)
+            throw std::invalid_argument("pad RESET_N is already connected");
+        reset_pin_ = &pin;
+        // SWRU191F 4.3 / 3.1: low holds the chip in reset; DC edges while it
+        // is low select debug mode at the release. Model-defined: a floating
+        // net counts as high (no reset), as with a pull-up on the board.
+        const auto apply = [this](Level level) { device_.set_reset_pin(level != Level::Low); };
+        pin.net().subscribe([apply](const NetChange &change) { apply(change.level); });
+        apply(pin.net().level());
+        return;
+    }
     unsigned port = 0, bit = 0;
     if (!parse_pad(pad, port, bit))
         throw std::invalid_argument("CC2530F256 has no pad named '" + std::string(pad) +
-                                    "' (expected P0.0-P0.7, P1.0-P1.7 or P2.0-P2.4)");
+                                    "' (expected P0.0-P0.7, P1.0-P1.7, P2.0-P2.4 or RESET_N)");
     const unsigned index = port * 8 + bit;
     if (pins_[index])
         throw std::invalid_argument("pad " + std::string(pad) + " is already connected");
@@ -470,6 +483,53 @@ void Cc2530F256Mcu::connect_pin(std::string_view pad, Pin &pin) {
     apply(pin.net().level(), pin.net().millivolts());
     // Pad -> net: whatever the pad drives now.
     pin.set_drive(to_drive(device_.pin_drive(port, bit)), time_ns());
+}
+
+void Cc2530F256Mcu::debug_if_check_reset_pin(const char *what) const {
+    if (reset_pin_ && reset_pin_->net().level() == Level::Low)
+        throw std::runtime_error(std::string("debug interface: ") + what + " while net '" +
+                                 reset_pin_->net().name() + "' holds RESET_N low");
+}
+
+void Cc2530F256Mcu::debug_if_enter() {
+    if (state_ == McuState::Fault)
+        throw std::runtime_error("debug interface: the MCU stopped with a fault: " + fault_);
+    debug_if_check_reset_pin("cannot enter debug mode");
+    device_.debug_if_enter();
+    // The entry sequence is a reset (3.1): whatever stopped the MCU (an idle
+    // loop, a power mode without a wake source) is gone.
+    state_ = McuState::Running;
+    fault_.clear();
+    debugger_at_break_ = false;
+}
+
+void Cc2530F256Mcu::debug_if_submit(const std::vector<std::uint8_t> &command) {
+    if (state_ == McuState::Fault)
+        throw std::runtime_error("debug interface: the MCU stopped with a fault: " + fault_);
+    device_.debug_if_submit(command);
+}
+
+std::optional<mcs51emu::Cc2530DebugIfResponse> Cc2530F256Mcu::debug_if_take_response() {
+    return device_.debug_if_take_response();
+}
+
+std::uint64_t Cc2530F256Mcu::debug_if_due_ns() const {
+    return cycle_ns(device_.debug_if_due_cycle());
+}
+
+void Cc2530F256Mcu::debug_if_reset_pulse() {
+    if (state_ == McuState::Fault)
+        throw std::runtime_error("debug interface: the MCU stopped with a fault: " + fault_);
+    debug_if_check_reset_pin("cannot pulse RESET_N");
+    device_.set_reset_pin(false);
+    device_.set_reset_pin(true);
+    state_ = McuState::Running;
+    fault_.clear();
+    debugger_at_break_ = false;
+}
+
+std::uint64_t Cc2530F256Mcu::time_after_cycles(std::uint64_t cycles) const {
+    return cycle_ns(device_.registers().cycles + cycles);
 }
 
 void Cc2530F256Mcu::attach_radio(mcuemu::VirtualAir &air, const std::string &node,

@@ -1,5 +1,7 @@
 #include "sim/simulation.hpp"
 
+#include "sim/cc2530f256_mcu.hpp"
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -340,6 +342,97 @@ void Simulation::write_memory(const std::string &mcu_name, std::uint32_t address
     }
     try {
         mcu->write_memory(address, data.data(), data.size());
+    } catch (const std::exception &error) {
+        throw SimulationError(error.what());
+    }
+}
+
+Cc2530F256Mcu &Simulation::cc2530(const std::string &mcu_name) {
+    Mcu *mcu = nullptr;
+    try {
+        mcu = &system().world().mcu(mcu_name);
+    } catch (const std::out_of_range &) {
+        throw SimulationError("unknown MCU '" + mcu_name + "'");
+    }
+    auto *chip = dynamic_cast<Cc2530F256Mcu *>(mcu);
+    if (!chip)
+        throw SimulationError("MCU '" + mcu_name + "' (" + std::string(mcu->model()) +
+                              ") has no CC2530 debug interface");
+    return *chip;
+}
+
+void Simulation::debug_if_enter(const std::string &mcu_name) {
+    Cc2530F256Mcu &chip = cc2530(mcu_name);
+    try {
+        chip.debug_if_enter();
+    } catch (const std::exception &error) {
+        throw SimulationError(error.what());
+    }
+}
+
+mcs51emu::Cc2530DebugIfResponse Simulation::debug_if_command(const std::string &mcu_name,
+                                                             const Bytes &command) {
+    constexpr std::uint64_t Timeout = 1000000000; // 1 s of virtual time
+    Cc2530F256Mcu &chip = cc2530(mcu_name);
+    World &world = system().world();
+    try {
+        chip.debug_if_submit(command);
+    } catch (const std::exception &error) {
+        throw SimulationError(error.what());
+    }
+    // The MCU may already be ahead of world time.
+    const std::uint64_t deadline = std::max(world.now(), chip.time_ns()) + Timeout;
+    for (;;) {
+        if (std::optional<mcs51emu::Cc2530DebugIfResponse> response =
+                chip.debug_if_take_response())
+            return std::move(*response);
+        if (chip.state() != McuState::Running)
+            throw SimulationError("debug interface: MCU '" + mcu_name +
+                                  "' stopped: " + chip.fault_message());
+        const std::uint64_t now = std::max(world.now(), chip.time_ns());
+        if (now > deadline)
+            throw SimulationError("debug interface: no response from '" + mcu_name +
+                                  "' within 1 s");
+        world.run_until(std::max(now + 1, chip.debug_if_due_ns()));
+    }
+}
+
+void Simulation::debug_if_reset(const std::string &mcu_name) {
+    Cc2530F256Mcu &chip = cc2530(mcu_name);
+    try {
+        chip.debug_if_reset_pulse();
+    } catch (const std::exception &error) {
+        throw SimulationError(error.what());
+    }
+}
+
+mcs51emu::Cc2530DebugProgramResult Simulation::debug_if_program(
+    const std::string &mcu_name, const std::string &firmware,
+    const mcs51emu::Cc2530DebugProgramOptions &options) {
+    Cc2530F256Mcu &chip = cc2530(mcu_name);
+    const std::string path = confine_path(firmware);
+    mcs51emu::Cc2530FlashImage image;
+    try {
+        image = mcs51emu::Cc2530F256::read_firmware_image(path);
+    } catch (const std::exception &error) {
+        throw SimulationError(error.what());
+    }
+    World &world = system().world();
+    mcs51emu::Cc2530DebugIfLink link;
+    link.enter = [this, &mcu_name] { debug_if_enter(mcu_name); };
+    link.command = [this, &mcu_name](const std::vector<std::uint8_t> &bytes) {
+        return debug_if_command(mcu_name, bytes);
+    };
+    link.wait = [&world, &chip](std::uint64_t cycles) {
+        const std::uint64_t target = chip.time_after_cycles(cycles);
+        if (target > world.now())
+            world.run_until(target);
+    };
+    link.reset = [this, &mcu_name] { debug_if_reset(mcu_name); };
+    try {
+        return mcs51emu::cc2530_debug_program(link, image, options);
+    } catch (const SimulationError &) {
+        throw;
     } catch (const std::exception &error) {
         throw SimulationError(error.what());
     }
