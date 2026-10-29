@@ -325,6 +325,14 @@ ID. It also passes the later ROM initialization and reaches `PWRSLP` at
 454.7235 ms. On RTC compare wake, the captured ROM enters its image-copy path
 and faults at `PC=0x00000e8a` reading `0x22010000`.
 
+A separate two-second saved-flash run used the four zero eFuse blocks recorded
+in `SoC_info.txt` and the inferred RF calibration bytes `2b 21 45 43` from the
+RAM snapshot. It produced no UART output. The CPU entered the ROM routine at
+`0xafb8` with `r0=1` near 454.7 ms and again near 1.58 s, and was still in its
+fallback loop at `PC=0xafc6` when the run ended. This pairing did not reach the
+TS0001 key callback during the run; the reason the ROM callback path takes this
+fallback remains unknown.
+
 The image table stores XIP source addresses such as `0x11010000` and
 `0x1100a000`. ROM loader code adds `0x11000000` before reading them, so the
 first post-wake read is at `0x22010000`. This is the uncached XIP alias, not an
