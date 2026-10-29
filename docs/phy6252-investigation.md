@@ -753,19 +753,25 @@ the normal key 1 down/up messages and left GPIO2 low after the press, but still
 did not print `On/Off` counters. A longer hold does not explain the missing
 callback.
 
-Rerunning that 15-second scenario after correcting `efuse_read` confirms the
-GPIO path still reaches the firmware: UART reports key 1 down/up and key-level
-transitions, but no relay `On`/`Off` counters. The pcap has 19 coordinator
-frames (16 command, 3 data) and no TS0001 transmission. Compared with the
-supplied hardware UART log, `power report time`, `set read local time`, and
-`fixReport time` remain `4744`, `39`, and `326790` instead of `3288`, `44`, and
-`330785`; the hardware log's relay-counter lines are absent as well. The user
-confirms that the `On`/`Off` lines in the hardware log follow pressing the
-relay's local toggle button; they are not evidence of a remote Zigbee command.
-The emulator recognizes the GPIO8 key press and release. At the time of these
-runs the local relay state had not yet been traced; the instruction-level
-probe below later showed that the press updates the relay state and GPIO2
-output, while the `On`/`Off` diagnostic callback still does not run.
+A 120-second replay of the checked-in offline scenario with the current image
+reproduces startup, `High level`, Tuya report setup, both GPIO8 press/release
+pairs, and the three periodic stack reports through 90 s. The relay output
+returns high after the second press. Neither `On/Off` counter appears by 120 s.
+The startup values remain `power report time = 4744`, `set read local time: 39`,
+and `fix Report time = 326790`, versus `3288`, `44`, and `330785` in the
+reference UART.
+
+Rerunning the current 15-second radio scenario with the corrected GPIO3
+pull-up prints `High level` and key 1 down/up, but no relay `On`/`Off` counters.
+Its 19-frame pcap contains 16 coordinator Beacon Requests and three coordinator
+data frames; it has no successful association response and no TS0001 source
+frame (`0x87db`). Compared with the supplied hardware UART log,
+`power report time`, `set read local time`, and `fix Report time` remain
+`4744`, `39`, and `326790` instead of `3288`, `44`, and `330785`. The user
+confirms that the `On`/`Off` lines follow pressing the relay's local toggle
+button; they are not evidence of a remote Zigbee command. The GPIO8 press
+changes the relay state and GPIO2 output, while the diagnostic callback remains
+unreached.
 
 After adding the `0x3fc4` ROM wrapper, a 12-second run using the hardware's
 full-flash dump and saved NVM reaches both GPIO8 key events and stays running.
