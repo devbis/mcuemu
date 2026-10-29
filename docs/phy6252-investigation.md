@@ -110,6 +110,12 @@ that streaming port and pointer pair while preserving offset reads for the
 Zephyr driver. Byte-based pointer advancement and the footer defaults are
 inferred from this ROM path and the SDK contract, not measured on silicon.
 
+The related SDK defines `LL_HW_FIFO_TX_1K_RX_3K` as `0x0100`; the external
+ROM writes it to `LL+0x58` during TS0001 startup. The model retains and reads
+this setting but still exposes its fixed 2 KiB TX / 2 KiB RX buffers. Zigbee
+frames fit that modeled capacity, while the selected hardware partition and
+its address boundaries remain unmodeled.
+
 ## ROM calls and known gaps
 
 Implemented ROM entries include clock setup/query, IRQ critical-section

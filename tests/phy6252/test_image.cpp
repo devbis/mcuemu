@@ -231,6 +231,9 @@ int main() {
     Phy6252 rom_test_chip;
     rom_test_chip.load_firmware(image);
     rom_test_chip.reset();
+    CHECK(rom_test_chip.read(0x40031058, 4) == 0x0200);
+    rom_test_chip.write(0x40031058, 0x0100, 4); // SDK setting: 1 KiB TX / 3 KiB RX.
+    CHECK(rom_test_chip.read(0x40031058, 4) == 0x0100);
     CHECK(rom_test_chip.run(100).reason == cortexm::StopReason::Deadline);
     constexpr std::uint32_t random_buffer = 0x1fff2100;
     rom_test_chip.core().set_reg(0, random_buffer);

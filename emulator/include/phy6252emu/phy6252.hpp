@@ -116,6 +116,7 @@ private:
     bool rf_init_bank_warning_logged_{false};
     bool ll_2c_warning_logged_{false};
     bool ll_24_warning_logged_{false};
+    bool ll_58_warning_logged_{false};
     bool ll_60_warning_logged_{false};
     bool ll_20_warning_logged_{false};
     bool ll_68_warning_logged_{false};

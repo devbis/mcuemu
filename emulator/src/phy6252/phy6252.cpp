@@ -199,7 +199,7 @@ bool phy_ll_register(std::uint32_t offset) {
     switch (offset) {
     case 0x00: case 0x04: case 0x08: case 0x0c: case 0x10: case 0x14:
     case 0x18: case 0x1c: case 0x20: case 0x24: case 0x28: case 0x2c: case 0x34: case 0x38: case 0x40:
-    case 0x54: case 0x60: case 0x68:
+    case 0x54: case 0x58: case 0x60: case 0x68:
         return true;
     default:
         return false;
@@ -487,6 +487,7 @@ void Phy6252::reset() {
     rf_tp_calibration_pending_ = false;
     rf_registers_.clear();
     ll_registers_.clear();
+    ll_registers_[RadioLlBase + 0x58] = 0x0200; // Related SDK's 2 KiB TX / 2 KiB RX split.
     tx_fifo_.clear();
     rx_fifo_.fill(0);
     rx_fifo_read_ = 0;
@@ -2046,6 +2047,11 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
                          "PHY6252: LL register 0x4003102c is used by the external ROM setup; retaining writes without modeling its effect\n");
             ll_2c_warning_logged_ = true;
         }
+        if (offset == 0x58 && !ll_58_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL FIFO depth config 0x40031058 is retained; the current FIFO model keeps its 2 KiB TX / 2 KiB RX split (inferred from the related SDK)\n");
+            ll_58_warning_logged_ = true;
+        }
         if (offset == 0x60 && !ll_60_warning_logged_) {
             std::fprintf(stderr,
                          "PHY6252: LL register 0x40031060 is used by the external ROM setup; retaining writes without modeling its effect\n");
@@ -2404,6 +2410,11 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             std::fprintf(stderr,
                          "PHY6252: LL register 0x4003102c is used by the external ROM setup; retaining writes without modeling its effect\n");
             ll_2c_warning_logged_ = true;
+        }
+        if (offset == 0x58 && !ll_58_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL FIFO depth config 0x40031058 is retained; the current FIFO model keeps its 2 KiB TX / 2 KiB RX split (inferred from the related SDK)\n");
+            ll_58_warning_logged_ = true;
         }
         if (offset == 0x60 && !ll_60_warning_logged_) {
             std::fprintf(stderr,
