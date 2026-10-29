@@ -865,6 +865,18 @@ coordinator or shared radio medium is present. This reproduces the physical
 input and output behavior while leaving the application callback gap above
 unresolved.
 
+Disassembly of the external ROM's `0x27e8` wrapper initially looked like a
+possible route to that callback: it calls `0x7f1c`, which loads a callback from
+`0x1fff0038` and invokes it when non-null. The wrapper rejects `r0` values with
+any bits above bit 7 set, then forwards that scalar in `r0`; `0x1102ddd8`
+instead treats `r0` as a pointer and reads a record through offset `0x1c`.
+These ABIs do not match. The firmware's separate event registry at
+`0x1fff7f34` stores `0x1102ddd8` for event ID 6, but it is not the ROM slot at
+`0x1fff0038`; the saved post-button RAM snapshot has zero in the latter slot.
+The ROM wrapper therefore does not explain the missing diagnostic line, and
+its actual purpose remains unidentified. Do not bridge it to the event
+registry without a captured caller and compatible argument record.
+
 A 15-second run traces the receive wrapper at `0x1103d1f0`. The startup routine
 `0x11020890` polls event IDs `0x7001`, `0x7002`, and `0x7003` successfully, then
 finds `0x7005` empty. Those four reads all happen around cycle 14.46 million,
