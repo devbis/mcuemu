@@ -224,6 +224,16 @@ one SRX operation; its modeled 20 ms timeout completes, but the firmware emits
 no later radio trigger or TX frame in the capture. Neither run establishes
 Zigbee relay support.
 
+A follow-up 30-second run used the unmodified external PHY6222 ROM dump with
+the same cleared-NVM TS0001 image, eFuse and RF calibration inputs, and the
+sample gateway. On a fresh emulator build, the pcap contained 20 frames and no
+TS0001 transmission; the checker found no successful association response.
+Executing the real ROM code instead of the `0xa2e0` return shim therefore does
+not by itself resolve the relay's first-boot network stall. The same ROM dump
+does work on the PB-03F Zephyr direct-image path, which joins and exchanges
+NWK traffic; these results establish a useful PHY6222-to-PHY6252 compatibility
+case, not identity of every ROM revision or TS0001 support.
+
 The SDK declares `phy_sec_encrypt` and `phy_sec_decrypt` at ROM entries
 `0x15338` and `0x1531c`. It also contains a disabled (`#if 0`) implementation
 of the PHY+ AES-CCM-shaped decrypt operation: a 13-byte IV, a 4-byte MIC, a
