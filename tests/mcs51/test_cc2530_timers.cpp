@@ -1264,8 +1264,11 @@ void test_unmodeled_reporting() {
     d.write_sfr(T1CCTL0, 0x2c); // channel 0 CMP 101 reserved
     CHECK_EQ(d.diagnostics().unmodeled_feature_writes.count(0x7000u | T1CCTL0), 1u);
     CHECK_EQ(d.read_sfr(T1CCTL0), 0x2c);
-    d.write_sfr(T1CCTL1, 0x80); // RFIRQ capture: not modelled
-    CHECK_EQ(d.diagnostics().unmodeled_feature_writes.count(0x7000u | T1CCTL1), 1u);
+    // RFIRQ capture (SWRU191F T1CCTLn.RFIRQ) is modelled now, so it is no
+    // longer reported (this asserted the earlier "not modelled" rule).
+    d.write_sfr(T1CCTL1, 0x80);
+    CHECK_EQ(d.diagnostics().unmodeled_feature_writes.count(0x7000u | T1CCTL1), 0u);
+    CHECK_EQ(d.read_sfr(T1CCTL1), 0x80);
 }
 
 // ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@
 #include "cc2530_radio.hpp"
 
 #include "cc2530_mactimer.hpp"
+#include "cc2530_timers.hpp"
 #include "mcuemu/radio.hpp"
 
 #include <algorithm>
@@ -429,7 +430,22 @@ struct Radio::State {
     std::uint8_t irq_mask(unsigned i) const {
         return reg(i == 0 ? RFIRQM0 : i == 1 ? RFIRQM1 : RFERRM);
     }
-    void raise_cpu(unsigned i) { bus.raise_irq(i == 2 ? Irq::RfErr : Irq::Rf); }
+    void raise_cpu(unsigned i) {
+        bus.raise_irq(i == 2 ? Irq::RfErr : Irq::Rf);
+        if (i < 2)
+            rf_capture_edge(true);
+    }
+    // The RF interrupt (interrupt 16) line of Figure 2-4: an unmasked
+    // RFIRQF0/RFIRQF1 flag stands.
+    bool rf_line() const {
+        return (flags[0] & irq_mask(0)) != 0 || (flags[1] & irq_mask(1)) != 0;
+    }
+    // Timer 1 channels with T1CCTLn.RFIRQ = 1 capture on the RF interrupt
+    // (SWRU191F 9.12; edge rules in Timer1::rf_interrupt_edge).
+    void rf_capture_edge(bool rising) {
+        if (Timer1 *timer1 = bus.soc().timer1)
+            timer1->rf_interrupt_edge(rising);
+    }
     void set_flags(unsigned i, std::uint8_t bits) {
         bits &= flag_mask(i);
         const std::uint8_t rising = static_cast<std::uint8_t>(bits & ~flags[i]);
@@ -1886,6 +1902,7 @@ struct Radio::State {
         if (rmw_time[i] == bus.now())
             clear &= rmw_snapshot[i];
         rmw_time[i] = Never;
+        const bool line = rf_line();
         const bool cleared = (flags[i] & clear) != 0;
         flags[i] = static_cast<std::uint8_t>(flags[i] & ~clear);
         bus.storage(flag_reg(i)) = flags[i];
@@ -1893,13 +1910,18 @@ struct Radio::State {
         // unmasked flags standing, another interrupt is generated."
         if (cleared && (flags[i] & irq_mask(i)))
             raise_cpu(i);
+        if (line && !rf_line())
+            rf_capture_edge(false);
     }
     void write_mask(Reg r, unsigned i, std::uint8_t v) {
         const std::uint8_t old = reg(r);
+        const bool line = rf_line();
         bus.storage(r) = static_cast<std::uint8_t>(v & flag_mask(i));
         // Model-defined: unmasking a standing flag requests the interrupt.
         if (flags[i] & v & ~old & flag_mask(i))
             raise_cpu(i);
+        if (line && !rf_line())
+            rf_capture_edge(false);
     }
     void rfd_write(std::uint8_t v) {
         // 23.8.3/23.8.5: TXFIFO write; TX overflow when full. Model-defined:

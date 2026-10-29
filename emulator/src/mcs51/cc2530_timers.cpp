@@ -508,10 +508,10 @@ void Timer1::write(Reg reg, std::uint8_t value) {
             ch.ctl = ctl;
             initialize_output(ch);
         }
-        // RFIRQ (capture from the RF interrupt) is not modelled; channel 0
-        // CMP 101/110 are reserved.
+        // Channel 0 CMP 101/110 are reserved. RFIRQ selects the RF
+        // interrupt as the capture input (rf_interrupt_edge).
         const unsigned cmp = (ctl >> 3) & 7u;
-        if ((ctl & 0x80u) || (r.n == 0 && (cmp == 5 || cmp == 6)))
+        if (r.n == 0 && (cmp == 5 || cmp == 6))
             bus_.note_unmodeled(reg, true);
         ch.ctl = ctl;
         bus_.storage(t1_cctl_reg(r.n)) = ctl;
@@ -650,27 +650,66 @@ bool Timer1::output(unsigned channel) const {
     return level;
 }
 
+// SWRU191F 9.7: after the timer has been started, the selected edge
+// captures the counter; the input is synchronized to the system clock.
+// Model-defined: no capture while suspended or in PM1-PM3, where Table 4-1
+// stops the system clock that both the counter and the input synchronizer
+// use. Sets T1STAT.CHnIF; returns whether the counter was captured.
+bool Timer1::capture(unsigned channel, bool rising) {
+    Channel &ch = unit_.ch[channel];
+    const unsigned cap = ch.ctl & 3u;
+    const bool edge_selected = rising ? (cap & 1u) : (cap & 2u);
+    if ((ch.ctl & 0x04u) || !edge_selected || unit_.c.mode == CountMode::Stopped ||
+        hf_stopped(bus_.power_mode()))
+        return false;
+    ch.value = unit_.c.count;
+    ch.has_pending = false;
+    bus_.storage(sfr_reg(SfrT1stat)) |= static_cast<std::uint8_t>(1u << channel);
+    return true;
+}
+
 void Timer1::input_changed(unsigned channel, bool level) {
     if (channel >= 5)
         return;
     const std::uint8_t before = outputs();
     settle();
-    Channel &ch = unit_.ch[channel];
-    // SWRU191F 9.7: after the timer has been started, the selected edge
-    // captures the counter. Model-defined: no capture while suspended or in
-    // PM1-PM3 (no tick clock), nor with RFIRQ = 1 (not modelled).
-    const unsigned cap = ch.ctl & 3u;
-    const bool edge_selected = level ? (cap & 1u) : (cap & 2u);
-    if ((ch.ctl & 0x04u) || (ch.ctl & 0x80u) || !edge_selected ||
-        unit_.c.mode == CountMode::Stopped || hf_stopped(bus_.power_mode())) {
+    // T1CCTLn.RFIRQ = 1 replaces the pad with the RF interrupt.
+    if ((unit_.ch[channel].ctl & 0x80u) || !capture(channel, level)) {
         notify_outputs(before);
         return;
     }
-    ch.value = unit_.c.count;
-    ch.has_pending = false;
     sync_storage();
-    bus_.storage(sfr_reg(SfrT1stat)) |= static_cast<std::uint8_t>(1u << channel);
-    if (ch.ctl & 0x40u)
+    // SWRU191F 9.10: the request needs the channel's IM bit.
+    if (unit_.ch[channel].ctl & 0x40u)
+        bus_.raise_irq(Irq::T1);
+    notify_outputs(before);
+    bus_.reschedule();
+}
+
+// SWRU191F 9.12 T1CCTLn.RFIRQ: "When set, use RF interrupt for capture
+// instead of regular capture input." Model-defined input waveform (the
+// datasheet does not draw it): the RF interrupt line (interrupt 16) of
+// Figure 2-4, high while an unmasked RFIRQF0/RFIRQF1 flag stands. Every RF
+// interrupt the RF Core generates (23.1.1: rising-edge triggered, including
+// the re-request when a flag is cleared while others stand) is a rising
+// edge; the line returning low (the last unmasked flag cleared or masked) is
+// a falling edge. RFERR (interrupt 0) is not the RF interrupt. The counter
+// value is the one at the instruction boundary at which the radio event is
+// applied, like a pad edge (input_changed).
+void Timer1::rf_interrupt_edge(bool rising) {
+    bool selected = false;
+    for (unsigned n = 0; n < 5; ++n)
+        selected = selected || (unit_.ch[n].ctl & 0x80u);
+    if (!selected)
+        return;
+    const std::uint8_t before = outputs();
+    settle();
+    bool request = false;
+    for (unsigned n = 0; n < 5; ++n)
+        if ((unit_.ch[n].ctl & 0x80u) && capture(n, rising))
+            request = request || (unit_.ch[n].ctl & 0x40u);
+    sync_storage();
+    if (request)
         bus_.raise_irq(Irq::T1);
     notify_outputs(before);
     bus_.reschedule();
