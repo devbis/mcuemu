@@ -545,6 +545,13 @@ and the stack's later RX state remain unknown. This test used the cleared-NVM
 first-boot image (`network state=0`), unlike the supplied `log.txt`, which
 restores state 12 and includes Tuya reports and relay `On`/`Off` counters.
 
+An LL helper trace of the same-channel first-boot run for 10 s saw 317
+`ll_hw_set_srx` calls and 317 radio triggers: 302 on channel 11 and 15 on
+channel 26. It saw no `STX`, `TRX`, or `RTX` helper calls, no TX FIFO data and
+no TS0001 transmission. The observed stall therefore occurs before this image
+sets up an LL transmit operation; implementing combined radio modes would not
+change this tested path.
+
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
 instruction tracing for a PC interval and prints registers on a fault.
