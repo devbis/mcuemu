@@ -625,37 +625,36 @@ Down/Up transition, and schedules key events (`0x1010` for key 1 down,
 `0x1002` for key 1 up) through its timer wrapper when an application callback
 is registered. The emulator produces both `keyid` reports for GPIO8. A PC trace
 around the registered `On`/`Off` handler at `0x1102ddd8` shows that it is not
-called during that press; the missing step is after key-event delivery and
-before the local relay state update.
+called during that press. Later runtime tracing corrected the earlier
+interpretation that the missing step was before the local state update.
 
-A narrower runtime trace follows both events beyond the timer wrapper. The
-image callback at `0x11032670` decodes the event, prints `keyid`, and calls the
-key dispatcher at `0x11026660`: key 1 down arrives as `(1, 1, 0)` and key 1 up
-as `(1, 0, 2)`. The dispatcher reads its runtime tables and takes different
-branches for the two events, but neither path calls `0x1102ddd8` in this run.
-This confirms that GPIO sampling, debounce, timer delivery, and the generic key
-dispatcher all execute. It does not yet identify why the hardware run proceeds
-to a local relay state change while this emulated run does not.
+The image callback at `0x11032670` decodes the event, prints `keyid`, and calls
+the key dispatcher at `0x11026660`: key 1 down arrives as `(1, 1, 0)` and key 1
+up as `(1, 0, 2)`. In a two-second run with the saved hardware flash, the
+down-event branch sees the configured key mask (`0x1fff8016 == 2`) and enabled
+switch flag (`0x1fff80a2 == 1`). It changes the first relay state byte at
+`0x1fff7fd4` from `1` to `0`. The up event follows a separate branch and leaves
+that state unchanged. GPIO sampling, debounce, timer delivery, key dispatch,
+and the local software state change therefore execute in the emulator.
 
-The down-event path reaches the image helper at `0x110219b4`. A follow-up
-read/write watch corrected the earlier interpretation of its state check:
-startup writes `1` to `0x1fff81d0` from `0x1102af8e`, and the helper's call to
-`0x11030fac` reads back `1` during the button path. The flag does not explain
-the missing relay callback.
+The state-change helper `0x110219b4` then calls `0x11020b18`
+(`app_device_SW_state_set`) with key 1 and state code 2. That function updates
+the app state at `0x1fff7f2c` and posts event `0x7001` through the image's event
+queue. The `0x1102ddd8` callback still does not run, so the UART `On`/`Off`
+counters remain absent. The event-queue path from this posted state change to
+the registered callback is unresolved; the saved hardware RAM dump does not
+provide a reliable comparison for these runtime tables.
 
-The helper then reaches `0x11021f34`, which builds a command for cluster
-`0x0006`. Its lookup in `0x1102e1f4` finds the endpoint-1/cluster-6 entry in
-the three-row table at `0x1fffc0f8`. In the selected row, byte `+6` is `3`, so
-the lookup takes its special branch through `0x1102cb98`, which copies a
-two-byte value from a per-index runtime table into the caller's output
-halfword. That value is zero at `sp+44`; the caller branches around
-`0x11043bf0`, the send path. The second lookup returns zero to end the row
-iteration. A two-second GPIO8 hold still produces Down/Up without a `longPress`
-or relay `On`/`Off` report. The callback at `0x1102ddd8` remains uncalled, and
-the pcap has no TS0001 transmission. This traces the immediate source of the
-zero to the runtime table lookup; why the hardware run proceeds past this gate
-remains unresolved. Do not force relay state from the GPIO input based on this
-trace.
+Separately, `0x110219b4` reaches `0x11021f34`, which builds a command for
+cluster `0x0006`. Its lookup in `0x1102e1f4` finds the endpoint-1/cluster-6
+entry in the table at `0x1fffc0f8` and selects descriptor `0x1fffc178` with
+index 0 and marker 3. The special branch through `0x1102cb98` reads bytes
+`+6..+7` from entry 0 of the per-index table at `0x1fffb408`; both are zero.
+The caller consequently skips `0x11043bf0`, the send path. This explains why
+that command path produces no TS0001 transmission, but it does not by itself
+explain the absent local `On`/`Off` callback. The callback remains uncalled and
+the pcap has no TS0001 transmission. Do not force relay state or callback
+execution from GPIO input alone.
 
 For a separate first-boot probe, a temporary copy of the TS0001 dump had its
 `0x6000`-byte NVM range at `0x11079000` erased. The image reported
