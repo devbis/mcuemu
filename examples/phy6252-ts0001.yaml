@@ -42,7 +42,5 @@ attach:
 
 scenario:
   events:
-    - { at: 1s, endpoint: ts0001.key1.pressed, set: true }
-    - { at: 1500ms, endpoint: ts0001.key1.pressed, set: false }
-    - { at: 3s, endpoint: ts0001.key2.pressed, set: true }
-    - { at: 3500ms, endpoint: ts0001.key2.pressed, set: false }
+    - { at: 6s, endpoint: ts0001.key1.pressed, set: true }
+    - { at: 6500ms, endpoint: ts0001.key1.pressed, set: false }

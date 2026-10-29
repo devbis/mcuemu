@@ -570,6 +570,19 @@ and 60.305 s. The local time remains zero; the trace does not print
 the reference relay `On`/`Off` reports by 65 s. It prints `key timer stop!`
 at 3.519 s; the supplied log spells this as `ky timer stop!`.
 
+A 65 s replay with only one GPIO8 press moved to 6 s matches the log's event
+order: the two Tuya report lines and `fix Report time` print at 5.203 s, then
+`key 1 Down/Up` at 6.010/6.510 s. GPIO2 changes from high to low at 6.010 s,
+confirming the local relay output follows the button. The UART still reports
+`power report time = 4744`, `set read local time: 39`, and `fix Report time =
+326790`, against `3288`, `44`, and `330785` in the supplied log. At 30.454 s
+and 60.454 s it reports `MiF=0x1918`, `Tim=131`, and `lMac=210`, against
+`MiF=0x18A0`, `Tim=122`, and `lMac=154` in the log. No local `On/Off` lines
+appear. The pcap is unchanged: 23 coordinator frames, no successful
+association response, and no TS0001 transmission. Moving the local button
+after startup therefore fixes the UART ordering but does not resolve either
+the missing diagnostic callback or Zigbee transmit path.
+
 The `*** On:%d, Off:%d, toggle:%d ***` format belongs to the XIP helper at
 `0x1102ddd8`. Its disassembly increments counters for event values 1 and 2,
 then passes the counters to the UART formatter. The supplied log associates

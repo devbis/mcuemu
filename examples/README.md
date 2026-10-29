@@ -16,7 +16,7 @@
 | `nrf52840_zigbee.yaml` | The same board with the SHT31 image on one radio medium with the TLSR8258 sampleGW coordinator: the nRF52840 joins the network, completes the TCLK exchange and reports temperature and humidity read from a simulated SHT31 on P0.26/P0.27. Different chips and cores in one world. |
 | `phy6252-zephyr.yaml` | PB-03F Zephyr Zigbee end device with the TLSR8258 sample gateway; joins and exchanges NWK data in the current emulator. |
 | `phy6252-zephyr-external-rom.yaml` | The same PB-03F image with the external PHY6222 ROM, eFuse and RF calibration inputs. This pairing joins and exchanges NWK data; the binary inputs stay local. |
-| `phy6252-ts0001.yaml` | TS0001 relay investigation with GPIO8/GPIO3 buttons and the GPIO2 relay output recorded to VCD. The current two-node run reaches Zigbee task startup but has not joined or exchanged frames. |
+| `phy6252-ts0001.yaml` | TS0001 relay investigation; presses GPIO8 after the Tuya startup reports and records the GPIO2 relay output to VCD. The image reaches Zigbee task startup but has not joined or transmitted frames. |
 | `parts/shtc3.lua`, `parts/sht4x.lua`, `parts/lcd_lywsd03mmc.lua` | The two sensors and the I2C segment display of the LYWSD03MMC. |
 | `parts/bl0937.lua` | The BL0937 as a scripted part (CF / CF1 pulse outputs, SEL input). |
 | `parts/ds18b20.lua`, `parts/sht3x.lua` | Reference sensor scripts (see `docs/scripting.md`). |
