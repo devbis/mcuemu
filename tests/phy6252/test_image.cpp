@@ -978,6 +978,14 @@ int main() {
     CHECK(chip.core().read_memory(efuse_buffer, efuse_data, sizeof efuse_data));
     CHECK(std::equal(efuse_dump.begin() + 24, efuse_dump.begin() + 32,
                      std::begin(efuse_data)));
+    chip.load_efuse_dump(std::vector<std::uint8_t>(32, 0));
+    CHECK(chip.core().write_memory(efuse_buffer, untouched_efuse_data,
+                                  sizeof untouched_efuse_data));
+    invoke_rom(0xace0, 1, efuse_buffer, 0x60, 545, 0x1fff2b29);
+    CHECK(chip.core().reg(0) == 24); // zero-valued device block is uninitialized
+    CHECK(chip.core().read_memory(efuse_buffer, efuse_data, sizeof efuse_data));
+    CHECK(std::all_of(std::begin(efuse_data), std::end(efuse_data),
+                      [](std::uint8_t byte) { return byte == 0; }));
     const std::vector<std::uint8_t> rf_calibration = {0x2b, 0x21, 0x45, 0x43};
     chip.load_rf_calibration_dump(rf_calibration);
     chip.write(0x400300b4, 2, 4);

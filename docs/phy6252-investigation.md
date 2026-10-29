@@ -274,10 +274,13 @@ The PHY6252 SDK exports ROM `efuse_read` at `0xace1` but omits its prototype
 and body. The related PHY6222 SDK declares `efuse_read(EFUSE_block_t,
 uint32_t *)`; each of its four blocks is two words (8 bytes), and its public
 error enum defines success `0`, invalid parameter `6`, and uninitialized `24`.
-The emulator uses that ABI at the PHY6252 ROM trap: a valid supplied block is
-copied to the output buffer, a missing block returns `24` without changing the
-buffer, and an invalid block or output address returns `6`. This contract is
-inferred from the related SDK, not hardware-verified. A raw 32-byte dump can be
+The emulator uses that ABI at the PHY6252 ROM trap: a valid programmed block is
+copied to the output buffer and returns `0`; a missing block returns `24`
+without changing the buffer; and an invalid block or output address returns
+`6`. A supplied all-zero block is copied to the output buffer and returns `24`,
+matching the supplied external ROM's behavior on the captured module. The ABI
+and status codes come from the related SDK; the zero-block behavior is
+confirmed by the ROM trace for block 1. A raw 32-byte dump can be
 provided with `mcuemu run --efuse DUMP` or `efuse: DUMP` on a `phy6252` in YAML;
 it is an external input and is not stored in the repository. No eFuse data is
 embedded in the firmware image, so the default model treats all blocks as
@@ -332,11 +335,14 @@ and faults at `PC=0x00000e8a` reading `0x22010000`.
 
 A separate two-second saved-flash run used the four zero eFuse blocks recorded
 in `SoC_info.txt` and the inferred RF calibration bytes `2b 21 45 43` from the
-RAM snapshot. It produced no UART output. The CPU entered the ROM routine at
-`0xafb8` with `r0=1` near 454.7 ms and again near 1.58 s, and was still in its
-fallback loop at `PC=0xafc6` when the run ended. This pairing did not reach the
-TS0001 key callback during the run; the reason the ROM callback path takes this
-fallback remains unknown.
+RAM snapshot. It produced no UART output. A PC trace shows the image reaches
+ROM helper `0xafa0` with `r0=1` near 454.7 ms. The helper reads a null indirect
+callback pointer at `0x1fff0100` and falls through to `0xafb8`; at 600 ms the
+CPU remains in the resulting fallback loop at `PC=0xafc6`. The callback owner
+and why it is unset remain unknown. The same trace shows the dumped ROM's
+`efuse_read` at `0xace0` reads zero words from `0x4000f168..0x4000f16c`, writes
+them to the output buffer, and returns `PPlus_ERR_UNINITIALIZED` (24). The host
+ROM trap now reproduces that result for a supplied all-zero block.
 
 The image table stores XIP source addresses such as `0x11010000` and
 `0x1100a000`. ROM loader code adds `0x11000000` before reading them, so the
@@ -582,6 +588,13 @@ appear. The pcap is unchanged: 23 coordinator frames, no successful
 association response, and no TS0001 transmission. Moving the local button
 after startup therefore fixes the UART ordering but does not resolve either
 the missing diagnostic callback or Zigbee transmit path.
+
+After matching the host `efuse_read` trap to the dumped ROM for blank blocks, a
+65 s replay with the captured all-zero eFuse input produces the same UART
+values and GPIO2 transition. Its 23-frame pcap still has no successful
+association response and no TS0001 transmission. Supplying the blank eFuse
+contents therefore does not account for the missing local diagnostic callback
+or the network stall.
 
 The `*** On:%d, Off:%d, toggle:%d ***` format belongs to the XIP helper at
 `0x1102ddd8`. Its disassembly increments counters for event values 1 and 2,

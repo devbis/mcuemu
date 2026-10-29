@@ -879,7 +879,13 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                                            efuse_blocks_[block].size())) {
                 core_.set_reg(0, 6); // PPlus_ERR_INVALID_PARAM
             } else {
-                core_.set_reg(0, 0); // PPlus_SUCCESS
+                // The supplied ROM copies both words before checking whether
+                // the block contains any programmed bits. The captured module
+                // has all-zero blocks, which return PPlus_ERR_UNINITIALIZED.
+                const bool uninitialized = std::all_of(
+                    efuse_blocks_[block].begin(), efuse_blocks_[block].end(),
+                    [](std::uint8_t byte) { return byte == 0; });
+                core_.set_reg(0, uninitialized ? 24u : 0u);
             }
         } else if (address == 0x3fc4) {
             // The supplied PHY6222 ROM implements this entry as an indirect
