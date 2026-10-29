@@ -279,7 +279,13 @@ captured network scenario.
 
 The 65 s UART trace emits local-time and stack-statistics reports at 30.305 s
 and 60.305 s. The local time remains zero; the trace does not print
-`ky timer stop!` or the reference relay `On`/`Off` reports by 65 s.
+the reference relay `On`/`Off` reports by 65 s. It prints `key timer stop!`
+at 3.519 s; the supplied log spells this as `ky timer stop!`.
+
+The `*** On:%d, Off:%d, toggle:%d ***` format belongs to the XIP helper at
+`0x1102ddd8`. Its disassembly increments counters for event values 1 and 2,
+then passes the counters to the UART formatter. The trigger that reaches this
+helper in the reference run is still unknown.
 
 A PC trace of the first `power report time` calculation shows the image combines
 its stored fields with a byte returned by its RAM-resident helper at
