@@ -39,6 +39,10 @@ constexpr std::uint32_t WatchdogTimeout = WatchdogBase + 0x04;
 constexpr std::uint32_t WatchdogIrq = 10;
 constexpr std::uint32_t GpioBase = 0x40008000;
 constexpr std::uint32_t DmaBase = 0x40010000;
+constexpr std::uint32_t DmaChannel0Control = DmaBase + 0x018;
+constexpr std::uint32_t DmaChannel0ControlHigh = DmaBase + 0x01c;
+constexpr std::uint32_t DmaChannel0Config = DmaBase + 0x040;
+constexpr std::uint32_t DmaChannel0ConfigHigh = DmaBase + 0x044;
 constexpr std::uint32_t DmaChannel3Sar = DmaBase + 0x108;
 constexpr std::uint32_t DmaChannel3Dar = DmaBase + 0x110;
 constexpr std::uint32_t DmaChannel3CtlHigh = DmaBase + 0x124;
@@ -47,6 +51,7 @@ constexpr std::uint32_t DmaRawTransfer = DmaBase + 0x2c0;
 constexpr std::uint32_t DmaClearTransfer = DmaBase + 0x338;
 constexpr std::uint32_t DmaConfig = DmaBase + 0x398;
 constexpr std::uint32_t DmaChannelEnable = DmaBase + 0x3a0;
+constexpr std::uint32_t DmaChannel0Mask = 1u << 0;
 constexpr std::uint32_t DmaChannel3Mask = 1u << 3;
 constexpr std::uint32_t FlashControlBase = 0x4000c000;
 constexpr std::uint32_t PcrBase = 0x40000000;
@@ -74,6 +79,11 @@ constexpr std::uint32_t FlashSectorSize = 4096;
 constexpr std::uint32_t FlashReady = 0x80000000;
 constexpr std::uint32_t SpifReadStatus = 0x05900001;
 constexpr std::uint32_t SpifReadId = 0x9fa00001;
+constexpr std::uint32_t SpifWriteEnable = 0x06000001;
+constexpr std::uint32_t SpifWriteDisable = 0x04000001;
+constexpr std::uint32_t SpifSectorErase = 0x200a0001;
+constexpr std::uint32_t SpifBlockErase64 = 0xd80a0001;
+constexpr std::uint32_t FlashBlock64Size = 0x10000;
 // SoC_info.txt for the supplied P622ZB2S module records FlashID 0x1364c8.
 constexpr std::uint32_t CapturedFlashJedecId = 0x001364c8;
 constexpr std::uint32_t PcrReset = PcrBase;
@@ -134,6 +144,7 @@ constexpr std::uint32_t RadioRfBase = 0x40030000;
 constexpr std::uint32_t RadioRfSettle = RadioRfBase + 0xbc;
 constexpr std::uint32_t RadioLlBase = 0x40031000;
 constexpr std::uint32_t RadioRxFifoStatus = RadioLlBase + 0x54;
+constexpr std::uint32_t RadioRxTimeout = RadioLlBase + 0x28;
 constexpr std::uint32_t RadioTxFifo = 0x40031400;
 constexpr std::uint32_t RadioRxFifo = 0x40031c00;
 constexpr std::uint32_t RadioTxFifoSize = 0x800;
@@ -496,7 +507,6 @@ void Phy6252::reset() {
     radio_tx_end_cycle_ = 0;
     radio_rx_after_ns_ = 0;
     radio_rx_deadline_cycle_ = 0;
-    radio_rx_timeout_us_ = 0;
     radio_tx_active_ = false;
     radio_rx_active_ = false;
     radio_rx_rssi_ = -100;
@@ -518,6 +528,7 @@ void Phy6252::reset() {
     spif_config_ = FlashReady;
     spif_command_ = 0;
     spif_read_data_ = 0;
+    spif_write_enabled_ = false;
     dma_raw_transfer_status_ = dma_channel_enable_ = 0;
     watchdog_deadline_ns_ = 0;
     watchdog_interrupt_pending_ = false;
@@ -822,11 +833,10 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
         } else if (address == 0x110e8) {
             tx_fifo_.clear();
         } else if (address == 0x11278 || address == 0x11284) {
-            // The PHY+ SDK wrapper names this parameter rxTimeOutUs. The
-            // timeout is applied to an active receive and reused by the next.
-            radio_rx_timeout_us_ = core_.reg(0);
-            if (radio_rx_active_)
-                schedule_radio_rx_timeout();
+            // The dumped ROM implements these helpers as writes to LL+0x28
+            // (timeout) and LL+0x24 (first timeout), respectively.
+            write_register(address == 0x11278 ? RadioRxTimeout : RadioLlBase + 0x24,
+                           core_.reg(0), 4);
         } else if (address == 0x113dc) {
             // The related PHY62xx SDK driver packs these values into BB_HW+0xbc.
             // Preserve the register contract; PHY6252 timing remains unverified.
@@ -1653,6 +1663,60 @@ void Phy6252::dma_copy_channel3() {
     dma_raw_transfer_status_ |= DmaChannel3Mask;
 }
 
+void Phy6252::dma_copy_channel0() {
+    const std::uint32_t source = control_registers_[DmaBase];
+    const std::uint32_t destination = control_registers_[DmaBase + 0x08];
+    const std::uint32_t control = control_registers_[DmaChannel0Control];
+    const std::uint32_t count = control_registers_[DmaChannel0ControlHigh];
+    const std::uint64_t source_end = static_cast<std::uint64_t>(source) + count;
+    const std::uint64_t destination_end = static_cast<std::uint64_t>(destination) + count;
+    const std::uint64_t flash_end =
+        static_cast<std::uint64_t>(BootImage::FlashBase) + BootImage::FlashSize;
+    const bool source_in_flash = source >= BootImage::FlashBase && source_end <= flash_end;
+    const bool source_in_ram = source >= BootImage::RamBase &&
+        source_end <= static_cast<std::uint64_t>(BootImage::RamBase) + BootImage::RamSize;
+    const bool destination_in_flash = destination >= BootImage::FlashBase &&
+        destination_end <= flash_end;
+    const bool destination_in_ram = destination >= BootImage::RamBase &&
+        destination_end <= static_cast<std::uint64_t>(BootImage::RamBase) + BootImage::RamSize;
+
+    // This is the byte-wide memory-to-memory setup found in the external ROM
+    // helper at 0x1000a92c. Other channel-0 modes still need their device model.
+    if ((control & ~1u) != 0 || count > 0x7ff ||
+        control_registers_[DmaChannel0Config] != 0 ||
+        control_registers_[DmaChannel0ConfigHigh] != 4 ||
+        (!source_in_flash && !source_in_ram) ||
+        (!destination_in_flash && !destination_in_ram)) {
+        unsupported_register(DmaChannel0Control, "unsupported DMA channel 0 transfer",
+                             control, 4);
+        return;
+    }
+
+    std::vector<std::uint8_t> buffer(count);
+    if (count != 0 && !core_.read_memory(source, buffer.data(), buffer.size())) {
+        unsupported_register(DmaBase, "DMA channel 0 source outside mapped memory");
+        return;
+    }
+
+    if (destination_in_flash) {
+        if (control_registers_[SpifWriteProtection] == 0) {
+            const std::size_t offset = destination - BootImage::FlashBase;
+            bool changed = false;
+            for (std::size_t i = 0; i < buffer.size(); ++i) {
+                const std::uint8_t programmed = flash_[offset + i] & buffer[i];
+                changed |= programmed != flash_[offset + i];
+                flash_[offset + i] = programmed;
+            }
+            if (changed)
+                core_.request_code_invalidation();
+        }
+    } else if (count != 0 && !core_.write_memory(destination, buffer.data(), buffer.size())) {
+        unsupported_register(DmaBase + 0x08, "DMA channel 0 destination outside mapped memory");
+        return;
+    }
+    dma_raw_transfer_status_ |= DmaChannel0Mask;
+}
+
 std::uint32_t Phy6252::read(std::uint32_t address, unsigned size) {
     if (address >= FlashReadAliasBase &&
         static_cast<std::uint64_t>(address) + size <=
@@ -1899,7 +1963,8 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
             value = dma_channel_enable_;
         else if (aligned == DmaClearTransfer)
             value = 0;
-        else if (aligned >= DmaChannel3Sar && aligned <= DmaChannel3Config + 4)
+        else if ((aligned >= DmaBase && aligned <= DmaChannel0ConfigHigh) ||
+                 (aligned >= DmaChannel3Sar && aligned <= DmaChannel3Config + 4))
             value = control_registers_[aligned];
         else if (aligned == DmaConfig)
             value = control_registers_[aligned];
@@ -2281,14 +2346,33 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
         } else if (aligned == DmaClearTransfer) {
             dma_raw_transfer_status_ &= ~written;
         } else if (aligned == DmaChannelEnable) {
-            dma_channel_enable_ = written;
-            control_registers_[aligned] = written;
-            if (written & DmaChannel3Mask) {
-                dma_copy_channel3();
-                dma_channel_enable_ &= ~DmaChannel3Mask;
-                control_registers_[aligned] = dma_channel_enable_;
+            const std::uint32_t write_enable = (written >> 8) & 0xffu;
+            constexpr std::uint32_t SupportedChannels = DmaChannel0Mask | DmaChannel3Mask;
+            if ((write_enable & ~SupportedChannels) != 0) {
+                unsupported_register(address, "DMA enable for unmodeled channel", written, size);
+                return;
             }
+            for (const std::uint32_t channel : {DmaChannel0Mask, DmaChannel3Mask}) {
+                if ((write_enable & channel) == 0)
+                    continue;
+                if ((written & channel) == 0) {
+                    dma_channel_enable_ &= ~channel;
+                    continue;
+                }
+                dma_channel_enable_ |= channel;
+                if ((control_registers_[DmaConfig] & 1u) == 0) {
+                    unsupported_register(address, "DMA channel start while controller is disabled",
+                                         written, size);
+                } else if (channel == DmaChannel0Mask) {
+                    dma_copy_channel0();
+                } else {
+                    dma_copy_channel3();
+                }
+                dma_channel_enable_ &= ~channel;
+            }
+            control_registers_[aligned] = dma_channel_enable_;
         } else if (aligned == DmaConfig ||
+                   (aligned >= DmaBase && aligned <= DmaChannel0ConfigHigh) ||
                    (aligned >= DmaChannel3Sar && aligned <= DmaChannel3Config + 4)) {
             control_registers_[aligned] = written;
         } else {
@@ -2445,6 +2529,13 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
                     core_.request_service(core_.cycles() + 1);
             }
             break;
+        case 0x28:
+            // The external PHY6222 ROM's ll_hw_set_rx_timeout stores a
+            // microsecond count here.
+            ll_registers_[aligned] = written & 0xffffu;
+            if (radio_rx_active_)
+                schedule_radio_rx_timeout();
+            break;
         case 0x10:
             // Interrupt status is hardware-owned and write-one-to-clear at +0x14.
             break;
@@ -2588,14 +2679,48 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
         break;
     case SpifCommand: {
         const std::uint32_t command = lane_write(spif_command_, value, address, size);
-        if (command != SpifReadStatus && command != SpifReadId) {
+        if (command == SpifWriteEnable) {
+            spif_write_enabled_ = true;
+            spif_read_data_ = 0;
+        } else if (command == SpifWriteDisable) {
+            spif_write_enabled_ = false;
+            spif_read_data_ = 0;
+        } else if (command == SpifReadStatus) {
+            spif_read_data_ = spif_write_enabled_ ? 2u : 0u;
+        } else if (command == SpifReadId) {
+            spif_read_data_ = CapturedFlashJedecId;
+        } else if (command == SpifSectorErase || command == SpifBlockErase64) {
+            if (!spif_write_enabled_) {
+                unsupported_register(address, "SPIF erase without write-enable", command, size);
+                return;
+            }
+            const std::uint32_t command_address = control_registers_[SpifCommandAddress];
+            const std::uint64_t flash_end =
+                static_cast<std::uint64_t>(BootImage::FlashBase) + BootImage::FlashSize;
+            const std::uint32_t offset = command_address >= BootImage::FlashBase &&
+                command_address < flash_end ? command_address - BootImage::FlashBase : command_address;
+            const std::uint32_t erase_size = command == SpifSectorErase ?
+                FlashSectorSize : FlashBlock64Size;
+            if (static_cast<std::uint64_t>(offset) + erase_size > BootImage::FlashSize ||
+                (offset % erase_size) != 0) {
+                unsupported_register(SpifCommandAddress, "invalid SPIF erase address",
+                                     command_address, 4);
+                return;
+            }
+            const bool changed = std::any_of(flash_ + offset, flash_ + offset + erase_size,
+                                             [](std::uint8_t byte) { return byte != 0xff; });
+            std::fill_n(flash_ + offset, erase_size, 0xff);
+            spif_write_enabled_ = false;
+            spif_read_data_ = 0;
+            if (changed)
+                core_.request_code_invalidation();
+        } else {
             unsupported_register(address, "unsupported SPIF command write", command, size);
             return;
         }
         spif_command_ = command;
-        // Status reports WIP clear; RDID returns the captured module ID in
-        // JEDEC wire order (least-significant byte first in the data register).
-        spif_read_data_ = command == SpifReadId ? CapturedFlashJedecId : 0;
+        // Commands complete synchronously. RDID is in JEDEC wire order in the
+        // data register; status exposes WEL while the write-enable latch is set.
         break;
     }
     case SpifReadData:
@@ -2756,10 +2881,11 @@ void Phy6252::receive_radio_frame(const mcuemu::RadioFrame &frame) {
 
 void Phy6252::schedule_radio_rx_timeout() {
     radio_rx_deadline_cycle_ = 0;
-    if (radio_rx_timeout_us_ == 0)
+    const std::uint32_t timeout_us = ll_registers_[RadioRxTimeout] & 0xffffu;
+    if (timeout_us == 0)
         return;
     const std::uint64_t duration_cycles = std::max<std::uint64_t>(1,
-        static_cast<std::uint64_t>(radio_rx_timeout_us_) * core_.clock_hz() / 1'000'000);
+        static_cast<std::uint64_t>(timeout_us) * core_.clock_hz() / 1'000'000);
     radio_rx_deadline_cycle_ = core_.cycles() + duration_cycles;
     core_.request_service(radio_rx_deadline_cycle_);
 }

@@ -57,7 +57,7 @@ struct Core::Region {
     std::vector<std::uint8_t> storage;
 };
 
-enum class Cause { None, Deadline, StepLimit, Hint, Halted, Reset };
+enum class Cause { None, Deadline, StepLimit, Hint, Halted, Reset, CodeInvalidation };
 
 struct Core::Impl final : Bus {
     Core &core;
@@ -79,6 +79,8 @@ struct Core::Impl final : Bus {
     bool event{false};
     bool sleep_wfe{false};
     bool reset_pending{false};
+    bool running{false};
+    bool code_invalidation_pending{false};
 
     // SysTick.
     std::uint32_t st_ctrl{0}, st_reload{0}, st_value{0};
@@ -205,6 +207,12 @@ struct Core::Impl final : Bus {
 
     // ---- per-instruction hook ------------------------------------------
     void on_instruction(std::uint32_t address, unsigned size) {
+        if (code_invalidation_pending) {
+            code_invalidation_pending = false;
+            cause = Cause::CodeInvalidation;
+            uc_emu_stop(core.uc_);
+            return;
+        }
         if (!deferred.empty()) {
             auto actions = std::move(deferred);
             deferred.clear();
@@ -526,6 +534,16 @@ void Core::invalidate_code() {
         uc_ctl_flush_tb(uc_);
 }
 
+void Core::request_code_invalidation() {
+    if (!uc_)
+        return;
+    if (!impl_->running) {
+        uc_ctl_flush_tb(uc_);
+        return;
+    }
+    impl_->code_invalidation_pending = true;
+}
+
 void Core::set_service_handler(ServiceHandler handler) { impl_->service = std::move(handler); }
 
 void Core::request_service(std::uint64_t at_cycle) noexcept {
@@ -670,7 +688,9 @@ RunResult Core::run(std::uint64_t until_cycle) {
         impl.invalid_write = false;
 
         std::uint32_t pc_value = pc() | 1u;
+        impl.running = true;
         const uc_err error = uc_emu_start(uc_, pc_value, 0x100000000ull, 0, 0);
+        impl.running = false;
 
         switch (impl.cause) {
         case Cause::Deadline:
@@ -718,6 +738,9 @@ RunResult Core::run(std::uint64_t until_cycle) {
             result.reason = StopReason::Reset;
             result.message = "system reset requested";
             return result;
+        case Cause::CodeInvalidation:
+            uc_ctl_flush_tb(uc_);
+            break;
         case Cause::None:
             if (error != UC_ERR_OK) {
                 result.reason = StopReason::Fault;

@@ -139,6 +139,9 @@ public:
     void request_reset();
     // Drops translated code after the host rewrites executable memory.
     void invalidate_code();
+    // Requests a flush after the active translated block returns. Safe for
+    // peripheral callbacks that change executable memory during an MMIO write.
+    void request_code_invalidation();
 
     // External interrupt line `irq` (0-based; exception number is 16 + irq).
     void set_irq_line(unsigned irq, bool level);

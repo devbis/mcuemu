@@ -79,13 +79,13 @@ private:
     std::uint64_t radio_tx_end_cycle_{0};
     std::uint64_t radio_rx_after_ns_{0};
     std::uint64_t radio_rx_deadline_cycle_{0};
-    std::uint32_t radio_rx_timeout_us_{0};
     bool radio_tx_active_{false};
     bool radio_rx_active_{false};
     std::int8_t radio_rx_rssi_{-100};
     std::uint32_t spif_config_{0x80000000u};
     std::uint32_t spif_command_{0};
     std::uint32_t spif_read_data_{0};
+    bool spif_write_enabled_{false};
     std::uint32_t dma_raw_transfer_status_{0}, dma_channel_enable_{0};
     std::uint64_t watchdog_deadline_ns_{0};
     bool watchdog_interrupt_pending_{false};
@@ -153,6 +153,7 @@ private:
     void rom_log_printf();
     std::uint32_t heap_allocate(std::uint32_t size);
     void heap_release(std::uint32_t address);
+    void dma_copy_channel0();
     void dma_copy_channel3();
     void watchdog_restart();
     std::uint32_t rtc_count(std::uint64_t at_ns) const noexcept;

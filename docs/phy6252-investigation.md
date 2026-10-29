@@ -116,6 +116,14 @@ this setting but still exposes its fixed 2 KiB TX / 2 KiB RX buffers. Zigbee
 frames fit that modeled capacity, while the selected hardware partition and
 its address boundaries remain unmodeled.
 
+Ghidra decompiles the external ROM helper at `0xa92c` as a DMA channel 0
+memory copy: it programs SAR, DAR, `CTL=1`, a byte count in CTL_H, `CFG=0`,
+`CFG_H=4`, enables the controller, starts channel 0, polls transfer status,
+then clears status and disables the channel. The model supports this observed
+byte-wide transfer between mapped SRAM and XIP flash. Flash destinations obey
+the modeled SPIF write-protection bit and NOR 1-to-0 programming; other DMA
+modes and peripheral endpoints remain unimplemented.
+
 ## ROM calls and known gaps
 
 Implemented ROM entries include clock setup/query, IRQ critical-section
@@ -202,6 +210,19 @@ runtime behavior, PHY6252 can optionally execute the supplied dump as external
 ROM code using its vector table; the default remains the explicit host-trap
 ROM. This is an experiment path and does not itself establish ROM revision
 compatibility or Zigbee stack support.
+
+For a hybrid TS0001 run, a scratch copy of the ROM was patched at offset
+`0xa2e0` to BKPT so this explicit return-only shim could be exercised while the
+other dumped ROM routines ran. The relay image reached application code and
+logged `Restored nwk success on reboot` and `network state=12`, but a 30-second
+simulator capture contained no successful association and no TS0001 radio
+frames. Erasing the image's `0x6000`-byte NVM range at `0x11079000` let the
+fresh-start path continue after adding SPIF Write Enable and sector erase.
+That run logged Zigbee stack initialization and `network state=0`, but the
+30-second capture still contained only coordinator traffic. The TS0001 starts
+one SRX operation; its modeled 20 ms timeout completes, but the firmware emits
+no later radio trigger or TX frame in the capture. Neither run establishes
+Zigbee relay support.
 
 The SDK declares `phy_sec_encrypt` and `phy_sec_decrypt` at ROM entries
 `0x15338` and `0x1531c`. It also contains a disabled (`#if 0`) implementation
@@ -356,9 +377,13 @@ layout (`MD` bit 0, `RTO` bit 2, `COK` bit 10) and the PB-03F Zephyr driver's co
 (`COK` bit 1, `RTO` bit 3) for the same completion; clearing either alias
 clears the shared event. This reconciles the two checked firmware contracts,
 whose observed bit definitions differ. Fine time uses the 16 MHz core cycle
-count with the SDK's `BASE_TIME_UNITS` wrap. The PHY+ example names the ROM
-timeout parameter `rxTimeOutUs`, so the model treats it as microseconds and completes
-an empty receive with both `MD` (operation complete) and `RTO` (timeout cause)
+count with the SDK's `BASE_TIME_UNITS` wrap. In the supplied ROM,
+`ll_hw_set_rx_timeout()` at `0x11278` writes its microsecond argument to
+LL+`0x28`; the related first-timeout helper at `0x11284` writes LL+`0x24`.
+The model uses LL+`0x28` to schedule RX completion; LL+`0x24` is retained but
+its first-timeout behavior is not modeled. In the 30-second fresh-NVM TS0001
+run, the ROM writes `20000` us before its first SRX trigger. The empty receive
+then completes with both `MD` (operation complete) and `RTO` (timeout cause)
 when no frame arrives. This pairing is inferred from the PHY62xx SDK link-layer
 driver: its IRQ handler only processes `MD`, while its receive-timeout path checks
 `RTO`. The TS0001 image also enables only `MD` before its first receive. The ROM
