@@ -562,6 +562,15 @@ CPU fault but produced no UART0 output for this TS0001 image; the startup result
 above uses the default host ROM traps. The cause of this ROM/application
 difference is not isolated.
 
+A standalone 35 s direct-image run with that ROM, the module eFuse dump and RF
+calibration dump confirms this is not a missing UART sink: it emits no UART
+bytes and ends at ROM PC `0x0000afc6` after 17,083,061 instructions and 560
+million cycles. This is distinct from `boot_from_rom`, which starts at the ROM
+reset vector and remains in its monitor path. The PHY6222 ROM is validated with
+the PB-03F Zephyr image, but this run does not establish compatibility with the
+TS0001 ROM calls, and its lack of traffic cannot be used to judge the relay's
+Zigbee behavior.
+
 A second 65 s run used the module's 512 KiB full-flash dump
 `flash_11000000_80000.bin` (SHA-256
 `def028f783aac9d3d648b32d7e7b250180e3aa8c7c04bd506858ce0109b5770a`), its
