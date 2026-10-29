@@ -878,11 +878,18 @@ cluster `0x0006`. Its lookup in `0x1102e1f4` finds the endpoint-1/cluster-6
 entry in the table at `0x1fffc0f8` and selects descriptor `0x1fffc178` with
 index 0 and marker 3. The special branch through `0x1102cb98` reads bytes
 `+6..+7` from entry 0 of the per-index table at `0x1fffb408`; both are zero.
-The caller consequently skips `0x11043bf0`, the send path. This explains why
-that command path produces no TS0001 transmission, but it does not by itself
-explain the absent local `On`/`Off` callback. The callback remains uncalled and
-the pcap has no TS0001 transmission. Do not force relay state or callback
-execution from GPIO input alone.
+That `0x11021f34` route consequently skips `0x11043bf0`.
+
+A separate PC trace of the physical-button route corrects the earlier broader
+observation: `0x1102de60` does call `0x11043bf0`. It builds a local cluster-6
+record, sets byte `+0x0b` to `1`, then passes that record to the common send
+function. The function submits through `0x11040cb8` only when the high nibble
+of byte `+0x0b` is nonzero; with the button's value `1`, it returns before that
+submission. The related SDK does not document this private record flag, so the
+trace explains where this firmware path stops but does not establish a missing
+SoC or ROM contract. The registered `0x1102ddd8` diagnostic callback remains
+unreached, and the pcap still contains no TS0001 transmission. Do not force
+relay state or callback execution from GPIO input alone.
 
 For a separate first-boot probe, a temporary copy of the TS0001 dump had its
 `0x6000`-byte NVM range at `0x11079000` erased. The image reported
