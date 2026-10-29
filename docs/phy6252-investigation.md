@@ -705,6 +705,14 @@ payload beginning `01 00 00 00`. The payload matches the changed relay-state
 byte. This confirms the local button event is copied into the image's
 flash-backed queue.
 
+A PC trace through the enqueue helper `0x11038700` narrows the missing dispatch
+step. `FUN_00020054` returns task-slot index 1; the helper then reads the state
+byte at `0x1fff8f4c + 4 + 0x388a` (`0x1fffc7da`) as 1. The branch at
+`0x11038762` skips the call to `0x1103d734`, which the disassembly suggests is
+the queue-worker notification path. The queue write succeeds, but this enqueue
+does not issue that notification for slot 1. The trace does not establish why
+the slot is already marked or whether this is the only route to the callback.
+
 A 15-second run traces the receive wrapper at `0x1103d1f0`. The startup routine
 `0x11020890` polls event IDs `0x7001`, `0x7002`, and `0x7003` successfully, then
 finds `0x7005` empty. Those four reads all happen around cycle 14.46 million,
