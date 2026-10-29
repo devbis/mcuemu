@@ -653,6 +653,17 @@ counters remain absent. The event-queue path from this posted state change to
 the registered callback is unresolved; the saved hardware RAM dump does not
 provide a reliable comparison for these runtime tables.
 
+Ghidra analysis of the supplied flash shows `app_device_SW_state_set` passes
+`(0x7001, 0, 8, 0x1fff7f2c)` to the image wrapper at `0x1103d248`. In the
+button trace that wrapper calls `0x1103d1ac`, which returns task id `0x20`,
+then enters `0x11038668`. That routine prepares a 0x14-byte queue record using
+the descriptor at `0x1fffc7cc`; its static path reaches the queue insertion
+helper at `0x11038700` when allocation and copy succeed. The current runtime
+trace confirms entry to the wrapper with the expected event and state pointer,
+but does not prove that insertion succeeds or identify the task that consumes
+the record. It still shows no call to `0x1102ddd8`, so the local button's
+hardware `On`/`Off` reports are not yet reproduced.
+
 Separately, `0x110219b4` reaches `0x11021f34`, which builds a command for
 cluster `0x0006`. Its lookup in `0x1102e1f4` finds the endpoint-1/cluster-6
 entry in the table at `0x1fffc0f8` and selects descriptor `0x1fffc178` with
