@@ -401,6 +401,12 @@ frames. The pcap has 76 frames. A simultaneous `air0=file:` trace attributes
 every frame to either `coordinator.mcu` or `sampleLight.mcu`; TS0001 transmitted
 none. A joinable, active network was therefore present, but the transition from
 the TS0001 steering callback to its first outbound frame remains unknown.
+Replacing `samplegw_tb03f.bin` with the alternate `telink-gw.bin` produced the
+same channel result: that gateway formed a network on channel 15 (PAN `0xA134`),
+and sampleLight associated at 9.045 s with short address `0x4c74` and exchanged
+NWK data. The radio-source trace again contains no TS0001 transmission after its
+channel-11 steering path. This second gateway image changes the PAN but does not
+provide a channel-11 network for the observed first-boot path.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
