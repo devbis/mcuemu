@@ -18,6 +18,7 @@ devices:
       - { id: relay_line, pins: [mcu.GPIO2] }
     parts:
       - { id: key1, type: button, pins: { out: key1_line } }
+      - { id: key2, type: button, pins: { out: key2_line } }
 
 attach:
   - { endpoint: ts0001.relay_line, sink: "vcd:relay.vcd" }

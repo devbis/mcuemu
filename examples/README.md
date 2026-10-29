@@ -17,7 +17,7 @@
 | `phy6252-zephyr.yaml` | PB-03F Zephyr Zigbee end device with the TLSR8258 sample gateway; joins and exchanges NWK data in the current emulator. |
 | `phy6252-zephyr-external-rom.yaml` | The same PB-03F image with the external PHY6222 ROM, eFuse and RF calibration inputs. This pairing joins and exchanges NWK data; the binary inputs stay local. |
 | `phy6252-ts0001.yaml` | TS0001 relay investigation; presses GPIO8 after the Tuya startup reports and records the GPIO2 relay output to VCD. The image reaches Zigbee task startup but has not joined or transmitted frames. |
-| `phy6252-ts0001-offline.yaml` | TS0001 local-button replay without a coordinator. It biases the second key input GPIO3 high, presses GPIO8 twice and records GPIO2 to VCD; the firmware's `On/Off` diagnostic callback is still missing in the emulator. |
+| `phy6252-ts0001-offline.yaml` | TS0001 local-button replay without a coordinator. Both physical key inputs are available (GPIO8 and GPIO3); the scenario biases GPIO3 high, presses GPIO8 twice and records GPIO2 to VCD. The firmware's `On/Off` diagnostic callback is still missing in the emulator. |
 | `parts/shtc3.lua`, `parts/sht4x.lua`, `parts/lcd_lywsd03mmc.lua` | The two sensors and the I2C segment display of the LYWSD03MMC. |
 | `parts/bl0937.lua` | The BL0937 as a scripted part (CF / CF1 pulse outputs, SEL input). |
 | `parts/ds18b20.lua`, `parts/sht3x.lua` | Reference sensor scripts (see `docs/scripting.md`). |
