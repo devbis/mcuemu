@@ -16,7 +16,9 @@ segment bounds, XIP destinations and run descriptor; pass `--full-flash` to
 inspect a full dump.
 
 The PHY6252 model has 512 KiB of XIP flash at `0x11000000` and 64 KiB of SRAM
-at `0x1fff0000`. The Zephyr board reserves the region below `0x1fff1840` and
+at `0x1fff0000`. ROM loader reads through the uncached `0x22000000` alias;
+the model maps that window onto the same 512 KiB flash contents. The Zephyr
+board reserves the region below `0x1fff1840` and
 the final 4 KiB; its usable SRAM is `0x1fff1840` for `0xe7c0` bytes. The model
 starts at the package's RAM run descriptor. The Zephyr port relocates its
 vector table to address zero; the model maps a 96 KiB ROM window at zero and
@@ -269,16 +271,25 @@ ID. It also passes the later ROM initialization and reaches `PWRSLP` at
 454.7235 ms. On RTC compare wake, the captured ROM enters its image-copy path
 and faults at `PC=0x00000e8a` reading `0x22010000`.
 
-This address follows from the supplied image table and the ROM disassembly.
-The first XIP record has source and destination `0x11010000`, size `0xcd8`;
-another has source and destination `0x1100a000`, size `0x6000`. ROM function
-`0x0000a3c1` adds `0x11000000` to each record's source before calling its
-`memcpy`, producing the invalid `0x22010000` source. `SoC_info.txt` identifies
-the ROM as PHY6222M005, while the firmware is the TS0001 PHY6252 image. The
-evidence points to an image/ROM loader-format or revision mismatch; the model
-does not map the invalid address or patch the firmware table. A 2-second
-repeat still faults at 1.463 s on wake with no successful association response,
-so relay network support remains unverified.
+The image table stores XIP source addresses such as `0x11010000` and
+`0x1100a000`. ROM loader code adds `0x11000000` before reading them, so the
+first post-wake read is at `0x22010000`. This is the uncached XIP alias, not an
+invalid source or evidence of a ROM/image format mismatch. Mapping that alias
+to the same flash lets the captured ROM continue through the copy path. With
+the matching full-flash dump, execution proceeds without a CPU fault; the
+TS0001 image still does not transmit in the tested network scenarios, so relay
+network support remains unverified. A 20-second same-channel first-boot run
+with this external ROM produced 76 captured frames from the coordinator and
+sample light, but no successful association response for TS0001 and no TS0001
+transmission. Its MCU remained running throughout.
+
+The supplied ROM is usable as executable PHY62xx ROM for direct-image runs:
+its bytes are mapped at zero and `0x10000000`, and the Zephyr driver exercises
+its flash and wake paths. A separate experiment started the CPU at the ROM's
+reset vector for cold boot. That run remained alive for 10 seconds but produced
+only 596 bytes of coordinator-side pcap traffic and did not associate. The
+model therefore keeps direct image entry as the default; ROM reset startup
+still needs its missing board and retained-state initialization modeled.
 
 Using the same external ROM with the PB-03F Zephyr image reaches the Zephyr
 boot banner and Zigbee thread. Its first flash update exposed a CPU store at
@@ -414,8 +425,10 @@ local input under `firmware/`.
 The same 10-second air-check passes when `rom:` selects the supplied PHY6222
 dump, with external eFuse and RF-calibration inputs reconstructed from its
 module snapshot. It joins at 7.80 s and exchanges the same 15 uplink (11
-unicast) and 8 downlink NWK frames. This is the strongest evidence so far that
-the two parts share the low-level ROM contracts used by this Zephyr build.
+unicast) and 8 downlink NWK frames. This demonstrates compatibility for the
+ROM code and register contracts exercised by this PHY6252 Zephyr image. It does
+not establish that every PHY6222 and PHY6252 ROM revision or cold-boot path is
+identical.
 
 The TS0001 dump contains Zigbee and FreeRTOS code, including retained source
 path strings for the Zigbee LMAC, PHY62 radio driver and OS task sources. The
@@ -595,9 +608,11 @@ with the preceding instruction address. `--dump-memory ADDRESS:COUNT` prints
 bytes from the requested range after the run. UART0 is exposed as `mcu.uart0`.
 If a device eFuse dump is available, pass it with `--efuse DUMP` or the YAML
 `efuse:` option; it must contain exactly four consecutive 8-byte blocks.
-For ROM disassembly comparison, pass the external image with `--rom DUMP` or
-the YAML `rom:` option. It must be 96 KiB or a 128 KiB dump with an erased
-32 KiB tail; the ROM vector table then comes from that file.
+To execute or compare an external ROM, pass it with `--rom DUMP` or the YAML
+`rom:` option. It must be 96 KiB or a 128 KiB dump with an erased 32 KiB tail;
+the ROM bytes and vector table are mapped from that file. Firmware still starts
+at its parsed application entry, because a complete cold boot from the ROM
+reset vector is not yet supported.
 Firmware inputs can be the package beginning at physical flash offset `0x2000`
 or a 512 KiB full flash dump; keep local images outside the repository.
 For the TS0001 capture setup, place the full dump at

@@ -68,6 +68,10 @@ int main() {
     CHECK((rom_code == std::array<std::uint8_t, 2>{0x34, 0x12}));
     CHECK(dump_rom_chip.core().read_memory(0x10000200, rom_code.data(), rom_code.size()));
     CHECK((rom_code == std::array<std::uint8_t, 2>{0x34, 0x12}));
+    std::array<std::uint8_t, 2> aliased_flash_code{};
+    CHECK(dump_rom_chip.core().read_memory(0x22010108, aliased_flash_code.data(),
+                                           aliased_flash_code.size()));
+    CHECK((aliased_flash_code == std::array<std::uint8_t, 2>{0xfe, 0xe7}));
 
     std::vector<std::uint8_t> padded_rom(0x20000, 0xff);
     std::copy(rom_image.begin(), rom_image.end(), padded_rom.begin());
@@ -145,6 +149,10 @@ int main() {
     CHECK(chip.run(chip.core().cycles() + 8).reason == cortexm::StopReason::Deadline);
     CHECK(*flash_store_byte == 0x05); // a second program can only clear more bits
     chip.write(0x4000c858, 2, 4);
+    chip.core().set_reg(0, 0x00);
+    chip.core().set_reg(15, flash_store_code);
+    CHECK(chip.run(chip.core().cycles() + 8).reason == cortexm::StopReason::Deadline);
+    CHECK(*flash_store_byte == 0x05); // a locked AHB store is acknowledged but ignored
     chip.reset(); // restore the timer epoch after exercising the flash programming loop
     CHECK(chip.read(0x4000102c, 4) == 0xffffffffu); // AP_TIM3 free-running CurrentCount
     const std::uint64_t wait_timer_start = chip.core().cycles();

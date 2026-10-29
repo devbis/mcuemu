@@ -26,6 +26,7 @@ cortexm::Core::Config config() {
     return c;
 }
 constexpr std::uint32_t RomSize = 0x18000, UartBase = 0x40004000;
+constexpr std::uint32_t FlashReadAliasBase = 0x22000000;
 constexpr std::uint32_t RomNmiHandler = 0x8481;
 constexpr std::uint32_t RomHardFaultHandler = 0x28f1;
 constexpr std::uint32_t RomPendSvHandler = 0x84cd;
@@ -334,6 +335,8 @@ Phy6252::Phy6252() : core_(config()) {
     }
     flash_ = core_.map_memory(BootImage::FlashBase, BootImage::FlashSize, false);
     ram_ = core_.map_memory(BootImage::RamBase, BootImage::RamSize, true);
+    // ROM loader code reads XIP source bytes through this uncached alias.
+    core_.map_mmio(FlashReadAliasBase, BootImage::FlashSize, *this);
     core_.set_write_protect_handler([this](std::uint32_t address, unsigned size, std::uint32_t) {
         if (address < 0x100 && static_cast<std::uint64_t>(address) + size <= 0x100)
             return true;
@@ -342,18 +345,20 @@ Phy6252::Phy6252() : core_(config()) {
                                         BootImage::FlashSize;
         if (address < BootImage::FlashBase ||
             static_cast<std::uint64_t>(address) + size > flash_end ||
-            size == 0 || size > sizeof(std::uint32_t) ||
-            control_registers_[SpifWriteProtection] != 0)
+            size == 0 || size > sizeof(std::uint32_t))
             return false;
 
         const std::size_t offset = address - BootImage::FlashBase;
+        const bool write_enabled = control_registers_[SpifWriteProtection] == 0;
         std::array<std::uint8_t, sizeof(std::uint32_t)> previous{};
         std::copy_n(flash_ + offset, size, previous.begin());
-        core_.defer([this, offset, size, previous] {
+        core_.defer([this, offset, size, previous, write_enabled] {
             // The controller's AHB programming window can clear flash bits,
-            // but programming cannot change a zero bit back to one.
+            // but programming cannot change a zero bit back to one. While
+            // locked, the AHB store completes without changing the XIP byte.
             for (unsigned i = 0; i < size; ++i)
-                flash_[offset + i] &= previous[i];
+                flash_[offset + i] = write_enabled ?
+                    static_cast<std::uint8_t>(flash_[offset + i] & previous[i]) : previous[i];
         });
         return true;
     });
@@ -519,6 +524,8 @@ void Phy6252::reset() {
     heap_allocations_.clear();
     pending_fault_.clear();
     core_.set_clock_hz(16000000);
+    // Direct image boot supplies board-init state that is not initialized by
+    // running the captured ROM reset path in this model.
     core_.reset(run_address_);
     core_.set_vtor(0);
     rtc_epoch_ns_ = core_.cycles_to_ns(core_.cycles());
@@ -1624,6 +1631,19 @@ void Phy6252::dma_copy_channel3() {
 }
 
 std::uint32_t Phy6252::read(std::uint32_t address, unsigned size) {
+    if (address >= FlashReadAliasBase &&
+        static_cast<std::uint64_t>(address) + size <=
+            static_cast<std::uint64_t>(FlashReadAliasBase) + BootImage::FlashSize) {
+        if (size != 1 && size != 2 && size != 4) {
+            unsupported_register(address, "read from XIP alias", 0, size);
+            return 0;
+        }
+        const std::size_t offset = address - FlashReadAliasBase;
+        std::uint32_t value = 0;
+        for (unsigned i = 0; i < size; ++i)
+            value |= static_cast<std::uint32_t>(flash_[offset + i]) << (8 * i);
+        return value;
+    }
     if (address >= UartBase && address < UartBase + 0x1000) {
         const auto reg = (address - UartBase) / 4;
         switch (reg) {
