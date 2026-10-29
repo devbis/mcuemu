@@ -343,6 +343,18 @@ void Phy6252::load_firmware(const std::vector<std::uint8_t> &image) {
     run_address_ = boot.run_address;
 }
 
+void Phy6252::load_efuse_dump(const std::vector<std::uint8_t> &dump) {
+    constexpr std::size_t BlockSize = 8;
+    constexpr std::size_t BlockCount = 4;
+    if (dump.size() != BlockSize * BlockCount)
+        throw std::invalid_argument("PHY6252 eFuse dump must be exactly 32 bytes");
+    for (std::size_t block = 0; block < BlockCount; ++block) {
+        std::copy_n(dump.begin() + block * BlockSize, BlockSize,
+                    efuse_blocks_[block].begin());
+        efuse_block_present_[block] = true;
+    }
+}
+
 void Phy6252::reset() {
     if (!run_address_)
         throw std::runtime_error("PHY6252 firmware has not been loaded");
@@ -649,16 +661,31 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             // are the only exposed 16 MHz clock in this model.
             core_.set_reg(0, static_cast<std::uint32_t>(core_.cycles()) & 0x3fffffu);
         } else if (address == 0xace0) {
-            // The SDK names this entry but omits its prototype. The simple
-            // output layout and the separate eFuse contents are unavailable.
             const std::uint32_t block = core_.reg(0);
             const std::uint32_t destination = core_.reg(1);
-            std::fprintf(stderr,
-                         "PHY6252: unverified efuse_read call (block=%u r1=0x%08x r2=0x%08x r3=0x%08x lr=0x%08x); leaving memory unchanged\n",
-                         block, destination, core_.reg(2), core_.reg(3), core_.reg(14));
-            // Keep the existing success result for block 1 so the image can
-            // continue, while making the absent data visible above.
-            core_.set_reg(0, block == 1 ? 0 : static_cast<std::uint32_t>(-22));
+            // The PHY6222 SDK declares this same PHY62xx API as
+            // efuse_read(block, uint32_t *buf): two words per block. Its error
+            // enum defines INVALID_PARAM=6 and UNINITIALIZED=24. The PHY6252
+            // SDK exports the ROM symbol but omits its declaration.
+            if (block >= efuse_blocks_.size()) {
+                core_.set_reg(0, 6); // PPlus_ERR_INVALID_PARAM
+            } else if (!efuse_block_present_[block]) {
+                if (!efuse_missing_warning_logged_[block]) {
+                    std::fprintf(stderr,
+                                 "PHY6252: efuse_read block %u has no supplied device data; returning PPlus_ERR_UNINITIALIZED (24)\n",
+                                 block);
+                    efuse_missing_warning_logged_[block] = true;
+                }
+                core_.set_reg(0, 24); // PPlus_ERR_UNINITIALIZED
+            } else if (destination < BootImage::RamBase ||
+                       static_cast<std::uint64_t>(destination) + efuse_blocks_[block].size() >
+                           static_cast<std::uint64_t>(BootImage::RamBase) + BootImage::RamSize ||
+                       !core_.write_memory(destination, efuse_blocks_[block].data(),
+                                           efuse_blocks_[block].size())) {
+                core_.set_reg(0, 6); // PPlus_ERR_INVALID_PARAM
+            } else {
+                core_.set_reg(0, 0); // PPlus_SUCCESS
+            }
         } else if (address == 0x3fdc) {
             // SDK ROM symbol LL_ENC_AES128_Encrypt0(input, key, output).
             crypto::Block input{}, key{};

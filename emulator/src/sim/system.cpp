@@ -11,7 +11,9 @@
 #include <tuple>
 #include <algorithm>
 #include <deque>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <set>
 #include <sstream>
 
@@ -121,7 +123,16 @@ const McuRegistry &McuRegistry::builtin() {
         r.add("phy6252", [](const McuConfig &config, const std::string &name) {
             if (config.variant || config.clock_hz || config.supply_mv || config.flash_timing)
                 throw std::invalid_argument("phy6252 does not accept variant, clock_hz, supply_mv or flash_timing");
-            return std::make_unique<Phy6252Mcu>(name);
+            auto mcu = std::make_unique<Phy6252Mcu>(name);
+            if (config.efuse) {
+                std::ifstream input(*config.efuse, std::ios::binary);
+                if (!input)
+                    throw std::invalid_argument("cannot open eFuse dump: " + *config.efuse);
+                const std::vector<std::uint8_t> dump(
+                    (std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+                mcu->chip().load_efuse_dump(dump);
+            }
+            return mcu;
         });
         return r;
     }();

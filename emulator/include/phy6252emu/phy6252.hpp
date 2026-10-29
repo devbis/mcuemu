@@ -23,6 +23,10 @@ class Phy6252 final : public cortexm::Bus {
 public:
     Phy6252();
     void load_firmware(const std::vector<std::uint8_t> &image);
+    // PHY62xx efuse_read accepts a block number and an eight-byte output buffer.
+    // A supplied 32-byte dump contains four blocks in order; no dump means all
+    // blocks are unprogrammed because their device-specific contents are unknown.
+    void load_efuse_dump(const std::vector<std::uint8_t> &dump);
     void reset();
     cortexm::RunResult run(std::uint64_t until_cycle);
     cortexm::Core &core() noexcept { return core_; }
@@ -44,6 +48,9 @@ private:
     std::uint8_t *flash_, *ram_, *vector_alias_;
     std::uint32_t run_address_{0};
     std::vector<std::uint8_t> boot_ram_;
+    std::array<std::array<std::uint8_t, 8>, 4> efuse_blocks_{};
+    std::array<bool, 4> efuse_block_present_{};
+    std::array<bool, 4> efuse_missing_warning_logged_{};
     std::uint8_t lcr_{0}, ier_{0}, dll_{0}, dlm_{0}, mcr_{0}, scratch_{0};
     std::deque<std::uint8_t> rx_;
     std::vector<std::uint8_t> tx_;

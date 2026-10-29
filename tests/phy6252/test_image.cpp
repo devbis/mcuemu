@@ -614,17 +614,44 @@ int main() {
     const std::uint8_t untouched_efuse_data[] = {1, 2, 3, 4, 5, 6, 7, 8};
     CHECK(chip.core().write_memory(efuse_buffer, untouched_efuse_data,
                                   sizeof untouched_efuse_data));
-    invoke_rom(0xace0, 1, efuse_buffer, 0x60, 540, 0x1fff2b29);
-    CHECK(chip.core().reg(0) == 0);
+    invoke_rom(0xace0, 1, efuse_buffer, 0x60, 539, 0x1fff2b29);
+    CHECK(chip.core().reg(0) == 24); // no device dump: PPlus_ERR_UNINITIALIZED
     std::uint8_t efuse_data[8]{};
     CHECK(chip.core().read_memory(efuse_buffer, efuse_data, sizeof efuse_data));
     CHECK(std::equal(std::begin(untouched_efuse_data), std::end(untouched_efuse_data),
                      std::begin(efuse_data)));
-    invoke_rom(0xace0, 3, efuse_buffer, 0x1fff0100, 545, 0x10);
-    CHECK(chip.core().reg(0) == static_cast<std::uint32_t>(-22));
+    invoke_rom(0xace0, 4, efuse_buffer, 0, 540, 0x1fff2b29);
+    CHECK(chip.core().reg(0) == 6); // PPlus_ERR_INVALID_PARAM
+    std::vector<std::uint8_t> efuse_dump(32);
+    for (std::size_t i = 0; i < efuse_dump.size(); ++i)
+        efuse_dump[i] = static_cast<std::uint8_t>(0xa0 + i);
+    chip.load_efuse_dump(efuse_dump);
+    bool short_efuse_rejected = false;
+    try {
+        chip.load_efuse_dump(std::vector<std::uint8_t>(31));
+    } catch (const std::invalid_argument &) {
+        short_efuse_rejected = true;
+    }
+    CHECK(short_efuse_rejected);
+    invoke_rom(0xace0, 2, efuse_buffer, 0xdeadbeef, 541, 0x1fff2b29);
+    CHECK(chip.core().reg(0) == 0);
     CHECK(chip.core().read_memory(efuse_buffer, efuse_data, sizeof efuse_data));
-    CHECK(std::equal(std::begin(untouched_efuse_data), std::end(untouched_efuse_data),
+    CHECK(std::equal(efuse_dump.begin() + 16, efuse_dump.begin() + 24,
                      std::begin(efuse_data)));
+    invoke_rom(0xace0, 2, 0x100, 0, 542, 0x1fff2b29);
+    CHECK(chip.core().reg(0) == 6); // invalid output pointer
+    invoke_rom(0xace0, 1, efuse_buffer, 0x60, 543, 0x1fff2b29);
+    CHECK(chip.core().reg(0) == 0);
+    CHECK(chip.core().read_memory(efuse_buffer, efuse_data, sizeof efuse_data));
+    CHECK(std::equal(efuse_dump.begin() + 8, efuse_dump.begin() + 16,
+                     std::begin(efuse_data)));
+    invoke_rom(0xace0, 3, efuse_buffer, 0x1fff0100, 544, 0x10);
+    CHECK(chip.core().reg(0) == 0);
+    CHECK(chip.core().read_memory(efuse_buffer, efuse_data, sizeof efuse_data));
+    CHECK(std::equal(efuse_dump.begin() + 24, efuse_dump.begin() + 32,
+                     std::begin(efuse_data)));
+    CHECK(chip.core().write_memory(efuse_buffer, untouched_efuse_data,
+                                  sizeof untouched_efuse_data));
     const crypto::Block aes_key = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
                                    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f};
     const crypto::Block aes_input = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
@@ -646,7 +673,8 @@ int main() {
     invoke_rom(0x14ce8, copy_address, efuse_buffer, sizeof efuse_data, 560);
     std::uint8_t copied_data[8]{};
     CHECK(chip.core().read_memory(copy_address, copied_data, sizeof copied_data));
-    CHECK(std::equal(std::begin(efuse_data), std::end(efuse_data), std::begin(copied_data)));
+    CHECK(std::equal(std::begin(untouched_efuse_data), std::end(untouched_efuse_data),
+                     std::begin(copied_data)));
     copied_data[0] ^= 1;
     CHECK(chip.core().write_memory(copy_address, copied_data, sizeof copied_data));
     invoke_rom(0x14ccc, efuse_buffer, copy_address, sizeof copied_data, 565);

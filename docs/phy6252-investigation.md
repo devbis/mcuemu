@@ -115,14 +115,9 @@ The SDK exports `efuse_read` but has no public prototype, and the 512 KiB flash
 dump does not contain the separate eFuse contents. Captured TS0001 calls pass
 block 1 with `r1` pointing to a stack buffer, `r2=0x60`, and `r3=0x1fff2b29`;
 another block 1 call uses `r2=0x60` and `r3=0x1fff2eb9`. A block 3 call uses
-`r1=0x1fffce38`, `r2=0x1fff0100`, and `r3=0x10`. The purpose of these
-arguments and the output layout are unknown. The model logs each call, leaves
-the destination unchanged, and currently returns zero for block 1 so the image
-can continue; other block IDs return `-EINVAL`. Those return values are
-inferred compatibility behavior, not a verified eFuse contract. It does not
-synthesize eFuse contents. The `tpCap` values are restored separately from the
-observed ROM-owned globals described above; raw eFuse compatibility remains
-unverified.
+`r1=0x1fffce38`, `r2=0x1fff0100`, and `r3=0x10`. These `r2`/`r3` values are
+caller state, not additional arguments: the related PHY6222 SDK declares the
+function as `efuse_read(block, uint32_t *buf)`.
 
 Two calls are deliberately visible limitations. The image reaches unexported
 ROM entry `0xa2e0`, inside the SDK symbol range for `ble_crc24_gen`; its body is
@@ -152,6 +147,27 @@ transform and checks the four-byte MIC. That branch is covered by round-trip
 and tamper-rejection tests, but has not been matched against a provisioned
 device image. The erased-area selector and CRC fallback are image-driven
 inferences, not a general PHY6252 ROM contract.
+
+The PHY6252 SDK exports ROM `efuse_read` at `0xace1` but omits its prototype
+and body. The related PHY6222 SDK declares `efuse_read(EFUSE_block_t,
+uint32_t *)`; each of its four blocks is two words (8 bytes), and its public
+error enum defines success `0`, invalid parameter `6`, and uninitialized `24`.
+The emulator uses that ABI at the PHY6252 ROM trap: a valid supplied block is
+copied to the output buffer, a missing block returns `24` without changing the
+buffer, and an invalid block or output address returns `6`. This contract is
+inferred from the related SDK, not hardware-verified. A raw 32-byte dump can be
+provided with `mcuemu run --efuse DUMP` or `efuse: DUMP` on a `phy6252` in YAML;
+it is an external input and is not stored in the repository. No eFuse data is
+embedded in the firmware image, so the default model treats all blocks as
+uninitialized rather than inventing device-specific values.
+
+With the corrected ABI and no dump, an 8-second saved-state TS0001 run reads
+blocks 1 and 3 as uninitialized, reaches `network state=12`, and remains
+running. Its pcap has 19 frames (16 command and 3 data frames), all from the
+coordinator; TS0001 sends none. UART timing values remain `4744`, `39` and
+`326790`, so the eFuse fix does not explain the previously observed network or
+reference-log differences. No genuine device eFuse dump was available for this
+probe.
 
 The image also reaches the SDK's `__aeabi_uidiv` and `__aeabi_idiv` ROM helpers,
 which are modeled with quotient in `r0` and remainder in `r1`; division by zero
@@ -379,6 +395,8 @@ instruction tracing for a PC interval and prints registers on a fault.
 `--trace-stack` reports when MSP or PSP leaves or returns to the PHY6252 SRAM range,
 with the preceding instruction address. `--dump-memory ADDRESS:COUNT` prints
 bytes from the requested range after the run. UART0 is exposed as `mcu.uart0`.
+If a device eFuse dump is available, pass it with `--efuse DUMP` or the YAML
+`efuse:` option; it must contain exactly four consecutive 8-byte blocks.
 Firmware inputs can be the package beginning at physical flash offset `0x2000`
 or a 512 KiB full flash dump; keep local images outside the repository.
 For the TS0001 capture setup, place the full dump at

@@ -24,6 +24,7 @@ devices:
         model: tlsr8258    # tlsr8258 | ca51f253l3 | nrf52840 | efr32mg21 | esp32c6 | bl702
         variant: F1K       # tlsr8258 only: F512 (default) | F1K
         firmware: fw/a.bin # relative to this file; or a list of flash pieces, see below
+        efuse: data/chip.efuse # phy6252 only: optional 32-byte external eFuse dump
         clock_hz: 48MHz    # 48000000 | 48MHz | 32kHz
         supply_mv: 3300    # tlsr8258 only: supply seen by the ADC's VBAT input (default 3300)
         start_at: 100us    # power-on delay on the world timeline
@@ -81,6 +82,11 @@ firmware:
 file where it starts (default 0) and `size` its length (default: the rest of
 the file); numbers may be decimal or `0x` hex. Only `tlsr8258` accepts more
 than a single image at offset 0.
+
+For `phy6252`, `efuse:` optionally supplies a raw 32-byte external dump, four
+8-byte blocks in block-number order. The dump is kept outside the repository.
+Without it, `efuse_read` returns the SDK's `PPlus_ERR_UNINITIALIZED` status
+for every block and leaves the caller's buffer unchanged.
 
 ## Inserting devices from files
 
