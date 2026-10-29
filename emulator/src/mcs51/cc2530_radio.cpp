@@ -281,7 +281,6 @@ struct Radio::State {
         unsigned length{0};             // L = MPDU bytes incl. FCS
         std::uint64_t sfd_hf{0};
         std::uint64_t end_hf{0};
-        int rssi_dbm{0};
         unsigned next{0}; // next PHY byte (0 = length byte, L = last FCS byte)
         bool rejected{false};
         bool accepted{false}; // passed frame filtering (filtering enabled)
@@ -613,9 +612,8 @@ struct Radio::State {
         // default noise floor).
         return air ? static_cast<int>(std::lround(air->propagation().noise_floor_dbm)) : -100;
     }
-    // Strongest signal on the channel at `hf` (dBm). Model-defined: the
-    // instantaneous maximum of the frames in flight and the noise floor
-    // (the 8-symbol average of 23.10.3 is not modeled).
+    // Received power on the channel at air time `ns` (dBm). Model-defined:
+    // the strongest of the frames in flight and the noise floor.
     int signal_dbm_at_ns(std::uint64_t ns) const {
         int best = noise_floor_dbm();
         if (!on_air())
@@ -626,23 +624,104 @@ struct Radio::State {
             best = std::max(best, f.rssi_dbm);
         return best;
     }
-    // RSSI in register units (dBm + offset). With `scan` the ENERGY_SCAN
-    // setting applies; CCA always uses the current value (model-defined).
-    int rssi_raw(std::uint64_t hf, bool scan) const {
-        int dbm = signal_dbm_at_ns(air_ns(hf));
-        if (scan && (reg(FRMCTRL0) & Ctrl0EnergyScan)) {
-            // 23.10.3: peak since the energy scan was enabled. Evaluated at
-            // the window start and at every frame start inside the window.
-            const std::uint64_t from = std::max(energy_scan_start, rssi_valid_hf());
-            if (from <= hf) {
-                const std::uint64_t from_ns = air_ns(from), to_ns = air_ns(hf);
-                dbm = std::max(dbm, signal_dbm_at_ns(from_ns));
-                if (on_air())
-                    for (const mcuemu::RadioFrame &f : air->frames())
-                        if (f.start_ns > from_ns && f.start_ns <= to_ns)
-                            dbm = std::max(dbm, signal_dbm_at_ns(f.start_ns));
+    // Air times in (from_ns, to_ns) at which the received power may change:
+    // starts and ends of other nodes' frames on the channel (a superset of
+    // the frames signal_dbm_at_ns() hears).
+    std::vector<std::uint64_t> power_breakpoints(std::uint64_t from_ns,
+                                                 std::uint64_t to_ns) const {
+        std::vector<std::uint64_t> cuts;
+        if (!on_air())
+            return cuts;
+        const auto ch = static_cast<std::uint8_t>(channel());
+        for (const mcuemu::RadioFrame &f : air->frames()) {
+            if (f.source == node || f.channel != ch ||
+                f.protocol != mcuemu::RadioProtocol::Zigbee802154)
+                continue;
+            if (f.start_ns > from_ns && f.start_ns < to_ns)
+                cuts.push_back(f.start_ns);
+            if (f.end_ns > from_ns && f.end_ns < to_ns)
+                cuts.push_back(f.end_ns);
+        }
+        std::sort(cuts.begin(), cuts.end());
+        cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+        return cuts;
+    }
+    // Mean received power over the HF window [from, to) in dBm, rounded to
+    // the nearest integer: the exact time integral of the piecewise-constant
+    // power in mW. A window with one level returns that level exactly.
+    int average_dbm(std::uint64_t from, std::uint64_t to) const {
+        const std::uint64_t a = air_ns(from), b = air_ns(to);
+        std::vector<std::uint64_t> cuts = power_breakpoints(a, b);
+        const int first = signal_dbm_at_ns(a);
+        if (cuts.empty() || b <= a)
+            return first;
+        cuts.insert(cuts.begin(), a);
+        cuts.push_back(b);
+        bool uniform = true;
+        double mw_ns = 0.0;
+        for (std::size_t i = 0; i + 1 < cuts.size(); ++i) {
+            const int level = i == 0 ? first : signal_dbm_at_ns(cuts[i]);
+            uniform = uniform && level == first;
+            mw_ns += static_cast<double>(cuts[i + 1] - cuts[i]) * std::pow(10.0, level / 10.0);
+        }
+        if (uniform)
+            return first;
+        return static_cast<int>(std::lround(10.0 * std::log10(mw_ns / static_cast<double>(b - a))));
+    }
+    // 23.10.3: RSSI is "the received power over eight symbol periods
+    // (128 us)", valid once the receiver has been enabled for eight symbol
+    // periods (RSSISTAT.RSSI_VALID). SWRU191F gives no update rate.
+    // Model-defined: a new average is produced every symbol period, at
+    // s_k = RSSI_VALID time + k * 16 us, over the 8 symbol periods
+    // [s_k - 128 us, s_k); the first one covers exactly the 8 symbol periods
+    // after the receiver was enabled. Latest sample time <= hf, or Never.
+    std::uint64_t rssi_sample_hf(std::uint64_t hf) const {
+        const std::uint64_t v = rssi_valid_hf();
+        if (v == Never || hf < v)
+            return Never;
+        return v + (hf - v) / SymbolCycles * SymbolCycles;
+    }
+    int rssi_sample_dbm(std::uint64_t sample) const {
+        return average_dbm(sample - RssiValidCycles, sample);
+    }
+    // 23.10.3 ENERGY_SCAN = 1: the peak RSSI since the scan was enabled.
+    // Model-defined: the maximum over the samples from the one in effect at
+    // the 0 -> 1 write of ENERGY_SCAN (or the first sample) up to `last`.
+    // The window mean is piecewise linear in the sample time, with kinks
+    // only where a power breakpoint enters or leaves the window, so the
+    // samples around each kink and the two end samples hold the maximum.
+    int scan_peak_dbm(std::uint64_t last) const {
+        const std::uint64_t v = rssi_valid_hf();
+        const std::uint64_t first = rssi_sample_hf(std::max(energy_scan_start, v));
+        int best = rssi_sample_dbm(last);
+        if (first == Never || first >= last)
+            return best;
+        best = std::max(best, rssi_sample_dbm(first));
+        std::set<std::uint64_t> candidates;
+        for (const std::uint64_t b :
+             power_breakpoints(air_ns(first - RssiValidCycles), air_ns(last))) {
+            const std::uint64_t h = hf_of_ns(b);
+            for (const std::uint64_t kink : {h, h + RssiValidCycles}) {
+                if (kink < v)
+                    continue;
+                const std::uint64_t at = rssi_sample_hf(kink);
+                for (const std::uint64_t c : {at - SymbolCycles, at, at + SymbolCycles})
+                    if (c > first && c < last)
+                        candidates.insert(c);
             }
         }
+        for (const std::uint64_t c : candidates)
+            best = std::max(best, rssi_sample_dbm(c));
+        return best;
+    }
+    // RSSI in register units (dBm + offset) at `hf` (RSSI_VALID must hold).
+    // With `scan` the ENERGY_SCAN setting applies.
+    int rssi_raw(std::uint64_t hf, bool scan) const {
+        const std::uint64_t sample = rssi_sample_hf(hf);
+        if (sample == Never)
+            return noise_floor_dbm() + RssiOffset;
+        const int dbm = scan && (reg(FRMCTRL0) & Ctrl0EnergyScan) ? scan_peak_dbm(sample)
+                                                                  : rssi_sample_dbm(sample);
         return dbm + RssiOffset;
     }
     std::uint8_t rssi_reg(std::uint64_t hf) const {
@@ -663,7 +742,11 @@ struct Radio::State {
         const bool receiving = st == StRx;
         bool level = true;
         if (mode == 1 || mode == 3) {
-            const int r = clamp_s8(rssi_raw(hf, false));
+            // 23.8.12: CCA "is updated at every new RSSI sample" and is
+            // "updated four clock cycles (system clock) after the RSSI_VALID
+            // signal has been set". Model-defined: every sample reaches CCA
+            // four cycles after it is taken; ENERGY_SCAN does not apply.
+            const int r = clamp_s8(rssi_raw(hf - CcaDelayCycles, false));
             const int thr = static_cast<std::int8_t>(reg(CCACTRL0));
             const int hyst = reg(CCACTRL1) & 7;
             if (r < thr - hyst)
@@ -1098,7 +1181,6 @@ struct Radio::State {
         rx.length = static_cast<unsigned>(f.payload.size()) + 2;
         rx.sfd_hf = s;
         rx.end_hf = s + ByteCycles * (rx.length + 1);
-        rx.rssi_dbm = f.rssi_dbm;
         // Model-defined: the frame processing settings are sampled at the SFD.
         rx.filtering = reg(FRMFILT0) & Filt0Enable;
         rx.autocrc = reg(FRMCTRL0) & Ctrl0AutoCrc;
@@ -1165,7 +1247,13 @@ struct Radio::State {
                 // Figure 23-15: RSSI (signed), then CRC_OK | correlation or
                 // SRCRESINDEX (APPEND_DATA_MODE).
                 if (i + 1 == len) {
-                    b = static_cast<std::uint8_t>(clamp_s8(rx.rssi_dbm + RssiOffset));
+                    // Figure 23-15: "RSSI value ... measured over the first
+                    // eight symbols following the SFD". Model-defined: a
+                    // frame whose RSSI byte arrives earlier (MPDU < 2 bytes)
+                    // averages up to that byte.
+                    const int dbm =
+                        average_dbm(rx.sfd_hf, std::min(rx.sfd_hf + RssiValidCycles, hf));
+                    b = static_cast<std::uint8_t>(clamp_s8(dbm + RssiOffset));
                 } else {
                     const std::uint8_t low = rx.append ? rx.srcresindex : Correlation;
                     b = static_cast<std::uint8_t>((rx.crc_ok ? 0x80 : 0x00) | (low & 0x7F));
@@ -1510,22 +1598,12 @@ struct Radio::State {
     std::uint64_t csp_cond_change_hf(unsigned cond, std::uint64_t hf) const {
         const std::uint64_t valid = rssi_valid_hf();
         switch (cond & 7u) {
-        case 0: { // CCA: RSSI_VALID, frame boundaries on the channel
+        case 0: { // CCA: changes when an RSSI sample reaches it (cca())
             std::uint64_t w = hf + ParkCycles;
-            if (valid != Never && valid + CcaDelayCycles > hf)
-                w = std::min(w, valid + CcaDelayCycles);
-            if (on_air()) {
-                const std::uint64_t now_ns = air_ns(hf);
-                const auto ch = static_cast<std::uint8_t>(channel());
-                for (const mcuemu::RadioFrame &f : air->frames()) {
-                    if (f.source == node || f.channel != ch ||
-                        f.protocol != mcuemu::RadioProtocol::Zigbee802154)
-                        continue;
-                    if (f.start_ns > now_ns)
-                        w = std::min(w, hf_of_ns(f.start_ns));
-                    if (f.end_ns > now_ns)
-                        w = std::min(w, hf_of_ns(f.end_ns));
-                }
+            if (valid != Never) {
+                const std::uint64_t feed = valid + CcaDelayCycles;
+                w = std::min(w, hf < feed ? feed
+                                          : feed + ((hf - feed) / SymbolCycles + 1) * SymbolCycles);
             }
             return std::max(w, hf + 1);
         }
