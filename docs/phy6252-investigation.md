@@ -287,6 +287,12 @@ The `*** On:%d, Off:%d, toggle:%d ***` format belongs to the XIP helper at
 then passes the counters to the UART formatter. The trigger that reaches this
 helper in the reference run is still unknown.
 
+A 1,000,000-instruction standalone run found a runtime data block at
+`0x1fff7f34`: the word `6`, followed by pointers `0x1102ddd9` and
+`0x1102d299`. The first pointer targets the counter helper above, confirming
+that its registration data is present in SRAM. The meaning of the word and the
+event path that invokes this callback remain unknown.
+
 A PC trace of the first `power report time` calculation shows the image combines
 its stored fields with a byte returned by its RAM-resident helper at
 `0x1fff7b0c`: `3 * 1000 + 4 * (5 - 3) * 218 = 4744`. The helper output is
