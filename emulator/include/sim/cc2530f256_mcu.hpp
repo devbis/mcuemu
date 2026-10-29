@@ -106,6 +106,12 @@ public:
 
     mcs51emu::Cc2530F256 &device() noexcept { return device_; }
 
+    // Fault injection: oscillator `osc` stops at world time `at_ns` (the
+    // chip's next instruction boundary if that has passed); see
+    // mcs51emu::Cc2530F256::stop_oscillator. reset() (a power-on reset)
+    // brings it back.
+    void stop_oscillator(mcs51emu::Cc2530Oscillator osc, std::uint64_t at_ns);
+
     // Debugger emulation: halt whenever the CPU reaches logical `pc`; on the
     // N-th arrival apply the XDATA SRAM writes listed for hit N (in order)
     // and resume. Arrivals are counted at instruction boundaries, also when

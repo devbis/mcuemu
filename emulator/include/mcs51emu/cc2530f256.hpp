@@ -32,6 +32,10 @@ struct Soc;
 enum class Cc2530PowerMode : std::uint8_t { Active, Idle, Pm1, Pm2, Pm3 };
 // SLEEPSTA.RST encoding (SWRU191F 4.3).
 enum class Cc2530ResetCause : std::uint8_t { PowerOn = 0, External = 1, Watchdog = 2, ClockLoss = 3 };
+// Oscillators a host can declare stopped (Cc2530F256::stop_oscillator):
+// the 32 MHz crystal and 16 MHz RC system-clock sources and the two 32 kHz
+// clock sources (SWRU191F 4.4.1).
+enum class Cc2530Oscillator : std::uint8_t { Xosc32M, Rcosc16M, Xosc32k, Rcosc32k };
 // What the chip does to a pad.
 enum class Cc2530PinDrive : std::uint8_t { HiZ, Low, High, PullUp, PullDown };
 
@@ -193,6 +197,11 @@ struct Cc2530Diagnostics {
     // CPU stalls requested by the flash controller and their virtual time.
     std::uint64_t cpu_stalls{};
     std::uint64_t cpu_stall_cycles{};
+    // Virtual time the CPU waited for a stopped system clock
+    // (stop_oscillator), and PM3 entries with CLD.EN = 1, which SWRU191F 5.2
+    // tells firmware to avoid (the detector is then treated as stopped).
+    std::uint64_t clock_stall_cycles{};
+    std::uint64_t clock_loss_pm3_entries{};
     // Entries that break the SWRU191F 4.2 placement rule: the instruction
     // after the one setting PCON.IDLE starts on a 4-byte boundary.
     std::uint64_t idle_alignment_violations{};
@@ -424,6 +433,18 @@ public:
     // Seeds deterministic noise sources (ADC analog noise, radio RFRND and
     // CSP RANDXY).
     void set_noise_seed(std::uint64_t seed);
+    // Fault injection (SWRU191F 5.2, docs/cc2530.md "Clock loss"): from
+    // virtual time `at_cycle` (the next instruction boundary if that has
+    // passed) oscillator `osc` no longer runs, as with a damaged crystal. It
+    // stays stopped across every reset except a power-on reset (which a
+    // firmware load includes). With CLD.EN = 1 a stopped monitored clock
+    // causes a clock-loss reset (SLEEPSTA.RST = 11); a stopped system clock
+    // stalls the CPU; a stopped 32 kHz clock stops the sleep timer and the
+    // watchdog; a switch to a stopped oscillator never completes.
+    void stop_oscillator(Cc2530Oscillator osc, std::uint64_t at_cycle);
+    // The CPU waits for its stopped system clock: run() advances virtual
+    // time (peripherals and resets) but executes no instruction.
+    bool clock_stalled() const;
     // Connects the IEEE 802.15.4 radio to a shared air as node `node`.
     // Virtual time maps to air time as ns = ns_offset + cycles * 1000 / 32.
     void attach_air(mcuemu::VirtualAir &air, std::string node, std::uint64_t ns_offset = 0);
@@ -531,6 +552,17 @@ private:
     void create_peripherals();
     void request_power_fault(Cc2530FaultAction action);
     void power_on_sram_fill();
+    // Clock loss (stop_oscillator, SWRU191F 4.4 and 5.2).
+    bool oscillator_stopped(Cc2530Oscillator osc, std::uint64_t at) const;
+    bool cpu_clock_stopped() const;
+    std::uint64_t next_oscillator_stop() const;
+    std::uint64_t clock_loss_deadline() const;
+    // CLKCONSTA for `command` when the system clock currently is the RCOSC
+    // (`on_rcosc`) or the XOSC.
+    std::uint8_t clock_status(std::uint8_t command, bool on_rcosc) const;
+    void set_clock_status(std::uint8_t status);
+    // Freezes or resumes the 32 kHz domain at `at` (PM3, stopped clock).
+    void refresh_lf_domain(std::uint64_t at);
 
     uc_struct *uc_{};
     std::size_t code_hook_{};
@@ -563,7 +595,16 @@ private:
     Cc2530PowerMode requested_mode_{Cc2530PowerMode::Active};
     std::uint64_t power_mode_since_{};
     std::uint64_t hf_stopped_{}; // completed time in PM1-PM3
-    std::uint64_t lf_stopped_{}; // completed time in PM3
+    std::uint64_t lf_stopped_{}; // completed frozen time of the 32 kHz domain
+    // Start of the current 32 kHz domain freeze (PM3 or a stopped 32 kHz
+    // clock source).
+    std::optional<std::uint64_t> lf_frozen_since_;
+    // stop_oscillator() times per Cc2530Oscillator (UINT64_MAX: running);
+    // bit N of osc_stops_applied_: stop N has been applied at a boundary.
+    std::array<std::uint64_t, 4> osc_stop_at_{UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX};
+    std::uint8_t osc_stops_applied_{};
+    // Since when the clock-loss detector watches the current clocks.
+    std::uint64_t cld_since_{};
     std::optional<Cc2530ResetCause> pending_reset_;
     // The pending reset is a power cut (power_cut() at the boundary).
     bool pending_power_cut_{};
