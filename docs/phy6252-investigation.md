@@ -465,6 +465,27 @@ startup milestones as `log.txt`, but the reported values still differ:
 TS0001 relay support until it starts, joins and exchanges Zigbee traffic in a
 captured network scenario.
 
+The downloaded `TS0001_TZ3000_fdxihpp7_ff.bin` is byte-identical to the local
+`firmware/phy6252-ts0001.bin` (SHA-256
+`48808835c2c24db916617d8c780fad1e97b6ba92e9c8d73b27650cfa6b249517`). This is
+the saved-state image: its NVM at `0x11079000..0x1107efff` is populated, unlike
+the separate cleared-NVM first-boot probe. A 65 s run of this exact image with
+host ROM traps, the supplied eFuse/RF-calibration inputs, and a short GPIO8
+press prints the expected startup sequence through `network state=12`, the
+Tuya report setup, and `key 1 Down/Up`. It repeats the local-time and stack
+statistics at 30.305 s and 60.305 s. The `power report time`, local-time
+interval, and `fix Report time` values remain `4744`, `39`, and `326790`; it
+does not print the reference `On/Off` counters.
+
+That run's pcap contains 82 frames. The successful association at 9.045 s is
+sampleLight receiving short address `0x3acc`; all captured transmitters are the
+coordinator and sampleLight. A 20 s probe with the same inputs accepts two
+channel-25 beacon requests while TS0001 is listening, but TS0001 transmits no
+frame. A 20 s run with the external PHY6222 ROM selected completed without a
+CPU fault but produced no UART0 output for this TS0001 image; the startup result
+above uses the default host ROM traps. The cause of this ROM/application
+difference is not isolated.
+
 The 65 s UART trace emits local-time and stack-statistics reports at 30.305 s
 and 60.305 s. The local time remains zero; the trace does not print
 the reference relay `On`/`Off` reports by 65 s. It prints `key timer stop!`
