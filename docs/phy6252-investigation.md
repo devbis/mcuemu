@@ -137,7 +137,10 @@ the model. The dump's SHA-256 is
 `430b26391488ad95451310526aaff9ec9df4321897282fc7cd9d1865611517f4`. Ghidra
 12.2 with the Homebrew OpenJDK 25 runtime analyzed the 96 KiB as ARM Cortex
 Thumb code at address zero, matching the ROM's low-address vector pointers. The
-dump starts with SP `0x1fff1830` and reset vector `0x00000d91`.
+dump starts with SP `0x1fff1830` and reset vector `0x00000d91`. The accompanying
+`SoC_info.txt` identifies the source module as a PHY6222 (6222M005), so execution
+on the PHY6252 model is a compatibility experiment; the dump has not been
+established as the matching PB-03F ROM revision.
 
 The ROM contains radio and link-layer code, not just boot support. Ghidra finds
 several routines that access the RF block at `0x40030000` and LL block at
@@ -205,7 +208,34 @@ it is an external input and is not stored in the repository. No eFuse data is
 embedded in the firmware image, so the default model treats all blocks as
 uninitialized rather than inventing device-specific values.
 
-With the corrected ABI and no dump, an 8-second saved-state TS0001 run reads
+The external ROM dump contains its own `efuse_read` implementation. The SDK
+header identifies `0x4000f160..0x4000f17c` as the four two-word eFuse data
+registers and `0x4000f180` as `SECURTY_STATE`; the supplied register snapshot
+reads `0x0f` from that status register. The emulator exposes each data block
+only after its `efuse_cfg` read strobe and only when a raw `--efuse`/`efuse:`
+input supplied the bytes. Without one, external-ROM execution reports the
+unavailable data-register access instead of filling in unknown device data.
+The supplied `SoC_info.txt` reports four zero-valued blocks, but no separate
+raw 32-byte eFuse file was included.
+
+With that ROM and the TS0001 image, emulation passes the early eFuse path and
+reaches PHY initialization. Disassembly of the copied image shows a consecutive
+setup table writing `0x40030054..0x40030074`; the model retains those values and
+warns that their PHY6252 effects are unknown. The image then writes `0x0e` to
+`0x400300a0`; the related PHY6222 SDK calls this the PLL auto override. That
+write is also retained with a warning, without applying an analog effect.
+
+At 19.06 ms, TS0001 reads `0x400300f4` and the external-ROM run faults there.
+The related SDK's `rf_tp_cal` triggers RF calibration, waits, then extracts
+`kCal` from bits 16..23 of this register and returns it. The supplied device
+snapshot has no value for this calibration result, and the available SDK does
+not describe how the PHY6252 produces it, so the model leaves the read
+unsupported rather than inventing a result. A 15-second pcap run with the
+TS0001 image and gateway contains no successful association response; relay
+network support remains unverified.
+
+With the default host-trap ROM, the corrected ABI and no eFuse dump, an
+8-second saved-state TS0001 run reads
 blocks 1 and 3 as uninitialized, reaches `network state=12`, and remains
 running. Its pcap has 19 frames (16 command and 3 data frames), all from the
 coordinator; TS0001 sends none. UART timing values remain `4744`, `39` and

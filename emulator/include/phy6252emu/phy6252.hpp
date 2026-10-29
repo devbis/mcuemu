@@ -53,6 +53,7 @@ private:
     std::vector<std::uint8_t> rom_dump_;
     std::array<std::array<std::uint8_t, 8>, 4> efuse_blocks_{};
     std::array<bool, 4> efuse_block_present_{};
+    std::array<bool, 4> efuse_read_ready_{};
     std::array<bool, 4> efuse_missing_warning_logged_{};
     std::uint8_t lcr_{0}, ier_{0}, dll_{0}, dlm_{0}, mcr_{0}, scratch_{0};
     std::deque<std::uint8_t> rx_;
@@ -90,6 +91,17 @@ private:
     std::array<bool, 6> timer_irq_dispatch_warning_logged_{};
     bool ll_context_warning_logged_{false};
     bool rf_sample_e8_warning_logged_{false};
+    bool rf_a4_warning_logged_{false};
+    bool rf_8c_warning_logged_{false};
+    bool rf_a0_warning_logged_{false};
+    bool rf_124_warning_logged_{false};
+    bool rf_50_warning_logged_{false};
+    bool rf_init_bank_warning_logged_{false};
+    bool ll_2c_warning_logged_{false};
+    bool ll_24_warning_logged_{false};
+    bool ll_60_warning_logged_{false};
+    bool ll_20_warning_logged_{false};
+    bool ll_68_warning_logged_{false};
     std::uint32_t heap_start_{0}, heap_size_{0};
     std::uint32_t random_state_{0x6d2b79f5};
     std::map<std::uint32_t, std::uint32_t> free_heap_blocks_;

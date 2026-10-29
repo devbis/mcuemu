@@ -87,7 +87,10 @@ than a single image at offset 0.
 For `phy6252`, `efuse:` optionally supplies a raw 32-byte external dump, four
 8-byte blocks in block-number order. The dump is kept outside the repository.
 Without it, `efuse_read` returns the SDK's `PPlus_ERR_UNINITIALIZED` status
-for every block and leaves the caller's buffer unchanged.
+for every block and leaves the caller's buffer unchanged when using the
+default host-trap ROM. With an external `rom:`, it backs the ROM code's AON
+eFuse data registers; absent data is reported as an unimplemented register
+access.
 
 `phy6252` also accepts optional `rom:` to execute an external ROM dump instead
 of the default ROM-call traps. Supply exactly 96 KiB, or a 128 KiB dump whose

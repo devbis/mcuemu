@@ -102,9 +102,16 @@ constexpr std::uint32_t AonWakeMask0 = 0x4000f0a0;
 constexpr std::uint32_t AonWakeMask1 = 0x4000f0a4;
 constexpr std::uint32_t AonWakeSource0 = 0x4000f0b0;
 constexpr std::uint32_t AonWakeSource1 = 0x4000f0b4;
+constexpr std::uint32_t AonEfuseDataBase = 0x4000f160;
+constexpr std::uint32_t AonEfuseSecurityState = 0x4000f180;
 constexpr std::uint32_t RadioClockControl = 0x4000f040;
 constexpr std::uint32_t RadioClockConfig = 0x4000f044;
 constexpr std::uint32_t AonEfuseConfig = 0x4000f054;
+constexpr std::uint32_t AonChipState = 0x4000f058;
+constexpr std::uint32_t AonCalReadWrite = 0x4000f05c;
+constexpr std::uint32_t AonCalReadOnly0 = 0x4000f060;
+constexpr std::uint32_t AonCalReadOnly1 = 0x4000f064;
+constexpr std::uint32_t AonCalReadOnly2 = 0x4000f068;
 constexpr std::uint32_t RfTpCal0 = 0x1fff0a44;
 constexpr std::uint32_t RfTpCal1 = 0x1fff0a45;
 constexpr std::uint8_t ObservedRfTpCal0 = 0x2b;
@@ -164,10 +171,11 @@ constexpr std::array<std::uint8_t, 23> GpioPullShift = {
 
 bool phy_rf_register(std::uint32_t offset) {
     switch (offset) {
-    case 0x00: case 0x0c: case 0x40: case 0x48: case 0x4c:
-    case 0x80: case 0x90: case 0x94: case 0xb0: case 0xb4: case 0xb8: case 0xbc:
+    case 0x00: case 0x0c: case 0x40: case 0x48: case 0x4c: case 0x50:
+    case 0x54: case 0x58: case 0x5c: case 0x60: case 0x64: case 0x68: case 0x6c: case 0x70: case 0x74:
+    case 0x80: case 0x8c: case 0x90: case 0x94: case 0xa0: case 0xa4: case 0xb0: case 0xb4: case 0xb8: case 0xbc:
     case 0xcc: case 0xd0: case 0xd4: case 0xd8: case 0xdc: case 0xe0:
-    case 0xe4: case 0xe8: case 0x104: case 0x108: case 0x10c:
+    case 0xe4: case 0xe8: case 0x104: case 0x108: case 0x10c: case 0x124:
         return true;
     default:
         return false;
@@ -177,7 +185,8 @@ bool phy_rf_register(std::uint32_t offset) {
 bool phy_ll_register(std::uint32_t offset) {
     switch (offset) {
     case 0x00: case 0x04: case 0x08: case 0x0c: case 0x10: case 0x14:
-    case 0x18: case 0x1c: case 0x28: case 0x34: case 0x38: case 0x40:
+    case 0x18: case 0x1c: case 0x20: case 0x24: case 0x28: case 0x2c: case 0x34: case 0x38: case 0x40:
+    case 0x60: case 0x68:
         return true;
     default:
         return false;
@@ -369,6 +378,7 @@ void Phy6252::load_efuse_dump(const std::vector<std::uint8_t> &dump) {
                     efuse_blocks_[block].begin());
         efuse_block_present_[block] = true;
     }
+    efuse_read_ready_.fill(false);
 }
 
 void Phy6252::reset() {
@@ -406,6 +416,14 @@ void Phy6252::reset() {
     rx_.clear();
     tx_.clear();
     control_registers_.clear();
+    // Values captured from the supplied P622ZB2S AON register snapshot.
+    control_registers_[AonEfuseConfig] = 0x8000;
+    control_registers_[AonChipState] = 0;
+    control_registers_[AonCalReadWrite] = 0x1f2;
+    control_registers_[AonCalReadOnly0] = 0x10c0;
+    control_registers_[AonCalReadOnly1] = 0;
+    control_registers_[AonCalReadOnly2] = 0x100;
+    efuse_read_ready_.fill(false);
     rf_registers_.clear();
     ll_registers_.clear();
     tx_fifo_.clear();
@@ -1615,6 +1633,21 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
     }
     const std::uint32_t aligned = address & ~3u;
     std::uint32_t value;
+    if (aligned >= AonEfuseDataBase && aligned < AonEfuseSecurityState) {
+        const unsigned block = (aligned - AonEfuseDataBase) / 8;
+        const unsigned word = ((aligned - AonEfuseDataBase) % 8) / 4;
+        if (block >= efuse_blocks_.size() || !efuse_block_present_[block] ||
+            !efuse_read_ready_[block]) {
+            unsupported_register(address, "read", 0, size);
+            return 0;
+        }
+        const std::uint8_t *bytes = efuse_blocks_[block].data() + word * 4;
+        value = static_cast<std::uint32_t>(bytes[0]) |
+                (static_cast<std::uint32_t>(bytes[1]) << 8) |
+                (static_cast<std::uint32_t>(bytes[2]) << 16) |
+                (static_cast<std::uint32_t>(bytes[3]) << 24);
+        return lane_read(value, address, size);
+    }
     const int timer = timer_index(aligned);
     if (timer >= 0) {
         sync_timer(static_cast<unsigned>(timer), core_.cycles());
@@ -1722,6 +1755,36 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
             unsupported_register(address, "read", 0, size);
             return 0;
         }
+        if (offset >= 0x54 && offset <= 0x74 && !rf_init_bank_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF/baseband init register range 0x40030054..0x40030074 is used by the external-ROM TS0001 path; retaining values without modeling its effect\n");
+            rf_init_bank_warning_logged_ = true;
+        }
+        if (offset == 0xa4 && !rf_a4_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF register 0x400300a4 is used by the external-ROM TS0001 init; retaining writes without modeling its effect\n");
+            rf_a4_warning_logged_ = true;
+        }
+        if (offset == 0x8c && !rf_8c_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF register 0x4003008c is read-modify-written by the external ROM setup; retaining its value without modeling its effect\n");
+            rf_8c_warning_logged_ = true;
+        }
+        if (offset == 0xa0 && !rf_a0_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF register 0x400300a0 (PLL auto override) is used by the external-ROM TS0001 path; retaining its value without modeling its effect\n");
+            rf_a0_warning_logged_ = true;
+        }
+        if (offset == 0x124 && !rf_124_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF register 0x40030124 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            rf_124_warning_logged_ = true;
+        }
+        if (offset == 0x50 && !rf_50_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF register 0x40030050 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            rf_50_warning_logged_ = true;
+        }
         if (offset == 0xe4 || offset == 0xe8) {
             if (offset == 0xe8 && !rf_sample_e8_warning_logged_) {
                 std::fprintf(stderr,
@@ -1744,6 +1807,31 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
         if (!phy_ll_register(offset)) {
             unsupported_register(address, "read", 0, size);
             return 0;
+        }
+        if (offset == 0x24 && !ll_24_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL register 0x40031024 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            ll_24_warning_logged_ = true;
+        }
+        if (offset == 0x20 && !ll_20_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL register 0x40031020 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            ll_20_warning_logged_ = true;
+        }
+        if (offset == 0x2c && !ll_2c_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL register 0x4003102c is used by the external ROM setup; retaining writes without modeling its effect\n");
+            ll_2c_warning_logged_ = true;
+        }
+        if (offset == 0x60 && !ll_60_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL register 0x40031060 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            ll_60_warning_logged_ = true;
+        }
+        if (offset == 0x68 && !ll_68_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL register 0x40031068 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            ll_68_warning_logged_ = true;
         }
         if (offset == 0x00)
             value = (radio_tx_active_ || radio_rx_active_) ? 1u : 0u;
@@ -1790,6 +1878,8 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
     case AonPmctl2_0:
     case AonRtcControl:
     case AonEfuseConfig:
+    case AonChipState:
+    case AonCalReadWrite:
     case AonEfuseProgram0:
     case AonEfuseProgram1:
     case AonXtal16Control:
@@ -1809,6 +1899,16 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
         break;
     case AonRtcCount:
         value = rtc_count(core_.cycles_to_ns(core_.cycles()));
+        break;
+    case AonEfuseSecurityState:
+        // The supplied PHY62x2 register snapshot reads 0x0f here and uses
+        // those four bits to allow the ROM's block 0..3 read paths.
+        value = 0x0f;
+        break;
+    case AonCalReadOnly0:
+    case AonCalReadOnly1:
+    case AonCalReadOnly2:
+        value = control_registers_[aligned];
         break;
     default:
         if (mux_select_register(aligned))
@@ -1998,8 +2098,38 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
     if (aligned >= RadioRfBase && aligned < RadioRfBase + 0x1000) {
         const std::uint32_t offset = aligned - RadioRfBase;
         if (!phy_rf_register(offset)) {
-            unsupported_register(address, "write");
+            unsupported_register(address, "write", value, size);
             return;
+        }
+        if (offset >= 0x54 && offset <= 0x74 && !rf_init_bank_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF/baseband init register range 0x40030054..0x40030074 is used by the external-ROM TS0001 path; retaining values without modeling its effect\n");
+            rf_init_bank_warning_logged_ = true;
+        }
+        if (offset == 0xa4 && !rf_a4_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF register 0x400300a4 is used by the external-ROM TS0001 init; retaining writes without modeling its effect\n");
+            rf_a4_warning_logged_ = true;
+        }
+        if (offset == 0x8c && !rf_8c_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF register 0x4003008c is read-modify-written by the external ROM setup; retaining its value without modeling its effect\n");
+            rf_8c_warning_logged_ = true;
+        }
+        if (offset == 0xa0 && !rf_a0_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF register 0x400300a0 (PLL auto override) is used by the external-ROM TS0001 path; retaining its value without modeling its effect\n");
+            rf_a0_warning_logged_ = true;
+        }
+        if (offset == 0x124 && !rf_124_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF register 0x40030124 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            rf_124_warning_logged_ = true;
+        }
+        if (offset == 0x50 && !rf_50_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF register 0x40030050 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            rf_50_warning_logged_ = true;
         }
         rf_registers_[aligned] = lane_write(rf_registers_[aligned], value, address, size);
         return;
@@ -2009,6 +2139,31 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
         if (!phy_ll_register(offset)) {
             unsupported_register(address, "write", value, size);
             return;
+        }
+        if (offset == 0x24 && !ll_24_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL register 0x40031024 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            ll_24_warning_logged_ = true;
+        }
+        if (offset == 0x20 && !ll_20_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL register 0x40031020 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            ll_20_warning_logged_ = true;
+        }
+        if (offset == 0x2c && !ll_2c_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL register 0x4003102c is used by the external ROM setup; retaining writes without modeling its effect\n");
+            ll_2c_warning_logged_ = true;
+        }
+        if (offset == 0x60 && !ll_60_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL register 0x40031060 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            ll_60_warning_logged_ = true;
+        }
+        if (offset == 0x68 && !ll_68_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL register 0x40031068 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            ll_68_warning_logged_ = true;
         }
         const std::uint32_t written = lane_write(ll_registers_[aligned], value, address, size);
         switch (offset) {
@@ -2084,7 +2239,8 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
     case RadioClockControl:
     case RadioClockConfig:
     case AonPmctl2_0:
-    case AonEfuseConfig:
+    case AonChipState:
+    case AonCalReadWrite:
     case AonEfuseProgram0:
     case AonEfuseProgram1:
     case AonXtal16Control:
@@ -2099,6 +2255,19 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             mux_select_register(aligned))
             notify_gpio(GpioMask);
         break;
+    case AonEfuseConfig: {
+        const std::uint32_t previous = control_registers_[aligned];
+        const std::uint32_t updated = lane_write(previous, value, address, size);
+        control_registers_[aligned] = updated;
+        for (unsigned block = 0; block < efuse_read_ready_.size(); ++block) {
+            const std::uint32_t read_strobe = 1u << (16 + block);
+            if (!(previous & read_strobe) && (updated & read_strobe))
+                efuse_read_ready_[block] = true;
+            else if ((previous & read_strobe) && !(updated & read_strobe))
+                efuse_read_ready_[block] = false;
+        }
+        break;
+    }
     case AonRtcControl: {
         const std::uint64_t now_ns = core_.cycles_to_ns(core_.cycles());
         const std::uint32_t old_control = control_registers_[AonRtcControl];

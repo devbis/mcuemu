@@ -141,6 +141,15 @@ int main() {
     CHECK(chip.read(0x40001068, 4) == 0);
     CHECK(chip.read(0x40001074, 4) == 1); // three 4 MHz ticks took 24 HCLK cycles
     chip.reset();
+    CHECK(chip.read(0x4000f054, 4) == 0x8000); // captured efuse_cfg
+    CHECK(chip.read(0x4000f058, 4) == 0); // captured chip_state
+    CHECK(chip.read(0x4000f05c, 4) == 0x1f2); // captured cal_rw
+    CHECK(chip.read(0x4000f060, 4) == 0x10c0); // captured cal_ro0
+    CHECK(chip.read(0x4000f064, 4) == 0); // captured cal_ro1
+    CHECK(chip.read(0x4000f068, 4) == 0x100); // captured cal_ro2
+    chip.write(0x4000f05c, 0x1234, 4);
+    CHECK(chip.read(0x4000f05c, 4) == 0x1234);
+    chip.reset(); // reload the captured startup calibration values
     std::array<std::uint8_t, 2> rf_tp_cal{};
     CHECK(chip.core().read_memory(0x1fff0a44, rf_tp_cal.data(), rf_tp_cal.size()));
     CHECK(rf_tp_cal[0] == 0x2b); // ROM-owned g_rfPhyTpCal0
@@ -665,6 +674,11 @@ int main() {
     for (std::size_t i = 0; i < efuse_dump.size(); ++i)
         efuse_dump[i] = static_cast<std::uint8_t>(0xa0 + i);
     chip.load_efuse_dump(efuse_dump);
+    CHECK(chip.read(0x4000f180, 4) == 0x0f); // captured SECURTY_STATE
+    chip.write(0x4000f054, 1u << 18, 4); // select eFuse block 2
+    CHECK(chip.read(0x4000f170, 4) == 0xb3b2b1b0);
+    CHECK(chip.read(0x4000f174, 4) == 0xb7b6b5b4);
+    chip.write(0x4000f054, 0, 4); // clear the read strobe
     bool short_efuse_rejected = false;
     try {
         chip.load_efuse_dump(std::vector<std::uint8_t>(31));
@@ -689,6 +703,30 @@ int main() {
     CHECK(chip.core().read_memory(efuse_buffer, efuse_data, sizeof efuse_data));
     CHECK(std::equal(efuse_dump.begin() + 24, efuse_dump.begin() + 32,
                      std::begin(efuse_data)));
+    chip.write(0x400300a4, 0x140, 4); // opaque external-ROM RF init register
+    CHECK(chip.read(0x400300a4, 4) == 0x140);
+    chip.write(0x4003008c, 0x00800000, 4); // opaque external-ROM RF init register
+    CHECK(chip.read(0x4003008c, 4) == 0x00800000);
+    chip.write(0x40030124, 0x1, 4); // opaque external-ROM RF init register
+    CHECK(chip.read(0x40030124, 4) == 0x1);
+    chip.write(0x40030050, 0x22085580, 4); // opaque external-ROM RF init register
+    CHECK(chip.read(0x40030050, 4) == 0x22085580);
+    chip.write(0x40030054, 0x545c9ca4, 4); // opaque external-ROM PHY init table
+    CHECK(chip.read(0x40030054, 4) == 0x545c9ca4);
+    chip.write(0x40030074, 0x1c222e28, 4); // end of observed PHY init table
+    CHECK(chip.read(0x40030074, 4) == 0x1c222e28);
+    chip.write(0x400300a0, 0x0e, 4); // opaque PLL auto override
+    CHECK(chip.read(0x400300a0, 4) == 0x0e);
+    chip.write(0x4003102c, 0x00010000, 4); // opaque external-ROM LL setup register
+    CHECK(chip.read(0x4003102c, 4) == 0x00010000);
+    chip.write(0x40031024, 0x1f4, 4); // opaque external-ROM LL timing register
+    CHECK(chip.read(0x40031024, 4) == 0x1f4);
+    chip.write(0x40031060, 0x000ea600, 4); // opaque external-ROM LL setup register
+    CHECK(chip.read(0x40031060, 4) == 0x000ea600);
+    chip.write(0x40031020, 0x01400020, 4); // opaque external-ROM LL setup register
+    CHECK(chip.read(0x40031020, 4) == 0x01400020);
+    chip.write(0x40031068, 7, 4); // opaque external-ROM LL setup register
+    CHECK(chip.read(0x40031068, 4) == 7);
     CHECK(chip.core().write_memory(efuse_buffer, untouched_efuse_data,
                                   sizeof untouched_efuse_data));
     const crypto::Block aes_key = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
