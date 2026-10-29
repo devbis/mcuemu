@@ -313,6 +313,13 @@ transmission. This shows that the missing outbound traffic occurs after basic
 PHY reception; it does not identify the remaining Zigbee stack or network-state
 failure.
 
+A 120 s run reaches the three periodic stack reports by 90.305 s, but still
+does not print the reference `On`/`Off` counters by the end of the run. Its
+pcap contains 26 frames: 16 Beacon Requests and 10 broadcast data frames, all
+sent by the coordinator, with no ACKs or TS0001 transmissions. This covers the
+period represented by the supplied log's three stack reports without reaching
+its relay-counter output.
+
 The reusable `examples/phy6252-ts0001.yaml` probe also reproduces the reference
 short key1 press on GPIO8 and key-level transitions on GPIO3. It does not print
 the reference relay `On`/`Off` reports, and the paired pcap remains identical
