@@ -551,8 +551,9 @@ at 3.519 s; the supplied log spells this as `ky timer stop!`.
 
 The `*** On:%d, Off:%d, toggle:%d ***` format belongs to the XIP helper at
 `0x1102ddd8`. Its disassembly increments counters for event values 1 and 2,
-then passes the counters to the UART formatter. The trigger that reaches this
-helper in the reference run is still unknown.
+then passes the counters to the UART formatter. The supplied log associates
+these reports with pressing the relay's local toggle button. The route from
+the button event to this helper remains unresolved in the emulator.
 
 A 1,000,000-instruction standalone run found a runtime data block at
 `0x1fff7f34`: the word `6`, followed by pointers `0x1102ddd9` and
