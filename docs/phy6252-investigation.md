@@ -344,6 +344,15 @@ and why it is unset remain unknown. The same trace shows the dumped ROM's
 them to the output buffer, and returns `PPlus_ERR_UNINITIALIZED` (24). The host
 ROM trap now reproduces that result for a supplied all-zero block.
 
+Follow-up Ghidra analysis of the TS0001 initializer at `0x110204e0` finds it
+sets the separate ROM-dispatch slot at `0x1fff0118`; its nearby pointer
+arithmetic does not write the callback slot at `0x1fff0100`. The saved hardware
+RAM snapshot also contains zero at `0x1fff0100`, and static analysis has not
+identified a firmware store to that slot. This narrows the stall to a callback
+that is absent in the available runtime state, but does not identify who should
+register it or establish whether normal ROM-reset startup supplies it. Do not
+fill the slot with a guessed callback.
+
 An AON snapshot while that ROM is asleep at 600 ms reads `RTCCTL=0x148001`,
 `CMP0=0xba74`, and `RTC count=19493`; the saved compare corresponds to about
 1.46 s at 32.768 kHz. At 1.5 s the count is 48951 and the PC has advanced to
@@ -363,7 +372,9 @@ with this external ROM produced 76 captured frames from the coordinator and
 sample light, but no successful association response for TS0001 and no TS0001
 transmission. Its MCU remained running throughout.
 
-The supplied ROM is usable as executable PHY62xx ROM for direct-image runs:
+The supplied ROM dump (`rom_10000000_20000.bin`, SHA-256
+`430b26391488ad95451310526aaff9ec9df4321897282fc7cd9d1865611517f4`) is usable
+as executable PHY62xx ROM for direct-image runs:
 its bytes are mapped at zero and `0x10000000`, and the Zephyr driver exercises
 its flash and wake paths. A separate experiment started the CPU at the ROM's
 reset vector for cold boot. That run remained alive for 10 seconds but produced
