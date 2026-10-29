@@ -665,6 +665,17 @@ reaches that helper from `0x11038668` and reads the queue descriptor at
 the task that consumes it. The trace still shows no call to `0x1102ddd8`, so
 the local button's hardware `On`/`Off` reports are not yet reproduced.
 
+A four-second replay of `examples/phy6252-ts0001.yaml` with a post-run memory
+snapshot identifies the queue backing store. The image's table at
+`0x1fff83c0` contains base `0x11079000` and size `0x3000`; its descriptor at
+`0x1fffc7cc` advances from offset `0xc78` to `0xc94` while the GPIO8 event is
+posted. The resulting 28-byte record is visible at flash address
+`0x11079c78`: sequence `0x41`, size `0x1c`, task id `0x20`, and an eight-byte
+payload beginning `01 00 00 00`. The payload matches the changed relay-state
+byte. This confirms the local button event is copied into the image's
+flash-backed queue. It does not prove whether that record is still pending or
+which consumer handles task `0x20`; the `0x1102ddd8` callback remains uncalled.
+
 Separately, `0x110219b4` reaches `0x11021f34`, which builds a command for
 cluster `0x0006`. Its lookup in `0x1102e1f4` finds the endpoint-1/cluster-6
 entry in the table at `0x1fffc0f8` and selects descriptor `0x1fffc178` with
