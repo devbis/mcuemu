@@ -673,8 +673,16 @@ posted. The resulting 28-byte record is visible at flash address
 `0x11079c78`: sequence `0x41`, size `0x1c`, task id `0x20`, and an eight-byte
 payload beginning `01 00 00 00`. The payload matches the changed relay-state
 byte. This confirms the local button event is copied into the image's
-flash-backed queue. It does not prove whether that record is still pending or
-which consumer handles task `0x20`; the `0x1102ddd8` callback remains uncalled.
+flash-backed queue.
+
+A 15-second run traces the receive wrapper at `0x1103d1f0`. The startup routine
+`0x11020890` polls event IDs `0x7001`, `0x7002`, and `0x7003` successfully, then
+finds `0x7005` empty. Those four reads all happen around cycle 14.46 million,
+before the GPIO8 press; there are no later receive-wrapper calls during the
+run. At 15 seconds the queue descriptor still has write offset `0xc94`, and
+the callback at `0x1102ddd8` has not run. The observed startup poll therefore
+does not consume the button's later record. The runtime consumer or wakeup
+path for task `0x20` remains unidentified.
 
 Separately, `0x110219b4` reaches `0x11021f34`, which builds a command for
 cluster `0x0006`. Its lookup in `0x1102e1f4` finds the endpoint-1/cluster-6
