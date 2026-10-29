@@ -95,8 +95,11 @@ access.
 `phy6252` also accepts optional `rom:` to execute an external ROM dump instead
 of the default ROM-call traps. Supply exactly 96 KiB, or a 128 KiB dump whose
 last 32 KiB are erased (`0xff`). The dump's interrupt vector table is used as
-provided. ROM dumps remain external test inputs and should only be used when
-their revision matches the firmware under investigation.
+provided. ROM dumps remain external test inputs. The supplied PHY6222 ROM dump
+has been tested with the PB-03F PHY6252 Zephyr image through Zigbee association
+and bidirectional NWK traffic; see
+[`phy6252-investigation.md`](phy6252-investigation.md). Other ROM and firmware
+pairings still need their own validation.
 
 For PHY6252 RF power calibration, `rf_calibration:` optionally supplies four
 raw `kCal` bytes in this order: channel 2 and 66 at `fDev=0`, then channel 2
