@@ -334,6 +334,7 @@ int main() {
     CHECK((radio_irq_status & (1u << 1)) != 0); // PB-03F Zephyr COK alias
     CHECK(static_cast<std::int8_t>(rom_test_chip.read(0x400300e4, 4) >> 24) == -50);
     CHECK((rom_test_chip.read(0x400300e8, 4) >> 24) == 50); // SDK RF RSSI is positive -dBm
+    CHECK(rom_test_chip.read(0x40031054, 4) == (16u << 16)); // eight packet bytes plus two footers
     invoke_radio_rom(0x10bbc); // ll_hw_get_irq_status
     CHECK(rom_test_chip.core().reg(0) == radio_irq_status);
     constexpr std::uint32_t radio_packet = 0x1fff2300;
@@ -363,6 +364,7 @@ int main() {
     CHECK((received_foot0 & 0x00ffffffu) == 2);
     CHECK((received_foot0 >> 24) == 0);
     CHECK((received_foot1 >> 24) == 50);
+    CHECK(rom_test_chip.read(0x40031054, 4) == ((16u << 16) | 16u));
     rom_test_chip.write(0x40031014, 1u << 1, 4); // Zephyr W1C clears the SDK COK alias too
     CHECK(rom_test_chip.read(0x40031010, 4) == 1u); // LIRQ_MD remains pending
     invoke_radio_rom(0x110b0); // ll_hw_rst_rfifo
@@ -379,6 +381,35 @@ int main() {
                                            sizeof received_foot1));
     CHECK(received_packet[0] == 0 && received_length == 0 &&
           received_foot0 == 0 && received_foot1 == 0);
+    CHECK(rom_test_chip.read(0x40031054, 4) == 0);
+
+    invoke_radio_rom(0x10adc);
+    invoke_radio_rom(0x112a4);
+    invoke_radio_rom(0x11420);
+    const std::uint64_t phy_rx_stream_start = rom_test_chip.core().cycles_to_ns(
+        rom_test_chip.core().cycles()) + 1000;
+    const std::uint64_t phy_rx_stream_id = phy_air.transmit(
+        "coordinator", {}, mcuemu::RadioProtocol::Zigbee802154, 11, phy_rx_stream_start,
+        {0x01, 0x00, 0xa5});
+    const auto phy_rx_stream_frame = std::find_if(phy_air.frames().begin(), phy_air.frames().end(),
+        [phy_rx_stream_id](const mcuemu::RadioFrame &frame) { return frame.id == phy_rx_stream_id; });
+    CHECK(phy_rx_stream_frame != phy_air.frames().end());
+    if (phy_rx_stream_frame != phy_air.frames().end()) {
+        const std::uint64_t rx_done = rom_test_chip.core().ns_to_cycles(
+            phy_rx_stream_frame->end_ns + 20000);
+        CHECK(rom_test_chip.run(rx_done + 64).reason == cortexm::StopReason::Deadline);
+    }
+    CHECK(rom_test_chip.read(0x40031054, 4) == (16u << 16));
+    const std::uint32_t rx_word0 = rom_test_chip.read(0x40031c00, 4);
+    const std::uint32_t rx_word1 = rom_test_chip.read(0x40031c00, 4);
+    const std::uint32_t rx_foot0 = rom_test_chip.read(0x40031c00, 4);
+    const std::uint32_t rx_foot1 = rom_test_chip.read(0x40031c00, 4);
+    CHECK(rx_word0 == 0xa5000105u);
+    CHECK(rx_word1 == (static_cast<std::uint32_t>(received_packet[4]) |
+                       (static_cast<std::uint32_t>(received_packet[5]) << 8)));
+    CHECK(rx_foot0 == 2);
+    CHECK(rx_foot1 == (50u << 24));
+    CHECK(rom_test_chip.read(0x40031054, 4) == ((16u << 16) | 16u));
     rom_test_chip.write(0x40031000, 0, 4); // PHY_ABORT stops the receive operation
     CHECK(!rom_test_chip.radio_receiving());
     invoke_radio_rom(0x10adc); // ll_hw_clr_irq

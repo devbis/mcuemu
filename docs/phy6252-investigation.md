@@ -102,6 +102,14 @@ measured ACK starts were 186–220 us after the preceding data PPDU ended.
 Register values and timing come from the experimental Zephyr driver, adapted
 from an unverified PHY6222 implementation; they remain unverified on silicon.
 
+The supplied PHY6222 ROM's `ll_hw_read_rfifo_zb` reads the 11-bit FIFO read
+pointer from `LL+0x54[10:0]` and write pointer from `[26:16]`, then reads each
+word repeatedly from the fixed RX FIFO port at `0x40031c00`; it reads two more
+words for packet footer data after the word-aligned packet. The model exposes
+that streaming port and pointer pair while preserving offset reads for the
+Zephyr driver. Byte-based pointer advancement and the footer defaults are
+inferred from this ROM path and the SDK contract, not measured on silicon.
+
 ## ROM calls and known gaps
 
 Implemented ROM entries include clock setup/query, IRQ critical-section

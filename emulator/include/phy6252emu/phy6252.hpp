@@ -69,6 +69,8 @@ private:
     std::vector<std::uint8_t> tx_fifo_;
     std::array<std::uint8_t, 0x800> rx_fifo_{};
     std::size_t rx_fifo_read_{0};
+    std::size_t rx_fifo_stream_read_{0};
+    std::size_t rx_fifo_stream_size_{0};
     mcuemu::VirtualAir *air_{nullptr};
     std::string radio_node_;
     std::uint64_t radio_tx_end_cycle_{0};

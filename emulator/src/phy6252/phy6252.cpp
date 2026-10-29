@@ -133,10 +133,12 @@ constexpr std::uint32_t AonSleepR0 = 0x4000f0c0;
 constexpr std::uint32_t RadioRfBase = 0x40030000;
 constexpr std::uint32_t RadioRfSettle = RadioRfBase + 0xbc;
 constexpr std::uint32_t RadioLlBase = 0x40031000;
+constexpr std::uint32_t RadioRxFifoStatus = RadioLlBase + 0x54;
 constexpr std::uint32_t RadioTxFifo = 0x40031400;
 constexpr std::uint32_t RadioRxFifo = 0x40031c00;
 constexpr std::uint32_t RadioTxFifoSize = 0x800;
 constexpr std::uint32_t RadioRxFifoSize = 0x800;
+constexpr std::uint32_t RadioFifoPointerMask = 0x7ff;
 constexpr std::uint32_t RadioBasebandMemoryEnd = RadioRxFifo + RadioRxFifoSize;
 constexpr unsigned RadioIrq = 4;
 constexpr std::uint32_t RadioIrqMd = 1u << 0;
@@ -197,7 +199,7 @@ bool phy_ll_register(std::uint32_t offset) {
     switch (offset) {
     case 0x00: case 0x04: case 0x08: case 0x0c: case 0x10: case 0x14:
     case 0x18: case 0x1c: case 0x20: case 0x24: case 0x28: case 0x2c: case 0x34: case 0x38: case 0x40:
-    case 0x60: case 0x68:
+    case 0x54: case 0x60: case 0x68:
         return true;
     default:
         return false;
@@ -478,6 +480,8 @@ void Phy6252::reset() {
     tx_fifo_.clear();
     rx_fifo_.fill(0);
     rx_fifo_read_ = 0;
+    rx_fifo_stream_read_ = 0;
+    rx_fifo_stream_size_ = 0;
     radio_tx_end_cycle_ = 0;
     radio_rx_after_ns_ = 0;
     radio_rx_deadline_cycle_ = 0;
@@ -765,6 +769,10 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                 core_.write_memory(foot1_out, &foot1, sizeof foot1);
             if (valid) {
                 rx_fifo_read_ = fifo_bytes;
+                rx_fifo_stream_read_ = rx_fifo_stream_size_;
+                ll_registers_[RadioRxFifoStatus] =
+                    (static_cast<std::uint32_t>(rx_fifo_stream_size_) << 16) |
+                    static_cast<std::uint32_t>(rx_fifo_stream_read_);
                 core_.set_reg(0, static_cast<std::uint32_t>(fifo_words));
             } else {
                 const std::uint8_t empty_packet = 0;
@@ -796,6 +804,9 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
         } else if (address == 0x110b0) {
             rx_fifo_.fill(0);
             rx_fifo_read_ = 0;
+            rx_fifo_stream_read_ = 0;
+            rx_fifo_stream_size_ = 0;
+            ll_registers_[RadioRxFifoStatus] = 0;
         } else if (address == 0x110e8) {
             tx_fifo_.clear();
         } else if (address == 0x11278 || address == 0x11284) {
@@ -1679,12 +1690,29 @@ std::uint32_t Phy6252::read(std::uint32_t address, unsigned size) {
             return 0;
         }
         std::uint32_t value = 0;
-        for (unsigned i = 0; i < size; ++i) {
-            const std::size_t index = address - RadioRxFifo + i;
-            if (index < rx_fifo_.size()) {
-                value |= static_cast<std::uint32_t>(rx_fifo_[index]) << (8 * i);
-                if (index >= 1 && index <= rx_fifo_[0] && rx_fifo_read_ <= index)
-                    rx_fifo_read_ = index + 1;
+        if (address == RadioRxFifo) {
+            // The SDK ROM repeatedly reads the FIFO data port at one address;
+            // Zephyr also uses offset reads from the mapped FIFO window.
+            for (unsigned i = 0; i < size; ++i) {
+                const std::size_t index = rx_fifo_stream_read_ + i;
+                if (index < rx_fifo_stream_size_ && index < rx_fifo_.size()) {
+                    value |= static_cast<std::uint32_t>(rx_fifo_[index]) << (8 * i);
+                    if (index >= 1 && index <= rx_fifo_[0] && rx_fifo_read_ <= index)
+                        rx_fifo_read_ = index + 1;
+                }
+            }
+            rx_fifo_stream_read_ = std::min(rx_fifo_stream_read_ + size, rx_fifo_stream_size_);
+            ll_registers_[RadioRxFifoStatus] =
+                (static_cast<std::uint32_t>(rx_fifo_stream_size_ & RadioFifoPointerMask) << 16) |
+                static_cast<std::uint32_t>(rx_fifo_stream_read_ & RadioFifoPointerMask);
+        } else {
+            for (unsigned i = 0; i < size; ++i) {
+                const std::size_t index = address - RadioRxFifo + i;
+                if (index < rx_fifo_.size()) {
+                    value |= static_cast<std::uint32_t>(rx_fifo_[index]) << (8 * i);
+                    if (index >= 1 && index <= rx_fifo_[0] && rx_fifo_read_ <= index)
+                        rx_fifo_read_ = index + 1;
+                }
             }
         }
         return value;
@@ -2676,12 +2704,27 @@ void Phy6252::receive_radio_frame(const mcuemu::RadioFrame &frame) {
          frame.end_ns > core_.cycles_to_ns(radio_rx_deadline_cycle_)))
         return;
     rx_fifo_.fill(0);
-    rx_fifo_[0] = static_cast<std::uint8_t>(frame.payload.size() + 2);
+    const std::size_t packet_length = frame.payload.size() + 2;
+    rx_fifo_[0] = static_cast<std::uint8_t>(packet_length);
     std::copy(frame.payload.begin(), frame.payload.end(), rx_fifo_.begin() + 1);
     const std::uint16_t fcs = ieee802154_fcs(frame.payload);
-    rx_fifo_[frame.payload.size() + 1] = static_cast<std::uint8_t>(fcs);
-    rx_fifo_[frame.payload.size() + 2] = static_cast<std::uint8_t>(fcs >> 8);
+    rx_fifo_[packet_length - 1] = static_cast<std::uint8_t>(fcs);
+    rx_fifo_[packet_length] = static_cast<std::uint8_t>(fcs >> 8);
+    const std::size_t packet_words = 1 + (packet_length >> 2);
+    const std::size_t packet_bytes = packet_words * sizeof(std::uint32_t);
+    constexpr std::uint32_t foot0 = 2; // inferred small carrier-frequency offset
+    const std::uint32_t rssi_magnitude = static_cast<std::uint32_t>(
+        std::clamp(-static_cast<int>(frame.rssi_dbm), 0, 127));
+    const std::uint32_t foot1 = rssi_magnitude << 24;
+    for (unsigned byte = 0; byte < 4; ++byte) {
+        rx_fifo_[packet_bytes + byte] = static_cast<std::uint8_t>(foot0 >> (8 * byte));
+        rx_fifo_[packet_bytes + 4 + byte] = static_cast<std::uint8_t>(foot1 >> (8 * byte));
+    }
     rx_fifo_read_ = 0;
+    rx_fifo_stream_read_ = 0;
+    rx_fifo_stream_size_ = packet_bytes + 2 * sizeof(std::uint32_t);
+    ll_registers_[RadioRxFifoStatus] =
+        static_cast<std::uint32_t>(rx_fifo_stream_size_ & RadioFifoPointerMask) << 16;
     radio_rx_rssi_ = static_cast<std::int8_t>(std::clamp(frame.rssi_dbm, -127, 0));
     radio_rx_active_ = false;
     radio_rx_deadline_cycle_ = 0;
