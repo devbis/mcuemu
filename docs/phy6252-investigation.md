@@ -748,6 +748,11 @@ goes low on press and high on release. It still emits no `On/Off` counters.
 Both configured local inputs can therefore change relay state in this image;
 neither replay reaches the registered diagnostic callback.
 
+A separate 15-second offline replay held GPIO8 from 6 s to 10 s. It produced
+the normal key 1 down/up messages and left GPIO2 low after the press, but still
+did not print `On/Off` counters. A longer hold does not explain the missing
+callback.
+
 Rerunning that 15-second scenario after correcting `efuse_read` confirms the
 GPIO path still reaches the firmware: UART reports key 1 down/up and key-level
 transitions, but no relay `On`/`Off` counters. The pcap has 19 coordinator
