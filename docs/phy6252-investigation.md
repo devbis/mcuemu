@@ -746,6 +746,18 @@ the queue-worker notification path. The queue write succeeds, but this enqueue
 does not issue that notification for slot 1. The trace does not establish why
 the slot is already marked or whether this is the only route to the callback.
 
+The ROM/image disassembly clarifies the guard: `0x11038700` calls
+`0x1103d734(slot)` only when both low status bits at `0x1fff8f4c + 0x3888 +
+slot*4 + 2` are clear. The subsequent `0x11037348` path sets bit 0 and clears
+bit 1, consistent with bit 0 marking an active worker and bit 1 a pending
+wakeup. In this button trace slot 1 has value 1, so the worker is considered
+active and the notification is deliberately skipped. The notification helper
+sets bit 1 before calling `0x1103d734`; its follow-up path through
+`0x1103d5b8` and `0x11037348` clears bit 1 and leaves bit 0 set. This matches
+the observed branch but does not explain why the active worker has not
+consumed the newly appended record. Do not clear the status bit in the model:
+the queue worker's lifecycle and scheduler state still need to be identified.
+
 A 15-second run traces the receive wrapper at `0x1103d1f0`. The startup routine
 `0x11020890` polls event IDs `0x7001`, `0x7002`, and `0x7003` successfully, then
 finds `0x7005` empty. Those four reads all happen around cycle 14.46 million,
