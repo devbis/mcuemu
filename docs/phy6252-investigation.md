@@ -276,6 +276,16 @@ reported values still differ: `power report time = 4744` (reference 3288),
 TS0001 relay support until it starts, joins and exchanges Zigbee traffic in a
 captured network scenario.
 
+A PC trace of the first `power report time` calculation shows the image combines
+its stored fields with a byte returned by its RAM-resident helper at
+`0x1fff7b0c`: `3 * 1000 + 4 * (5 - 3) * 218 = 4744`. The helper output is
+`0xda` in this emulator run. The later `fix Report time` path similarly
+computes `5 * 60000 + (6 - 5) * 235 * 114 = 326790`. These values are built
+from image state and helper results, so the UART mismatch does not identify a
+direct AP_TIM clock error; the reason those inputs differ from the supplied
+run remains unknown. Keep the measured timer source model and do not tune it to
+force these application log values to match.
+
 There is also a likely network-identity mismatch in this probe: the TS0001
 startup log prints `0x87DB` in its restored-network fields, while the sampleGW
 data frames carry MAC PAN ID `0xA75C` (wire bytes `5c a7`). The log field is
