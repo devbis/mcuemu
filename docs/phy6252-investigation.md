@@ -185,6 +185,15 @@ include boot-monitor commands such as `uartbin`, `uartrun`, `wrreg`, `clock`,
 and `reset`, but no explicit Zigbee or IEEE 802.15.4 stack names. The lack of
 such strings does not prove that higher layers are absent.
 
+At `0x3fc4`, the dump has a small dispatch wrapper: it saves `r4` and `lr`,
+loads a callback pointer from `0x1fff0118`, and calls it when nonzero. With a
+zero slot it calls `0x3fdc`, the AES-128 encrypt helper already modeled by the
+host ROM. The host trap now reproduces both branches and the wrapper's stack
+epilogues without embedding the dumped instructions. Unit coverage checks the
+AES fallback and a RAM callback. In the saved-state TS0001 run the slot contains
+`0x1fff2671`; its callback now executes and returns instead of faulting at
+`0x3fc4`.
+
 The dump confirms the model's NMI (`0x8481`), HardFault (`0x28f1`), and PendSV
 (`0x84cd`) vector targets. It also has a full interrupt vector table: IRQ4
 points to `0x8871`, whose code dispatches through a callback pointer and falls
@@ -603,6 +612,13 @@ relay's local toggle button; they are not evidence of a remote Zigbee command.
 The emulator recognizes the GPIO8 key press and release, but its application
 path still does not reach the local relay state changes that produce those
 counters.
+
+After adding the `0x3fc4` ROM wrapper, a 12-second run using the hardware's
+full-flash dump and saved NVM reaches both GPIO8 key events and stays running.
+It still has no local relay `On`/`Off` counters. Its 75-frame pcap contains
+transmissions from the coordinator and sampleLight, but none from TS0001. This
+removes the wrapper fault from the trace without changing the button or network
+result.
 
 The key path in the image samples the GPIO state in `0x110242ac`, reports the
 Down/Up transition, and schedules key events (`0x1010` for key 1 down,

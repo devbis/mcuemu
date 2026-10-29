@@ -1327,6 +1327,38 @@ int main() {
     invoke_rom(0x110e8, 0, 0, 0, chip.core().cycles() + 8);
     invoke_rom(0x10cdc, 0, 0, 0, chip.core().cycles() + 8);
     CHECK(chip.core().reg(0) == 1); // ll_hw_get_tr_mode returns SRX selected above
+
+    const std::uint32_t dispatch_slot = 0x1fff0118;
+    const std::uint32_t callback_address = BootImage::RamBase + 0x5300;
+    const std::uint32_t aes_dispatch_input = BootImage::RamBase + 0x3040;
+    const std::uint32_t aes_dispatch_key = BootImage::RamBase + 0x3060;
+    const std::uint32_t aes_dispatch_output = BootImage::RamBase + 0x3080;
+    const std::uint32_t no_dispatch = 0;
+    CHECK(chip.core().write_memory(aes_dispatch_input, aes_input.data(), aes_input.size()));
+    CHECK(chip.core().write_memory(aes_dispatch_key, aes_key.data(), aes_key.size()));
+    CHECK(chip.core().write_memory(dispatch_slot, &no_dispatch, sizeof no_dispatch));
+    const std::uint32_t wrapper_sp = chip.core().reg(13);
+    chip.core().set_reg(4, 0x76543210);
+    invoke_rom(0x3fc4, aes_dispatch_input, aes_dispatch_key, aes_dispatch_output,
+               chip.core().cycles() + 8);
+    CHECK(chip.core().reg(0) == 0);
+    CHECK(chip.core().reg(4) == 0x76543210);
+    CHECK(chip.core().reg(13) == wrapper_sp);
+    CHECK(chip.core().read_memory(aes_dispatch_output, aes_output.data(), aes_output.size()));
+    CHECK(aes_output == aes_expected);
+
+    const std::array<std::uint8_t, 4> callback_code = {0x42, 0x20, 0x70, 0x47};
+    const std::uint32_t callback = callback_address | 1u;
+    CHECK(chip.core().write_memory(callback_address, callback_code.data(), callback_code.size()));
+    CHECK(chip.core().write_memory(dispatch_slot, &callback, sizeof callback));
+    chip.core().set_reg(4, 0x89abcdef);
+    invoke_rom(0x3fc4, 1, 2, 3, chip.core().cycles() + 8);
+    CHECK(chip.core().reg(0) == 0x42);
+    CHECK(chip.core().reg(4) == 0x89abcdef);
+    CHECK(chip.core().reg(13) == wrapper_sp);
+    const std::uint32_t no_callback = 0;
+    CHECK(chip.core().write_memory(dispatch_slot, &no_callback, sizeof no_callback));
+
     chip.reset();
     CHECK((chip.read(0x4000f024, 4) & 1u) != 0);
     chip.core().advance_to(chip.core().cycles() + 16000);

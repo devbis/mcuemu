@@ -877,6 +877,44 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             } else {
                 core_.set_reg(0, 0); // PPlus_SUCCESS
             }
+        } else if (address == 0x3fc4) {
+            // The supplied PHY6222 ROM implements this entry as an indirect
+            // callback wrapper, with the AES routine at 0x3fdc as its fallback.
+            // Keep the wrapper ABI visible instead of copying ROM bytes into
+            // the host-trap image.
+            std::uint32_t dispatch = 0;
+            if (!core_.read_memory(0x1fff0118, &dispatch, sizeof dispatch))
+                return {cortexm::StopReason::Fault,
+                        "invalid PHY6252 ROM dispatch slot at 0x1fff0118"};
+            const std::uint32_t old_sp = core_.reg(13);
+            if (old_sp < 8)
+                return {cortexm::StopReason::Fault,
+                        "invalid stack for PHY6252 ROM dispatch wrapper at 0x3fc4"};
+            const std::array<std::uint32_t, 2> saved = {core_.reg(4), core_.reg(14)};
+            const std::uint32_t new_sp = old_sp - 8;
+            if (!core_.write_memory(new_sp, saved.data(), sizeof saved))
+                return {cortexm::StopReason::Fault,
+                        "unwritable stack for PHY6252 ROM dispatch wrapper at 0x3fc4"};
+            core_.set_reg(13, new_sp);
+            if (dispatch != 0) {
+                core_.set_reg(14, 0x3fd1); // BLX r3 returns to POP at 0x3fd0.
+                core_.set_reg(15, dispatch & ~1u);
+            } else {
+                core_.set_reg(14, 0x3fd7); // BL returns to POP at 0x3fd6.
+                core_.set_reg(15, 0x3fdc);
+            }
+            rom_branch = true;
+        } else if (address == 0x3fd0 || address == 0x3fd6) {
+            // These are the two epilogues of the dumped 0x3fc4 wrapper.
+            std::array<std::uint32_t, 2> saved{};
+            const std::uint32_t stack = core_.reg(13);
+            if (!core_.read_memory(stack, saved.data(), sizeof saved))
+                return {cortexm::StopReason::Fault,
+                        "unreadable stack for PHY6252 ROM dispatch wrapper return"};
+            core_.set_reg(4, saved[0]);
+            core_.set_reg(13, stack + sizeof saved);
+            core_.set_reg(15, saved[1] & ~1u);
+            rom_branch = true;
         } else if (address == 0x3fdc) {
             // SDK ROM symbol LL_ENC_AES128_Encrypt0(input, key, output).
             crypto::Block input{}, key{};
