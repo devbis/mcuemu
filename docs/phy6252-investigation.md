@@ -876,6 +876,11 @@ These ABIs do not match. The firmware's separate event registry at
 The ROM wrapper therefore does not explain the missing diagnostic line, and
 its actual purpose remains unidentified. Do not bridge it to the event
 registry without a captured caller and compatible argument record.
+PC traces of the same external-ROM, no-coordinator button scenario recorded no
+execution at either `0x27e8` or `0x7f1c` during the first press window
+(5.8–6.8 s) or the second (6.8–7.8 s). This rules out that ROM wrapper path for
+the observed GPIO8 presses in this run; it does not identify the application's
+separate callback dispatcher.
 
 A 15-second run traces the receive wrapper at `0x1103d1f0`. The startup routine
 `0x11020890` polls event IDs `0x7001`, `0x7002`, and `0x7003` successfully, then
