@@ -502,6 +502,16 @@ A 1,000,000-instruction standalone run found a runtime data block at
 that its registration data is present in SRAM. The meaning of the word and the
 event path that invokes this callback remain unknown.
 
+Further disassembly of the saved-network startup path shows a generic record
+directory at `0x1fff8f4c + 0x39c`, with 12 entries spaced `0xa4` bytes apart.
+The image reads a 16-bit record type at entry `+4`, a 16-bit payload length at
+`+6`, and a trailer word at `+0x0c + length`. After 30,000,000 instructions,
+entries 9 and 10 have types 4 and 5, payload lengths of 72 bytes, and trailer
+words `6` and `0x36`. The startup path also prints
+`Restored nwk success on reboot,1,0,87DB`. These are useful bounds for further
+NVM analysis, but the record payloads and the meaning of `0x87DB` remain
+unidentified; none can yet be treated as the network PAN, channel or key.
+
 A PC trace of the first `power report time` calculation shows the image combines
 its stored fields with a byte returned by its RAM-resident helper at
 `0x1fff7b0c`: `3 * 1000 + 4 * (5 - 3) * 218 = 4744`. The helper output is
