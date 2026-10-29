@@ -624,6 +624,17 @@ and the stack's later RX state remain unknown. This test used the cleared-NVM
 first-boot image (`network state=0`), unlike the supplied `log.txt`, which
 restores state 12 and includes Tuya reports and relay `On`/`Off` counters.
 
+A separate 12 s run used the saved-state TS0001 image and a coordinator built
+with `DEFAULT_CHANNEL=25`, matching the channel observed during the relay's
+saved-state receive window. The UART again reached `network state=12` and the
+Tuya report setup; the derived values remained `4744`, `39`, and `326790`, and
+the reference relay `On`/`Off` lines were absent. Its pcap has 75 frames:
+sampleLight associated at 9.045 s as `0x30c4`, then exchanged 9 uplink and 7
+downlink NWK data frames with the coordinator. All captured transmitters were
+the coordinator or sampleLight; TS0001 transmitted none. This verifies that a
+joinable network was active on channel 25, but does not establish that its PAN,
+extended PAN, or security state matches the saved TS0001 network.
+
 An LL helper trace of the same-channel first-boot run for 10 s saw 317
 `ll_hw_set_srx` calls and 317 radio triggers: 302 on channel 11 and 15 on
 channel 26. It saw no `STX`, `TRX`, or `RTX` helper calls, no TX FIFO data and
