@@ -1054,6 +1054,12 @@ with the PB-03F Zephyr image using that direct-image path; the Zephyr image join
 and exchanges NWK traffic. For a reproducible YAML setup, see
 `examples/phy6252-zephyr-external-rom.yaml`; it expects local ROM, eFuse and RF
 calibration files under `firmware/`.
+When those local inputs and the sampleGW image are present, CMake registers
+`firmware_phy6252_zephyr_join`. Run it with
+`ctest --test-dir build -R firmware_phy6252_zephyr_join --output-on-failure`;
+it checks the Zephyr boot/join console and successful association plus
+bidirectional NWK traffic in the pcap. The binaries remain external local test
+inputs and are not included in the repository.
 
 `--boot-from-rom` or YAML `boot_from_rom: true` starts at the external ROM's
 reset vector instead. This is an experimental ROM-analysis mode: with the

@@ -342,6 +342,42 @@ if(MCUEMU_BUILD_TESTS)
             "Skipping firmware_zigbee_join: local sampleGW/sampleLight images not found in firmware/")
     endif()
 
+    set(MCUEMU_PHY6252_ZEPHYR_FIRMWARE
+        "${CMAKE_CURRENT_SOURCE_DIR}/firmware/phy6252-zephyr-ed.bin")
+    set(MCUEMU_PHY6252_ROM "${CMAKE_CURRENT_SOURCE_DIR}/firmware/phy6222-rom.bin")
+    set(MCUEMU_PHY6252_EFUSE "${CMAKE_CURRENT_SOURCE_DIR}/firmware/phy6222-efuse.bin")
+    set(MCUEMU_PHY6252_RF_CALIBRATION
+        "${CMAKE_CURRENT_SOURCE_DIR}/firmware/phy6222-rfcal.bin")
+    if(EXISTS "${MCUEMU_PHY6252_ZEPHYR_FIRMWARE}" AND
+       EXISTS "${MCUEMU_PHY6252_ROM}" AND
+       EXISTS "${MCUEMU_PHY6252_EFUSE}" AND
+       EXISTS "${MCUEMU_PHY6252_RF_CALIBRATION}" AND
+       EXISTS "${MCUEMU_SAMPLE_GW_FIRMWARE}")
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            add_test(
+                NAME firmware_phy6252_zephyr_join
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_phy6252_zephyr_join.py"
+                        "$<TARGET_FILE:mcuemu>"
+                        "${MCUEMU_SAMPLE_GW_FIRMWARE}"
+                        "${MCUEMU_PHY6252_ZEPHYR_FIRMWARE}"
+                        "${MCUEMU_PHY6252_ROM}"
+                        "${MCUEMU_PHY6252_EFUSE}"
+                        "${MCUEMU_PHY6252_RF_CALIBRATION}")
+            set_tests_properties(firmware_phy6252_zephyr_join PROPERTIES
+                TIMEOUT 900
+                LABELS "firmware;zigbee;phy6252"
+            )
+        else()
+            message(STATUS
+                "Skipping firmware_phy6252_zephyr_join: Python 3 interpreter not found")
+        endif()
+    else()
+        message(STATUS
+            "Skipping firmware_phy6252_zephyr_join: local PB-03F Zephyr, PHY6222 ROM/calibration or sampleGW inputs not found in firmware/")
+    endif()
+
     set(MCUEMU_ZEPHYR_PM_FIRMWARE
         "${CMAKE_CURRENT_SOURCE_DIR}/firmware/zephyr-pmtest.bin")
     if(EXISTS "${MCUEMU_ZEPHYR_PM_FIRMWARE}")
