@@ -857,13 +857,13 @@ call it after the GPIO8 event.
 The maintainer confirmed that the reference UART log was captured with no
 coordinator and that its `*** On:... Off:... toggle:... ***` lines follow
 operation of the relay's physical toggle button. They belong to the local
-button/state callback path. A 10-second host-ROM run without a coordinator,
-with GPIO8 presses at 6 s and 7 s, prints both `key 1 Down/up` pairs and toggles
-the GPIO2 relay output on each press, but never prints the `On`/`Off` counters.
-The image restores `network state=12` from its saved NVM in this probe; no
-coordinator or shared radio medium is present. This reproduces the physical
-input and output behavior while leaving the application callback gap above
-unresolved.
+button/state callback path. A 65-second host-ROM replay without a coordinator,
+using the saved-state image and GPIO8 presses at 6–6.5 s and 7–7.5 s, prints
+both `key 1 Down/Up` pairs and changes GPIO2 at each press. It restores
+`network state=12`, repeats stack statistics at 30 s and 60 s, but never prints
+the reference `On`/`Off` counters. No radio medium is present. The run therefore
+reproduces the physical input and local relay output while leaving the
+application callback gap above unresolved.
 
 Disassembly of the external ROM's `0x27e8` wrapper initially looked like a
 possible route to that callback: it calls `0x7f1c`, which loads a callback from
