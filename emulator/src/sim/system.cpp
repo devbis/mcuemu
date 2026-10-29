@@ -124,6 +124,14 @@ const McuRegistry &McuRegistry::builtin() {
             if (config.variant || config.clock_hz || config.supply_mv || config.flash_timing)
                 throw std::invalid_argument("phy6252 does not accept variant, clock_hz, supply_mv or flash_timing");
             auto mcu = std::make_unique<Phy6252Mcu>(name);
+            if (config.rom) {
+                std::ifstream input(*config.rom, std::ios::binary);
+                if (!input)
+                    throw std::invalid_argument("cannot open PHY6252 ROM dump: " + *config.rom);
+                const std::vector<std::uint8_t> dump(
+                    (std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+                mcu->chip().load_rom_dump(dump);
+            }
             if (config.efuse) {
                 std::ifstream input(*config.efuse, std::ios::binary);
                 if (!input)

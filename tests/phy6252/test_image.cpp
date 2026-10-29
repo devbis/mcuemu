@@ -52,6 +52,45 @@ int main() {
     CHECK(core.last_instruction_pc() != 0);
     CHECK(core.reg(13) == 0x1fff2000);
 
+    std::vector<std::uint8_t> rom_image(0x18000, 0xff);
+    put(rom_image, 0x50, 0x12345679); // external ROM vectors are preserved
+    rom_image[0x200] = 0x34;
+    rom_image[0x201] = 0x12;
+    Phy6252 dump_rom_chip;
+    dump_rom_chip.load_rom_dump(rom_image);
+    dump_rom_chip.load_firmware(image);
+    dump_rom_chip.reset();
+    std::uint32_t dumped_vector = 0;
+    CHECK(dump_rom_chip.core().read_memory(0x50, &dumped_vector, sizeof dumped_vector));
+    CHECK(dumped_vector == 0x12345679);
+    std::array<std::uint8_t, 2> rom_code{};
+    CHECK(dump_rom_chip.core().read_memory(0x200, rom_code.data(), rom_code.size()));
+    CHECK((rom_code == std::array<std::uint8_t, 2>{0x34, 0x12}));
+    CHECK(dump_rom_chip.core().read_memory(0x10000200, rom_code.data(), rom_code.size()));
+    CHECK((rom_code == std::array<std::uint8_t, 2>{0x34, 0x12}));
+
+    std::vector<std::uint8_t> padded_rom(0x20000, 0xff);
+    std::copy(rom_image.begin(), rom_image.end(), padded_rom.begin());
+    Phy6252 padded_rom_chip;
+    padded_rom_chip.load_rom_dump(padded_rom);
+    bool bad_rom_rejected = false;
+    try {
+        Phy6252 invalid_rom_chip;
+        invalid_rom_chip.load_rom_dump(std::vector<std::uint8_t>(0x100, 0));
+    } catch (const std::invalid_argument &) {
+        bad_rom_rejected = true;
+    }
+    CHECK(bad_rom_rejected);
+    padded_rom.back() = 0;
+    bad_rom_rejected = false;
+    try {
+        Phy6252 invalid_rom_chip;
+        invalid_rom_chip.load_rom_dump(padded_rom);
+    } catch (const std::invalid_argument &) {
+        bad_rom_rejected = true;
+    }
+    CHECK(bad_rom_rejected);
+
     cortexm::Core::Config m0_config;
     m0_config.model = cortexm::Model::M0;
     m0_config.irq_count = 32;

@@ -343,6 +343,22 @@ void Phy6252::load_firmware(const std::vector<std::uint8_t> &image) {
     run_address_ = boot.run_address;
 }
 
+void Phy6252::load_rom_dump(const std::vector<std::uint8_t> &dump) {
+    constexpr std::size_t FullDumpSize = 0x20000;
+    if (run_address_ != 0)
+        throw std::invalid_argument("PHY6252 ROM dump must be loaded before firmware");
+    if (dump.size() != RomSize && dump.size() != FullDumpSize)
+        throw std::invalid_argument("PHY6252 ROM dump must be 96 KiB or 128 KiB");
+    if (dump.size() == FullDumpSize &&
+        !std::all_of(dump.begin() + RomSize, dump.end(),
+                     [](std::uint8_t byte) { return byte == 0xff; }))
+        throw std::invalid_argument("PHY6252 128 KiB ROM dump must have an erased 32 KiB tail");
+    rom_dump_.assign(dump.begin(), dump.begin() + RomSize);
+    std::copy(rom_dump_.begin(), rom_dump_.end(), vector_alias_);
+    std::copy(rom_dump_.begin(), rom_dump_.end(),
+              core_.host_pointer(0x10000000, RomSize));
+}
+
 void Phy6252::load_efuse_dump(const std::vector<std::uint8_t> &dump) {
     constexpr std::size_t BlockSize = 8;
     constexpr std::size_t BlockCount = 4;
@@ -358,21 +374,27 @@ void Phy6252::load_efuse_dump(const std::vector<std::uint8_t> &dump) {
 void Phy6252::reset() {
     if (!run_address_)
         throw std::runtime_error("PHY6252 firmware has not been loaded");
-    std::fill_n(vector_alias_, 0x100, 0);
-    const std::array<std::pair<unsigned, std::uint32_t>, 3> rom_vectors = {{
-        {2, RomNmiHandler}, {3, RomHardFaultHandler}, {14, RomPendSvHandler},
-    }};
-    for (const auto &[index, handler] : rom_vectors)
-        std::memcpy(vector_alias_ + index * sizeof(std::uint32_t), &handler, sizeof handler);
-    const std::array<std::pair<unsigned, std::uint32_t>, 2> irq_vectors = {{
-        {16 + 4, RomLlIrqHandler}, {16 + 16, RomGpioIrqHandler},
-    }};
-    for (const auto &[index, handler] : irq_vectors)
-        std::memcpy(vector_alias_ + index * sizeof(std::uint32_t), &handler, sizeof handler);
-    for (unsigned timer = 0; timer < TimerCount; ++timer) {
-        const std::uint32_t handler = RomTimerIrqDispatch;
-        const unsigned vector = 16 + 20 + timer;
-        std::memcpy(vector_alias_ + vector * sizeof handler, &handler, sizeof handler);
+    if (!rom_dump_.empty()) {
+        std::copy(rom_dump_.begin(), rom_dump_.end(), vector_alias_);
+        std::copy(rom_dump_.begin(), rom_dump_.end(),
+                  core_.host_pointer(0x10000000, RomSize));
+    } else {
+        std::fill_n(vector_alias_, 0x100, 0);
+        const std::array<std::pair<unsigned, std::uint32_t>, 3> rom_vectors = {{
+            {2, RomNmiHandler}, {3, RomHardFaultHandler}, {14, RomPendSvHandler},
+        }};
+        for (const auto &[index, handler] : rom_vectors)
+            std::memcpy(vector_alias_ + index * sizeof(std::uint32_t), &handler, sizeof handler);
+        const std::array<std::pair<unsigned, std::uint32_t>, 2> irq_vectors = {{
+            {16 + 4, RomLlIrqHandler}, {16 + 16, RomGpioIrqHandler},
+        }};
+        for (const auto &[index, handler] : irq_vectors)
+            std::memcpy(vector_alias_ + index * sizeof(std::uint32_t), &handler, sizeof handler);
+        for (unsigned timer = 0; timer < TimerCount; ++timer) {
+            const std::uint32_t handler = RomTimerIrqDispatch;
+            const unsigned vector = 16 + 20 + timer;
+            std::memcpy(vector_alias_ + vector * sizeof handler, &handler, sizeof handler);
+        }
     }
     std::copy(boot_ram_.begin(), boot_ram_.end(), ram_);
     // The board ROM's RF startup calibration runs before the image's reset

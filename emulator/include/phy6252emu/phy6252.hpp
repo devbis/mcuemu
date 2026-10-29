@@ -23,6 +23,8 @@ class Phy6252 final : public cortexm::Bus {
 public:
     Phy6252();
     void load_firmware(const std::vector<std::uint8_t> &image);
+    // Optional external 96 KiB ROM image, or a 128 KiB dump with an erased tail.
+    void load_rom_dump(const std::vector<std::uint8_t> &dump);
     // PHY62xx efuse_read accepts a block number and an eight-byte output buffer.
     // A supplied 32-byte dump contains four blocks in order; no dump means all
     // blocks are unprogrammed because their device-specific contents are unknown.
@@ -48,6 +50,7 @@ private:
     std::uint8_t *flash_, *ram_, *vector_alias_;
     std::uint32_t run_address_{0};
     std::vector<std::uint8_t> boot_ram_;
+    std::vector<std::uint8_t> rom_dump_;
     std::array<std::array<std::uint8_t, 8>, 4> efuse_blocks_{};
     std::array<bool, 4> efuse_block_present_{};
     std::array<bool, 4> efuse_missing_warning_logged_{};

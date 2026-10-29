@@ -164,7 +164,11 @@ switch-helper call, and a later return in the ROM dump. The current shim skips
 those effects. The SDK places this address within its `ble_crc24_gen` symbol
 range, while the TS0001 image calls it as a zero-argument entry. Until the ROM
 revision and the resulting globals are matched to the TS0001 call path, keep
-the warning and do not treat this address as a Zigbee radio API.
+the warning and do not treat this address as a Zigbee radio API. To compare
+runtime behavior, PHY6252 can optionally execute the supplied dump as external
+ROM code using its vector table; the default remains the explicit host-trap
+ROM. This is an experiment path and does not itself establish ROM revision
+compatibility or Zigbee stack support.
 
 The SDK declares `phy_sec_encrypt` and `phy_sec_decrypt` at ROM entries
 `0x15338` and `0x1531c`. It also contains a disabled (`#if 0`) implementation
@@ -470,6 +474,9 @@ with the preceding instruction address. `--dump-memory ADDRESS:COUNT` prints
 bytes from the requested range after the run. UART0 is exposed as `mcu.uart0`.
 If a device eFuse dump is available, pass it with `--efuse DUMP` or the YAML
 `efuse:` option; it must contain exactly four consecutive 8-byte blocks.
+For ROM disassembly comparison, pass the external image with `--rom DUMP` or
+the YAML `rom:` option. It must be 96 KiB or a 128 KiB dump with an erased
+32 KiB tail; the ROM vector table then comes from that file.
 Firmware inputs can be the package beginning at physical flash offset `0x2000`
 or a 512 KiB full flash dump; keep local images outside the repository.
 For the TS0001 capture setup, place the full dump at

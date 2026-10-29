@@ -354,7 +354,7 @@ PartConfig parse_part(const YAML::Node &node, const std::string &base_dir) {
 McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
     require_map(node, "mcu");
     check_keys(node, "mcu",
-               {"id", "model", "variant", "firmware", "efuse", "clock_hz", "supply_mv",
+               {"id", "model", "variant", "firmware", "efuse", "rom", "clock_hz", "supply_mv",
                 "start_at", "radio", "rtt", "flash_timing"});
     McuConfig mcu;
     mcu.line = node.Mark().line + 1;
@@ -406,6 +406,11 @@ McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
         if (mcu.model != "phy6252")
             fail(efuse, "'efuse' is only supported by phy6252");
         mcu.efuse = resolve(scalar(efuse, "'efuse'"));
+    }
+    if (const YAML::Node rom = node["rom"]) {
+        if (mcu.model != "phy6252")
+            fail(rom, "'rom' is only supported by phy6252");
+        mcu.rom = resolve(scalar(rom, "'rom'"));
     }
     if (const YAML::Node clock = node["clock_hz"])
         mcu.clock_hz = config_frequency(clock, "clock_hz");

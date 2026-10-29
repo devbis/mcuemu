@@ -25,6 +25,7 @@ devices:
         variant: F1K       # tlsr8258 only: F512 (default) | F1K
         firmware: fw/a.bin # relative to this file; or a list of flash pieces, see below
         efuse: data/chip.efuse # phy6252 only: optional 32-byte external eFuse dump
+        rom: data/phy6252-rom.bin # phy6252 only: optional 96 KiB ROM or 128 KiB dump
         clock_hz: 48MHz    # 48000000 | 48MHz | 32kHz
         supply_mv: 3300    # tlsr8258 only: supply seen by the ADC's VBAT input (default 3300)
         start_at: 100us    # power-on delay on the world timeline
@@ -87,6 +88,12 @@ For `phy6252`, `efuse:` optionally supplies a raw 32-byte external dump, four
 8-byte blocks in block-number order. The dump is kept outside the repository.
 Without it, `efuse_read` returns the SDK's `PPlus_ERR_UNINITIALIZED` status
 for every block and leaves the caller's buffer unchanged.
+
+`phy6252` also accepts optional `rom:` to execute an external ROM dump instead
+of the default ROM-call traps. Supply exactly 96 KiB, or a 128 KiB dump whose
+last 32 KiB are erased (`0xff`). The dump's interrupt vector table is used as
+provided. ROM dumps remain external test inputs and should only be used when
+their revision matches the firmware under investigation.
 
 ## Inserting devices from files
 

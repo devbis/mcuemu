@@ -96,6 +96,8 @@ void Simulation::check_config(const SystemConfig &config) const {
                 (void)confine_path(image.file);
             if (mcu.efuse)
                 (void)confine_path(*mcu.efuse);
+            if (mcu.rom)
+                (void)confine_path(*mcu.rom);
         }
         for (const PartConfig &part : device.parts)
             if (!part.script.empty())

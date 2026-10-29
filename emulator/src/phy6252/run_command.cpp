@@ -27,6 +27,7 @@ std::uint32_t parse_address(const std::string &value) {
 
 int run_command(int argc, char **argv) {
     std::string firmware;
+    std::optional<std::string> rom_path;
     std::optional<std::string> efuse_path;
     std::uint64_t steps = 0, duration_ns = 0;
     bool trace_stack = false;
@@ -35,6 +36,7 @@ int run_command(int argc, char **argv) {
     for (int i = 2; i < argc; ++i) {
         const std::string option = argv[i];
         if (option == "--firmware" && i + 1 < argc) firmware = argv[++i];
+        else if (option == "--rom" && i + 1 < argc) rom_path = argv[++i];
         else if (option == "--efuse" && i + 1 < argc) efuse_path = argv[++i];
         else if (option == "--model" && i + 1 < argc) ++i;
         else if (option == "--steps" && i + 1 < argc) {
@@ -82,7 +84,7 @@ int run_command(int argc, char **argv) {
             memory_dumps.emplace_back(address, static_cast<std::size_t>(count));
         } else if (option == "--help" || option == "-h") {
             std::cout << "Usage: mcuemu run --model PHY6252 --firmware IMAGE [--steps N] [--for DURATION]\n"
-                         "       [--efuse DUMP]\n"
+                         "       [--rom DUMP] [--efuse DUMP]\n"
                          "       [--trace-pc-range START:END] [--trace-stack]\n"
                          "       [--dump-memory ADDRESS:COUNT]...\n"
                          "--dump-memory prints bytes from the end of the run.\n";
@@ -94,6 +96,14 @@ int run_command(int argc, char **argv) {
     if (!input) throw std::runtime_error("cannot open firmware image: " + firmware);
     std::vector<std::uint8_t> image((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
     Phy6252 chip;
+    if (rom_path) {
+        std::ifstream rom_input(*rom_path, std::ios::binary);
+        if (!rom_input)
+            throw std::runtime_error("cannot open PHY6252 ROM dump: " + *rom_path);
+        const std::vector<std::uint8_t> dump(
+            (std::istreambuf_iterator<char>(rom_input)), std::istreambuf_iterator<char>());
+        chip.load_rom_dump(dump);
+    }
     if (efuse_path) {
         std::ifstream efuse_input(*efuse_path, std::ios::binary);
         if (!efuse_input)

@@ -65,6 +65,7 @@ struct McuConfig {
     std::optional<std::string> variant;
     std::string firmware; // resolved against the YAML file's directory
     std::optional<std::string> efuse; // PHY6252: external 32-byte, four-block dump
+    std::optional<std::string> rom; // PHY6252: external 96 KiB ROM or 128 KiB dump
     // Every image to load; `firmware: path` gives one image at offset 0, a
     // list of {file, offset} places several (bootloader + application).
     std::vector<FirmwareImage> images;

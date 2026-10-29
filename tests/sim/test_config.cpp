@@ -37,6 +37,8 @@ template <typename Fn> std::string error_of(Fn &&fn) {
         fn();
     } catch (const sim::ConfigError &error) {
         return error.what();
+    } catch (const sim::SimulationError &error) {
+        return error.what();
     }
     return {};
 }
@@ -93,6 +95,11 @@ void test_config_parsing() {
         "      - {id: m, model: phy6252, firmware: fw/relay.bin, efuse: data/chip.efuse}\n",
         "/base/dir");
     CHECK(efuse_config.devices[0].mcus[0].efuse == "/base/dir/data/chip.efuse");
+    const sim::SystemConfig rom_config = sim::parse_system_config(
+        "version: 1\ndevices:\n  - id: d\n    mcus:\n"
+        "      - {id: m, model: phy6252, firmware: fw/relay.bin, rom: data/rom.bin}\n",
+        "/base/dir");
+    CHECK(rom_config.devices[0].mcus[0].rom == "/base/dir/data/rom.bin");
 
     CHECK(sim::parse_duration_ns("2.5s") == 2500000000ull);
     CHECK(sim::parse_duration_ns("750ns") == 750u);
@@ -125,6 +132,8 @@ void test_config_errors() {
                    "requires 'firmware'"));
     CHECK(contains(parse(head + "      - {id: m, model: tlsr8258, firmware: f, efuse: e}\n"),
                    "'efuse' is only supported by phy6252"));
+    CHECK(contains(parse(head + "      - {id: m, model: tlsr8258, firmware: f, rom: r}\n"),
+                   "'rom' is only supported by phy6252"));
     CHECK(contains(parse(head + "      - {id: 'a b', model: m, firmware: f}\n"),
                    "may only contain"));
     CHECK(contains(parse(head + "      - {id: m, model: t, firmware: f, start_at: 5}\n"),
@@ -310,6 +319,12 @@ void test_config_include() {
     CHECK(contains(load("../outside.yaml"), "outside the allowed directory"));
     CHECK(contains(load("link.yaml"), "outside the allowed directory"));
     CHECK(contains(load("/etc/passwd"), "outside the allowed directory"));
+    const std::string rom_outside = error_of([&] {
+        sandbox.load(sandbox_head +
+                     "  - id: d\n    mcus:\n"
+                     "      - {id: m, model: phy6252, firmware: fw.bin, rom: ../outside.yaml}\n");
+    });
+    CHECK(contains(rom_outside, "outside the allowed directory"));
 }
 
 } // namespace mcuemu_tests
