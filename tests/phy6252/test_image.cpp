@@ -30,10 +30,73 @@ public:
 private:
     cortexm::Core &core_;
 };
+
+void test_aon_gpio_wakeup() {
+    using namespace phy6252emu;
+    std::vector<std::uint8_t> rom(0x18000, 0xff);
+    put(rom, 0, 0x1fff1800); // initial SP
+    put(rom, 4, 0x00000201); // Thumb reset vector
+    rom[0x200] = 0x02; rom[0x201] = 0x48; // ldr r0, [pc, #8]
+    rom[0x202] = 0x5a; rom[0x203] = 0x21; // movs r1, #0x5a
+    rom[0x204] = 0x01; rom[0x205] = 0x60; // str r1, [r0]
+    rom[0x206] = 0xfe; rom[0x207] = 0xe7; // b .
+    put(rom, 0x20c, BootImage::RamBase + 0x100);
+
+    Phy6252 chip;
+    chip.load_rom_dump(rom);
+    chip.core().reset(0); // initialize the Cortex-M engine before issuing a host MMIO reset
+    chip.set_gpio_input(8, false);
+    chip.set_gpio_input(3, true);
+    chip.write(0x4000f00c, 1u << 12, 4); // GPIO8 falling-edge wake polarity (IOCTL bit 12)
+    chip.write(0x4000f0a0, 1u << 14, 4); // GPIO8's AON pad index is 14
+    chip.write(0x40008038, (1u << 8) | (1u << 3), 4); // AP_GPIO edge mode
+    CHECK(chip.read(0x4000f00c, 4) == (1u << 12));
+    CHECK(chip.read(0x4000f0a0, 4) == (1u << 14));
+    CHECK(chip.read(0x40008038, 4) == ((1u << 8) | (1u << 3)));
+    chip.write(0x4000f004, 0xa5a55a5a, 4); // enter system sleep through external ROM
+    CHECK(chip.run(chip.core().cycles() + 16).reason == cortexm::StopReason::Deadline);
+    CHECK(chip.read(0x4000f00c, 4) == (1u << 12));
+    CHECK(chip.read(0x4000f0a0, 4) == (1u << 14));
+    CHECK(chip.read(0x40008038, 4) == ((1u << 8) | (1u << 3)));
+    CHECK(chip.read(0x4000f0b0, 4) == 0);
+
+    chip.set_gpio_input(8, true); // rising edge does not match GPIO8's falling polarity
+    CHECK(chip.read(0x4000f0b0, 4) == 0);
+    CHECK(chip.run(chip.core().cycles() + 16).reason == cortexm::StopReason::Deadline);
+
+    chip.set_gpio_input(3, false); // masked pad does not wake the sleeping core
+    CHECK(chip.run(chip.core().cycles() + 16).reason == cortexm::StopReason::Deadline);
+    CHECK(chip.read(0x4000f0b0, 4) == 0);
+
+    chip.set_gpio_input(8, false);
+    CHECK(chip.read(0x4000f0b0, 4) == (1u << 14));
+    CHECK(chip.run(chip.core().cycles() + 16).reason == cortexm::StopReason::Deadline);
+    std::uint32_t marker = 0;
+    CHECK(chip.core().read_memory(BootImage::RamBase + 0x100, &marker, sizeof marker));
+    CHECK(marker == 0x5a);
+
+    Phy6252 upper_group_chip;
+    upper_group_chip.load_rom_dump(rom);
+    upper_group_chip.core().reset(0);
+    upper_group_chip.set_gpio_input(20, false);
+    upper_group_chip.write(0x4000f0a4, 1, 4); // logical GPIO20 maps to AON pad 32
+    upper_group_chip.write(0x40008038, 1u << 20, 4);
+    upper_group_chip.write(0x4000f004, 0xa5a55a5a, 4);
+    CHECK(upper_group_chip.run(upper_group_chip.core().cycles() + 16).reason ==
+          cortexm::StopReason::Deadline);
+    upper_group_chip.set_gpio_input(20, true); // default IOCTL polarity is rising
+    CHECK(upper_group_chip.read(0x4000f0b4, 4) == 1);
+    CHECK(upper_group_chip.run(upper_group_chip.core().cycles() + 16).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(upper_group_chip.core().read_memory(BootImage::RamBase + 0x100,
+                                               &marker, sizeof marker));
+    CHECK(marker == 0x5a);
+}
 }
 
 int main() {
     using namespace phy6252emu;
+    test_aon_gpio_wakeup();
     std::vector<std::uint8_t> image(0xe120, 0xff);
     put(image, 0, 2); put(image, 8, 0x1fff1838);
     put(image, 0x100, 0x10100); put(image, 0x104, 12); put(image, 0x108, 0x11010100);
@@ -809,8 +872,8 @@ int main() {
     CHECK(chip.read(0x4000f0c4, 4) == 0x80);
     CHECK(chip.read(0x4000f0c8, 4) == 0x12345678);
     CHECK(chip.read(0x4000f0cc, 4) == 0x87654321);
-    chip.write(0x4000f0a0, 0x12345678, 4); // GPIO0..31 wakeup mask
-    chip.write(0x4000f0a4, 7, 4); // GPIO32..34 wakeup mask
+    chip.write(0x4000f0a0, 0x12345678, 4); // AON pad indices 0..31 wake mask
+    chip.write(0x4000f0a4, 7, 4); // AON pad indices 32..34 wake mask
     CHECK(chip.read(0x4000f0a0, 4) == 0x12345678);
     CHECK(chip.read(0x4000f0a4, 4) == 7);
     CHECK(chip.read(0x4000f0a8, 4) == 0); // captured REG_S11 sleep flag

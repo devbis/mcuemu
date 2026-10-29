@@ -191,6 +191,10 @@ constexpr std::array<std::uint8_t, 23> GpioPullRegister = {
     0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3};
 constexpr std::array<std::uint8_t, 23> GpioPullShift = {
     1, 4, 7, 10, 22, 28, 1, 4, 13, 16, 19, 22, 25, 1, 10, 13, 16, 19, 22, 4, 7, 10, 13};
+// The related SDK's c_gpio_index[] addresses AON wake bits by pad number,
+// which differs from the AP_GPIO's dense logical pin numbering.
+constexpr std::array<std::uint8_t, 23> GpioWakeIndex = {
+    0, 1, 2, 3, 7, 9, 10, 11, 14, 15, 16, 17, 18, 20, 23, 24, 25, 26, 27, 31, 32, 33, 34};
 
 bool phy_rf_register(std::uint32_t offset) {
     switch (offset) {
@@ -2825,6 +2829,19 @@ void Phy6252::set_gpio_input(unsigned pin, bool high) {
         gpio_input_ |= bit;
     else
         gpio_input_ &= ~bit;
+    if (previous != high && system_sleeping_ && (gpio_interrupt_type_ & bit) != 0) {
+        const unsigned wake_index = GpioWakeIndex[pin];
+        const std::uint32_t wake_mask_address = wake_index < 32 ? AonWakeMask0 : AonWakeMask1;
+        const std::uint32_t wake_source_address = wake_index < 32 ? AonWakeSource0 : AonWakeSource1;
+        const std::uint32_t wake_bit = 1u << (wake_index & 31u);
+        const std::uint32_t wake_mask = control_registers_[wake_mask_address];
+        const std::uint32_t ioctl = control_registers_[AonPullBase + GpioPullRegister[pin] * 4];
+        const bool falling_edge = (ioctl & (1u << (GpioPullShift[pin] - 1))) != 0;
+        if ((wake_mask & wake_bit) != 0 && high == !falling_edge) {
+            control_registers_[wake_source_address] |= wake_bit;
+            system_sleep_wake_cycle_ = core_.cycles();
+        }
+    }
     if (previous != high && (gpio_interrupt_type_ & bit) != 0 &&
         high == ((gpio_interrupt_polarity_ & bit) != 0))
         gpio_interrupt_status_ |= bit;

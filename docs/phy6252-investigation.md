@@ -49,13 +49,18 @@ current-count registers are writable, as required by the SDK timer stop path.
 The AON RTC counter advances at 32.768 kHz when `RTCCTL.RUN` is set;
 direct image boot starts it in the state inferred for the skipped ROM board-init
 path. The AON RTC clock-select, control, compare and flag registers are stored,
-but compare events and IRQ generation are not. The four retained AON sleep
+and RTC compare 0 can wake the modeled system-sleep path when both compare-0
+interrupt and event enables are set. AON GPIO wake uses the related SDK's
+`c_gpio_index[]` pad mapping for `REG_S9`/`REG_S10` masks, AP_GPIO edge mode,
+and the IOCTL polarity bit for each pad; a matching edge sets the corresponding
+`GPIO_WAKEUP_SRC` bit and wakes through the external ROM vector. Other AON
+compare IRQ behavior is not modeled. The four retained AON sleep
 words at `0x4000f0c0..0x4000f0cc` are read/write storage, as indicated by the
 SDK's sleep/tracking fields. AON `REG_S11` at `0x4000f0a8` stores the SDK sleep
 flag. With an external ROM, the `0xa5a55a5a` write to `PWRSLP` at `0x4000f004`
-waits for enabled RTC compare 0 and resets through the external ROM vector;
-this wake path is inferred from the related SDK and has not been checked on
-hardware. The watchdog uses the SDK's
+waits for an enabled RTC compare 0 or a configured GPIO wake edge, then resets
+through the external ROM vector. These wake paths are inferred from the related
+SDK and have not been checked on hardware. The watchdog uses the SDK's
 2–256 second timeout selections, feed key and IRQ 10;
 its clock source and reset details are inferred. PCR software reset and clock
 registers, including SW_CLK1 and APB_CLK, retain writes; clock gating and reset
