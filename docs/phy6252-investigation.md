@@ -1017,3 +1017,8 @@ For the TS0001 capture setup, place the full dump at
 `firmware/phy6252-ts0001.bin` and run `examples/phy6252-ts0001.yaml` from a
 scratch working directory. The scenario writes `air.pcap` there and probes
 GPIO8 and GPIO3; inspect both the UART output and the captured frames.
+To replay the supplied no-coordinator button context, run
+`examples/phy6252-ts0001-offline.yaml`; it presses GPIO8 twice and writes only
+the relay GPIO2 transition to `relay.vcd`. The firmware toggles the local relay
+state, but the `On/Off` diagnostic callback seen in the reference UART remains
+unreproduced.
