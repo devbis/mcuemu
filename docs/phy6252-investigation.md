@@ -612,6 +612,15 @@ around the registered `On`/`Off` handler at `0x1102ddd8` shows that it is not
 called during that press; the missing step is after key-event delivery and
 before the local relay state update.
 
+A narrower runtime trace follows both events beyond the timer wrapper. The
+image callback at `0x11032670` decodes the event, prints `keyid`, and calls the
+key dispatcher at `0x11026660`: key 1 down arrives as `(1, 1, 0)` and key 1 up
+as `(1, 0, 2)`. The dispatcher reads its runtime tables and takes different
+branches for the two events, but neither path calls `0x1102ddd8` in this run.
+This confirms that GPIO sampling, debounce, timer delivery, and the generic key
+dispatcher all execute. It does not yet identify why the hardware run proceeds
+to a local relay state change while this emulated run does not.
+
 For a separate first-boot probe, a temporary copy of the TS0001 dump had its
 `0x6000`-byte NVM range at `0x11079000` erased. The image reported
 `Device started for the first time` with network state 0. Holding GPIO8 from
