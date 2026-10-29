@@ -240,6 +240,12 @@ std::uint64_t Cc2530F256Mcu::ns_to_cycles(std::uint64_t ns) const {
     return ns_to_cycles_ceil(ns, clock_hz_);
 }
 
+void Cc2530F256Mcu::stop_oscillator(mcs51emu::Cc2530Oscillator osc, std::uint64_t at_ns) {
+    const std::uint64_t at_cycle =
+        at_ns <= offset_ns_ ? 0 : ns_to_cycles_ceil(at_ns - offset_ns_, clock_hz_);
+    device_.stop_oscillator(osc, at_cycle);
+}
+
 std::uint64_t Cc2530F256Mcu::time_ns() const {
     return offset_ns_ + cycles_to_ns(cycles_, clock_hz_);
 }

@@ -74,6 +74,12 @@ constexpr std::uint8_t MemctrXmap = 0x08;
 constexpr std::uint8_t MemctrXbank = 0x07;
 constexpr std::uint8_t Ien0Ea = 0x80;
 constexpr std::uint8_t ClkconOsc = 0x40;
+constexpr std::uint8_t ClkconOsc32k = 0x80;
+constexpr std::uint8_t CldEn = 0x01;
+// SWRU191F 5.2: maximum clock-loss reset time-outs (0.25 ms and 0.5 ms) in
+// 32 MHz cycles.
+constexpr std::uint64_t CldXoscTimeout = 8000;
+constexpr std::uint64_t Cld32kTimeout = 16000;
 
 // XREGs with modeled content (SWRU191F 12.x chip identification).
 constexpr std::uint16_t XregStart = 0x6000;
@@ -347,7 +353,7 @@ public:
     }
     std::uint64_t lf_now() const override { return c_.lf_now(); }
     std::uint64_t lf_deadline(std::uint64_t lf) const override {
-        if (lf == cc2530::Never || c_.power_mode_ == Cc2530PowerMode::Pm3)
+        if (lf == cc2530::Never || c_.lf_frozen_since_) // PM3 or a stopped 32 kHz clock
             return cc2530::Never;
         const std::uint64_t current = c_.lf_now();
         const std::uint64_t at = c_.engine_cycles();
@@ -645,6 +651,12 @@ void Cc2530F256::power_on_reset() {
     hf_stopped_ = 0;
     lf_stopped_ = 0;
     soc_->flash->time_restarted();
+    lf_frozen_since_.reset();
+    // Model-defined: a power-on reset (a new board, as far as the model
+    // knows) brings back every oscillator stop_oscillator() stopped.
+    osc_stop_at_.fill(UINT64_MAX);
+    osc_stops_applied_ = 0;
+    cld_since_ = 0;
     reset_core(Cc2530ResetCause::PowerOn);
 }
 
@@ -676,8 +688,6 @@ void Cc2530F256::reset_core(Cc2530ResetCause cause) {
         diagnostics_.power_mode_cycles_by_mode[static_cast<unsigned>(power_mode_)] += elapsed;
         if (power_mode_ != Cc2530PowerMode::Idle)
             hf_stopped_ += elapsed;
-        if (power_mode_ == Cc2530PowerMode::Pm3)
-            lf_stopped_ += elapsed;
     }
     power_mode_ = requested_mode_ = Cc2530PowerMode::Active;
     pending_reset_.reset();
@@ -694,6 +704,9 @@ void Cc2530F256::reset_core(Cc2530ResetCause cause) {
     sfr_[SfrTcon] = 0x05; // IT0 = IT1 = 1
     sfr_[SfrFmap] = 0x01;
     sfr_[SfrClkconcmd] = sfr_[SfrClkconsta] = 0xc9;
+    // SWRU191F 5.2: "After a reset, the internal RC oscillators are used";
+    // the 32 kHz domain runs again unless the 32 kHz RCOSC is stopped.
+    refresh_lf_domain(now);
     sfr_[SfrSleepcmd] = 0x04;
     sfr_[SfrSleepsta] = static_cast<std::uint8_t>((reset_cause & 3u) << 3);
     xreg_[XregChipid - XregStart] = ChipidCc2530;
@@ -817,6 +830,7 @@ void Cc2530F256::peripheral_accessed() {
 
 std::uint64_t Cc2530F256::next_deadline() const {
     std::uint64_t deadline = events_.empty() ? UINT64_MAX : events_.front().at;
+    deadline = std::min({deadline, next_oscillator_stop(), clock_loss_deadline()});
     for (const auto &peripheral : peripherals_)
         deadline = std::min(deadline, peripheral->deadline());
     return deadline;
@@ -927,9 +941,14 @@ void Cc2530F256::xdata_write(std::uint16_t address, std::uint8_t value) {
             return;
         }
         if (address == XregCld) {
-            // CLD.EN (bit 0) arms the clock-loss detector; the model never
-            // loses its clock, so the bit is a plain latch.
-            xreg_[address - XregStart] = value & 0x01u;
+            // SWRU191F 5.2: CLD.EN (bit 0) enables the clock-loss detector;
+            // bits 7:1 are reserved and read 0. Monitoring starts at the
+            // write that enables it (clock_loss_deadline()).
+            const bool was_enabled = (xreg_[address - XregStart] & CldEn) != 0;
+            xreg_[address - XregStart] = value & CldEn;
+            if (!was_enabled && (value & CldEn))
+                cld_since_ = engine_cycles();
+            peripheral_accessed();
             return;
         }
         ++diagnostics_.unmodeled_xreg_writes[address];
@@ -973,28 +992,15 @@ void Cc2530F256::sfr_write(std::uint8_t address, std::uint8_t value) {
             enter_power_mode();
         break;
     case SfrClkconcmd: {
-        // The clock switch completes at once; oscillator start-up and
-        // stabilization time are not modeled.
+        const std::uint8_t previous = sfr_[address];
         sfr_[address] = value;
-        std::uint8_t status = value;
-        if (status & ClkconOsc) {
-            // The 16 MHz RC oscillator limits TICKSPD and CLKSPD to 16 MHz.
-            if ((status & 0x38u) == 0)
-                status |= 0x08u;
-            if ((status & 0x07u) == 0)
-                status |= 0x01u;
-        }
-        // SWRU191F 4.4: a TICKSPD faster than the system clock (smaller
-        // divider code than CLKSPD) shows, and runs, at the system clock.
-        if (((status >> 3) & 0x07u) < (status & 0x07u))
-            status = static_cast<std::uint8_t>((status & ~0x38u) | ((status & 0x07u) << 3));
-        const bool changed = status != sfr_[SfrClkconsta];
-        sfr_[SfrClkconsta] = status;
-        if (changed) {
-            for (const auto &peripheral : peripherals_)
-                peripheral->clock_changed();
+        // A new oscillator selection is what the clock-loss detector watches
+        // from now on (clock_loss_deadline()).
+        if ((previous ^ value) & (ClkconOsc32k | ClkconOsc)) {
+            cld_since_ = engine_cycles();
             peripheral_accessed();
         }
+        set_clock_status(clock_status(value, (sfr_[SfrClkconsta] & ClkconOsc) != 0));
         break;
     }
     case SfrClkconsta:
@@ -1110,6 +1116,23 @@ void Cc2530F256::apply_due_events() {
                 due_at = deadline;
             }
         }
+        // Oscillator stops and the clock-loss reset come first at equal times.
+        const std::uint64_t stop_at = next_oscillator_stop();
+        const std::uint64_t loss_at = clock_loss_deadline();
+        const std::uint64_t clock_at = std::min(stop_at, loss_at);
+        if (clock_at <= now && clock_at <= due_at &&
+            (events_.empty() || clock_at <= events_.front().at)) {
+            if (clock_at == stop_at) {
+                for (unsigned osc = 0; osc < osc_stop_at_.size(); ++osc)
+                    if (osc_stop_at_[osc] == stop_at)
+                        osc_stops_applied_ |= static_cast<std::uint8_t>(1u << osc);
+                refresh_lf_domain(stop_at);
+                continue;
+            }
+            // SWRU191F 5.2: a clock-loss detector reset, SLEEPSTA.RST = 11.
+            bus_->request_reset(Cc2530ResetCause::ClockLoss);
+            return;
+        }
         if (!events_.empty() && events_.front().at <= now && events_.front().at <= due_at) {
             const Event event = events_.front();
             events_.erase(events_.begin());
@@ -1146,9 +1169,132 @@ std::uint64_t Cc2530F256::hf_now() const {
 std::uint64_t Cc2530F256::lf_now() const {
     const std::uint64_t now = engine_cycles();
     std::uint64_t stopped = lf_stopped_;
-    if (power_mode_ == Cc2530PowerMode::Pm3)
-        stopped += now - power_mode_since_;
+    if (lf_frozen_since_)
+        stopped += now - *lf_frozen_since_;
     return now - stopped;
+}
+
+// ---- clock loss (stop_oscillator) ----
+//
+// SWRU191F 5.2: with CLD.EN = 1 the 32 MHz XOSC and the 32 kHz clock monitor
+// each other; when one stops, a clock-loss reset (SLEEPSTA.RST = 11) follows
+// "within a certain maximum time-out period": 0.25 ms for the 32 MHz XOSC,
+// 0.5 ms for the 32 kHz clock. The detector stops in PM1/PM2 and restarts
+// when the clocks start again. Model-defined rules where the text is silent:
+// - the reset comes exactly at the maximum time-out after the later of the
+//   stop and the start of monitoring (CLD.EN 0 -> 1, a new oscillator
+//   selection in CLKCONCMD, the wake from PM1-PM3);
+// - the XOSC is watched while CLKCONCMD.OSC selects it ("It is assumed that
+//   the 32-MHz XOSC is selected as system clock source"), the 32 kHz clock is
+//   the source CLKCONSTA.OSC32K selects; the 16 MHz RCOSC is not watched
+//   (the text names only the two XOSC sources and the 32 kHz RCOSC);
+// - PM3 with CLD.EN = 1 is not specified (firmware must disable the
+//   detector first): the detector is treated as stopped, as in PM1/PM2, and
+//   the entry is counted in diagnostics().clock_loss_pm3_entries.
+// Without a reset, a stopped clock has its datasheet consequences: the CPU
+// stalls without its system clock (4.4.2), the sleep timer and the watchdog
+// stop with the 32 kHz clock (4.4.3), and a switch to a stopped oscillator
+// never completes, since the source changes only once it is stable (4.4.2).
+// Model-defined approximation: peripherals clocked by the system clock keep
+// their virtual time while the CPU stalls.
+
+void Cc2530F256::stop_oscillator(Cc2530Oscillator osc, std::uint64_t at_cycle) {
+    const auto index = static_cast<unsigned>(osc);
+    if (index >= osc_stop_at_.size())
+        throw std::out_of_range("unknown CC2530 oscillator");
+    const std::uint64_t at = std::max(at_cycle, engine_cycles());
+    if (at >= osc_stop_at_[index])
+        return; // already stopped (or stopping) earlier
+    osc_stop_at_[index] = at;
+    osc_stops_applied_ &= static_cast<std::uint8_t>(~(1u << index));
+}
+
+bool Cc2530F256::clock_stalled() const { return !sleep_requested_ && cpu_clock_stopped(); }
+
+bool Cc2530F256::oscillator_stopped(Cc2530Oscillator osc, std::uint64_t at) const {
+    return osc_stop_at_[static_cast<unsigned>(osc)] <= at;
+}
+
+bool Cc2530F256::cpu_clock_stopped() const {
+    const Cc2530Oscillator clock = (sfr_[SfrClkconsta] & ClkconOsc) ? Cc2530Oscillator::Rcosc16M
+                                                                     : Cc2530Oscillator::Xosc32M;
+    return oscillator_stopped(clock, engine_cycles());
+}
+
+std::uint64_t Cc2530F256::next_oscillator_stop() const {
+    std::uint64_t next = UINT64_MAX;
+    for (unsigned osc = 0; osc < osc_stop_at_.size(); ++osc)
+        if (!(osc_stops_applied_ & (1u << osc)))
+            next = std::min(next, osc_stop_at_[osc]);
+    return next;
+}
+
+std::uint64_t Cc2530F256::clock_loss_deadline() const {
+    if (!(xreg_[XregCld - XregStart] & CldEn) || power_mode_ == Cc2530PowerMode::Pm1 ||
+        power_mode_ == Cc2530PowerMode::Pm2 || power_mode_ == Cc2530PowerMode::Pm3)
+        return UINT64_MAX;
+    std::uint64_t deadline = UINT64_MAX;
+    const auto watch = [&](Cc2530Oscillator osc, std::uint64_t timeout) {
+        const std::uint64_t stop = osc_stop_at_[static_cast<unsigned>(osc)];
+        if (stop != UINT64_MAX)
+            deadline = std::min(deadline, std::max(stop, cld_since_) + timeout);
+    };
+    if (!(sfr_[SfrClkconcmd] & ClkconOsc))
+        watch(Cc2530Oscillator::Xosc32M, CldXoscTimeout);
+    watch((sfr_[SfrClkconsta] & ClkconOsc32k) ? Cc2530Oscillator::Rcosc32k
+                                              : Cc2530Oscillator::Xosc32k,
+          Cld32kTimeout);
+    return deadline;
+}
+
+std::uint8_t Cc2530F256::clock_status(std::uint8_t command, bool on_rcosc) const {
+    // The clock switch completes at once; oscillator start-up and
+    // stabilization time are not modeled. SWRU191F 4.4.2: the source changes
+    // only once the new one is stable, which a stopped oscillator never is.
+    std::uint8_t status = command;
+    const bool to_rcosc = (command & ClkconOsc) != 0;
+    if (to_rcosc != on_rcosc &&
+        oscillator_stopped(to_rcosc ? Cc2530Oscillator::Rcosc16M : Cc2530Oscillator::Xosc32M,
+                           engine_cycles()))
+        status = static_cast<std::uint8_t>(on_rcosc ? (status | ClkconOsc) : (status & ~ClkconOsc));
+    if (status & ClkconOsc) {
+        // The 16 MHz RC oscillator limits TICKSPD and CLKSPD to 16 MHz.
+        if ((status & 0x38u) == 0)
+            status |= 0x08u;
+        if ((status & 0x07u) == 0)
+            status |= 0x01u;
+    }
+    // SWRU191F 4.4: a TICKSPD faster than the system clock (smaller
+    // divider code than CLKSPD) shows, and runs, at the system clock.
+    if (((status >> 3) & 0x07u) < (status & 0x07u))
+        status = static_cast<std::uint8_t>((status & ~0x38u) | ((status & 0x07u) << 3));
+    return status;
+}
+
+void Cc2530F256::set_clock_status(std::uint8_t status) {
+    const std::uint8_t previous = sfr_[SfrClkconsta];
+    if (status == previous)
+        return;
+    sfr_[SfrClkconsta] = status;
+    if ((previous ^ status) & ClkconOsc32k)
+        refresh_lf_domain(engine_cycles());
+    for (const auto &peripheral : peripherals_)
+        peripheral->clock_changed();
+    peripheral_accessed();
+}
+
+void Cc2530F256::refresh_lf_domain(std::uint64_t at) {
+    // The 32 kHz domain (sleep timer, watchdog, CLK32K) is frozen in PM3 and
+    // while the selected 32 kHz source is stopped (SWRU191F 4.4.3).
+    const Cc2530Oscillator clock = (sfr_[SfrClkconsta] & ClkconOsc32k) ? Cc2530Oscillator::Rcosc32k
+                                                                       : Cc2530Oscillator::Xosc32k;
+    const bool frozen = power_mode_ == Cc2530PowerMode::Pm3 || oscillator_stopped(clock, at);
+    if (frozen && !lf_frozen_since_) {
+        lf_frozen_since_ = at;
+    } else if (!frozen && lf_frozen_since_) {
+        lf_stopped_ += at - *lf_frozen_since_;
+        lf_frozen_since_.reset();
+    }
 }
 
 std::uint64_t Cc2530F256::engine_cycles() const {
@@ -1342,6 +1488,9 @@ void Cc2530F256::settle_power_mode() {
         return;
     power_mode_ = requested_mode_;
     power_mode_since_ = engine_cycles();
+    refresh_lf_domain(power_mode_since_);
+    if (power_mode_ == Cc2530PowerMode::Pm3 && (xreg_[XregCld - XregStart] & CldEn))
+        ++diagnostics_.clock_loss_pm3_entries;
     notify_power_mode(Cc2530PowerMode::Active, power_mode_);
 }
 
@@ -1357,10 +1506,9 @@ void Cc2530F256::wake_from_power_mode() {
         diagnostics_.power_mode_cycles_by_mode[static_cast<unsigned>(from)] += elapsed;
         if (from != Cc2530PowerMode::Idle)
             hf_stopped_ += elapsed;
-        if (from == Cc2530PowerMode::Pm3)
-            lf_stopped_ += elapsed;
     }
     power_mode_ = requested_mode_ = Cc2530PowerMode::Active;
+    refresh_lf_domain(engine_cycles());
     sleep_requested_ = false;
     ++diagnostics_.power_mode_wakes;
     const std::uint8_t inhibit = 1;
@@ -1369,6 +1517,16 @@ void Cc2530F256::wake_from_power_mode() {
                 "arm the post-wake instruction");
     if (from != Cc2530PowerMode::Active)
         notify_power_mode(from, Cc2530PowerMode::Active);
+    if (from == Cc2530PowerMode::Pm1 || from == Cc2530PowerMode::Pm2 ||
+        from == Cc2530PowerMode::Pm3) {
+        // SWRU191F 5.2: the detector stopped in PM1/PM2 restarts "when the
+        // clocks start up again". 4.1: the chip wakes on the 16 MHz RCOSC
+        // and changes to the XOSC once it is stable; a stopped XOSC never
+        // is, so CLKCONSTA.OSC stays 1. Without stopped oscillators the
+        // status equals the commanded one, as before the power mode.
+        cld_since_ = engine_cycles();
+        set_clock_status(clock_status(sfr_[SfrClkconcmd], true));
+    }
 }
 
 void Cc2530F256::request_stop(std::string error) {
@@ -1389,7 +1547,8 @@ bool Cc2530F256::idle_forever() const {
     else if ((opcode & 0x1fu) == 0x01u) // AJMP addr11
         self_loop = ((((at + 2) & 0xf800u) | ((opcode & 0xe0u) << 3) |
                       read_code(static_cast<std::uint16_t>(at + 1))) & 0xffffu) == at;
-    if (!self_loop || !events_.empty() || pending_reset_ || stall_until_ > engine_cycles())
+    if (!self_loop || !events_.empty() || pending_reset_ || stall_until_ > engine_cycles() ||
+        clock_loss_deadline() != UINT64_MAX)
         return false;
     for (const auto &peripheral : peripherals_)
         if (peripheral->may_interrupt())
@@ -1398,7 +1557,7 @@ bool Cc2530F256::idle_forever() const {
 }
 
 bool Cc2530F256::may_wake() const {
-    if (!events_.empty() || pending_reset_)
+    if (!events_.empty() || pending_reset_ || clock_loss_deadline() != UINT64_MAX)
         return true;
     for (const auto &peripheral : peripherals_)
         if (peripheral->may_interrupt())
@@ -1421,7 +1580,7 @@ void Cc2530F256::code_hook(uc_struct *opaque_uc, std::uint64_t address, std::uin
     // instruction or by a peripheral serviced at this boundary takes effect
     // before this instruction; run() handles it.
     if (self->pending_reset_ || self->sleep_requested_ || !self->stop_error_.empty() ||
-        self->stall_until_ > self->engine_cycles()) {
+        self->stall_until_ > self->engine_cycles() || self->cpu_clock_stopped()) {
         uc_emu_stop(engine);
         return;
     }
@@ -1536,6 +1695,18 @@ Cc2530RunResult Cc2530F256::run(std::size_t instruction_limit, std::uint64_t cyc
             idled = true;
             continue;
         }
+        if (cpu_clock_stopped()) {
+            // Model-defined (stop_oscillator): without its system clock the
+            // CPU executes nothing and takes no interrupt; time advances to
+            // the next event, which may be a clock-loss or watchdog reset.
+            const std::uint64_t until = std::min(cycle_limit, next_deadline());
+            if (until == UINT64_MAX || until <= cycles)
+                break; // stalled at the limit, or for good
+            diagnostics_.clock_stall_cycles += until - cycles;
+            check_error(uc_reg_write(engine, UC_MCS51_REG_CYCLES, &until), "advance stall time");
+            idled = true;
+            continue;
+        }
         if (cycles >= cycle_limit && (result.instructions != 0 || idled))
             break;
         std::uint16_t pc = 0;
@@ -1585,7 +1756,7 @@ Cc2530RunResult Cc2530F256::run(std::size_t instruction_limit, std::uint64_t cyc
         if (error != UC_ERR_OK || !stop_error_.empty())
             break;
         if (executed == result.instructions && !break_hit_ && !sleep_requested_ &&
-            !pending_reset_ && stall_until_ <= engine_cycles()) {
+            !pending_reset_ && stall_until_ <= engine_cycles() && !cpu_clock_stopped()) {
             error = UC_ERR_EXCEPTION; // no progress
             break;
         }
