@@ -134,8 +134,9 @@ modes and peripheral endpoints remain unimplemented.
 Implemented ROM entries include clock setup/query, IRQ critical-section
 helpers, eFuse read, AES-128 block encryption, OSAL heap and memory functions,
 `log_printf`, the ARM runtime memory/string functions,
-`__ARM_common_switch8`, `spif_config`, `spif_cmd`, `spif_rddata`,
-`spif_write`, `spif_write_dma`, sector erase, `set_timer`, and `clear_timer`.
+`__ARM_common_switch8`, `LL_InitConnectContext`, `spif_config`, `spif_cmd`,
+`spif_rddata`, `spif_write`, `spif_write_dma`, sector erase, `set_timer`, and
+`clear_timer`.
 `clear_timer` is modeled with the SDK's `hal_timer_stop_counter()` sequence.
 Both flash write calls share the SDK's `(address, RAM source, byte count)`
 contract and program flash with NOR 1-to-0 semantics. SPIF command completion
@@ -158,14 +159,22 @@ another block 1 call uses `r2=0x60` and `r3=0x1fff2eb9`. A block 3 call uses
 caller state, not additional arguments: the related PHY6222 SDK declares the
 function as `efuse_read(block, uint32_t *buf)`.
 
-Two calls are deliberately visible limitations. The image reaches unexported
-ROM entry `0xa2e0`, inside the SDK symbol range for `ble_crc24_gen`; the SDK
-package has no body or contract for this entry, so the current return-only
-approximation logs a warning. The external ROM dump discussed below contains
-code at this address, but its state changes and version match have not been
-confirmed against the TS0001 image. `LL_InitConnectContext` returns success for
-the unused BLE context and logs that BLE connection state is not modeled.
-Neither behavior establishes BLE or Zigbee stack compatibility.
+`LL_InitConnectContext` at `0x5044` is modeled from the supplied PHY6222 ROM
+disassembly. It accepts up to eight context objects, clears `0x284` bytes per
+object, and initializes pointer fields at offsets `0x16c`, `0x18c`, `0x1ac`,
+and `0x1b0`; its globals begin at `0x1fff0914`. The two stack arguments select
+the observed `0x30` or `0x10c` pointer stride, while other modes use incoming
+`r5 + 6`. Invalid counts or memory ranges return `LL_STATUS_ERROR_BAD_PARAMETER`
+(`0x12`). The TS0001 image reaches this routine during startup. This host
+implementation reproduces its context setup only; it does not add BLE radio or
+connection behavior.
+
+The image also reaches unexported ROM entry `0xa2e0`, inside the SDK symbol
+range for `ble_crc24_gen`. The SDK package has no body or contract for this
+entry, so the current return-only approximation logs a warning. Although the
+supplied ROM dump contains code at this address, its state changes and version
+match have not been confirmed against the TS0001 image. Neither ROM entry
+establishes Zigbee stack compatibility.
 
 ### External ROM dump analysis
 
@@ -815,13 +824,16 @@ counter labels in the supplied UART log and confirms the absent lines are
 caused by this handler not running; it does not reveal which dispatcher should
 call it after the GPIO8 event.
 
-The maintainer confirmed that the `*** On:... Off:... toggle:... ***` lines in
-the reference UART log follow operation of the relay's physical toggle button.
-They belong to the local button/state callback path. A 10-second host-ROM run
-with GPIO8 presses at 6 s and 7 s prints both `key 1 Down/up` pairs and toggles
+The maintainer confirmed that the reference UART log was captured with no
+coordinator and that its `*** On:... Off:... toggle:... ***` lines follow
+operation of the relay's physical toggle button. They belong to the local
+button/state callback path. A 10-second host-ROM run without a coordinator,
+with GPIO8 presses at 6 s and 7 s, prints both `key 1 Down/up` pairs and toggles
 the GPIO2 relay output on each press, but never prints the `On`/`Off` counters.
-This reproduces the physical input and output behavior while leaving the
-application callback gap above unresolved.
+The image restores `network state=12` from its saved NVM in this probe; no
+coordinator or shared radio medium is present. This reproduces the physical
+input and output behavior while leaving the application callback gap above
+unresolved.
 
 A 15-second run traces the receive wrapper at `0x1103d1f0`. The startup routine
 `0x11020890` polls event IDs `0x7001`, `0x7002`, and `0x7003` successfully, then

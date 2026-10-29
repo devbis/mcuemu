@@ -153,6 +153,7 @@ private:
     void rom_log_printf();
     std::uint32_t heap_allocate(std::uint32_t size);
     void heap_release(std::uint32_t address);
+    void rom_ll_init_connect_context();
     void dma_copy_channel0();
     void dma_copy_channel3();
     void watchdog_restart();

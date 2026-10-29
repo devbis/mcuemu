@@ -916,9 +916,74 @@ int main() {
     CHECK(chip.core().reg(0) == 0 && chip.core().interrupts_masked());
     invoke_rom(0xa99c, 0, 0, 0, 527);
     CHECK(!chip.core().interrupts_masked());
-    invoke_rom(0x5044, BootImage::RamBase + 0x4000,
-               BootImage::RamBase + 0x4200, 1, 528);
-    CHECK(chip.core().reg(0) == 0);
+    Phy6252 context_chip;
+    context_chip.load_firmware(image);
+    context_chip.reset();
+    CHECK(context_chip.run(100).reason == cortexm::StopReason::Deadline);
+    constexpr std::uint32_t context_buffer = BootImage::RamBase + 0x4000;
+    constexpr std::uint32_t table_base = BootImage::RamBase + 0x4200;
+    constexpr std::uint32_t context_stack = BootImage::RamBase + 0xef00;
+    constexpr std::uint32_t context_state = 0x1fff0914;
+    std::vector<std::uint8_t> context_bytes(0x284, 0xaa);
+    const auto invoke_context = [&context_chip, context_buffer, table_base, context_stack](
+        std::uint32_t context_count, std::uint32_t slot_count,
+        std::array<std::uint32_t, 2> stack_args) {
+        CHECK(context_chip.core().write_memory(context_stack, stack_args.data(),
+                                                sizeof stack_args));
+        context_chip.core().set_reg(0, context_buffer);
+        context_chip.core().set_reg(1, table_base);
+        context_chip.core().set_reg(2, context_count);
+        context_chip.core().set_reg(3, slot_count);
+        context_chip.core().set_reg(13, context_stack);
+        context_chip.core().set_reg(14, 0x11010109);
+        context_chip.core().set_reg(15, 0x5044);
+        const auto result = context_chip.run(context_chip.core().cycles() + 64);
+        CHECK(result.reason == cortexm::StopReason::Deadline);
+    };
+    CHECK(context_chip.core().write_memory(context_buffer, context_bytes.data(),
+                                            context_bytes.size()));
+    invoke_context(1, 2, {0, 0});
+    CHECK(context_chip.core().reg(0) == 0);
+    std::vector<std::uint8_t> expected_context(0x284, 0);
+    put(expected_context, 0x16c, table_base);
+    put(expected_context, 0x170, table_base + 0x30);
+    put(expected_context, 0x1ac, table_base + 0x60);
+    put(expected_context, 0x1b0, table_base + 0x90);
+    put(expected_context, 0x1b4, table_base + 0xc0);
+    CHECK(context_chip.core().read_memory(context_buffer, context_bytes.data(),
+                                           context_bytes.size()));
+    CHECK(context_bytes == expected_context);
+    std::array<std::uint8_t, 4> context_state_bytes{};
+    std::uint32_t context_buffer_pointer = 0;
+    CHECK(context_chip.core().read_memory(context_state, context_state_bytes.data(),
+                                           context_state_bytes.size()));
+    CHECK(context_state_bytes == (std::array<std::uint8_t, 4>{1, 2, 0, 0}));
+    CHECK(context_chip.core().read_memory(context_state + 0x20, &context_buffer_pointer,
+                                           sizeof context_buffer_pointer));
+    CHECK(context_buffer_pointer == context_buffer);
+
+    context_bytes.assign(context_bytes.size(), 0xaa);
+    CHECK(context_chip.core().write_memory(context_buffer, context_bytes.data(),
+                                            context_bytes.size()));
+    invoke_context(1, 1, {1, 1});
+    CHECK(context_chip.core().reg(0) == 0);
+    expected_context.assign(expected_context.size(), 0);
+    put(expected_context, 0x16c, table_base);
+    put(expected_context, 0x18c, table_base + 0x10c);
+    put(expected_context, 0x1ac, table_base + 0x218);
+    put(expected_context, 0x1b0, table_base + 0x324);
+    CHECK(context_chip.core().read_memory(context_buffer, context_bytes.data(),
+                                           context_bytes.size()));
+    CHECK(context_bytes == expected_context);
+
+    context_bytes.assign(context_bytes.size(), 0xaa);
+    CHECK(context_chip.core().write_memory(context_buffer, context_bytes.data(),
+                                            context_bytes.size()));
+    invoke_context(9, 1, {0, 0});
+    CHECK(context_chip.core().reg(0) == 0x12);
+    CHECK(context_chip.core().read_memory(context_buffer, context_bytes.data(),
+                                           context_bytes.size()));
+    CHECK(context_bytes.front() == 0xaa);
     const std::uint32_t heap_start = BootImage::RamBase + 0x4000;
     invoke_rom(0x14cb4, heap_start, 0x100, 0, 530);
     CHECK(chip.core().reg(0) == 0);

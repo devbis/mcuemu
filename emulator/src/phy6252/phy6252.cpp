@@ -1083,21 +1083,7 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                 }
             }
         } else if (address == 0x5044) {
-            // SDK LL_InitConnectContext is a BLE connection initializer. The
-            // TS0001 app calls it before using its separate Zigbee MAC path;
-            // the supplied model does not implement BLE connection state.
-            std::uint8_t byte = 0;
-            if (!core_.read_memory(core_.reg(0), &byte, 1) ||
-                !core_.read_memory(core_.reg(1), &byte, 1)) {
-                core_.set_reg(0, static_cast<std::uint32_t>(-22));
-            } else {
-                if (!ll_context_warning_logged_) {
-                    std::fprintf(stderr,
-                                 "PHY6252: LL_InitConnectContext reached; BLE connection state is not modeled\n");
-                    ll_context_warning_logged_ = true;
-                }
-                core_.set_reg(0, 0); // LL_STATUS_SUCCESS for unused BLE context setup.
-            }
+            rom_ll_init_connect_context();
         } else if (address == 0x5e04) {
             // SDK LL_Rand(buffer, length) accepts lengths from 1 to 255 and
             // returns an LL status. Use a deterministic PRNG for repeatable
@@ -1675,6 +1661,97 @@ void Phy6252::heap_release(std::uint32_t address) {
         free_heap_blocks_.erase(next);
     }
     free_heap_blocks_.emplace(begin, size);
+}
+
+void Phy6252::rom_ll_init_connect_context() {
+    constexpr std::uint32_t ContextSize = 0x284;
+    constexpr std::uint32_t ContextSlots = 8;
+    constexpr std::uint32_t ContextState = 0x1fff0914;
+
+    const std::uint32_t context_buffer = core_.reg(0);
+    const std::uint32_t table_base = core_.reg(1);
+    const std::uint32_t context_count = core_.reg(2);
+    const std::uint32_t slot_count = core_.reg(3);
+    std::uint32_t extra_count = 0;
+    std::uint32_t stride_mode = 0;
+    const std::uint32_t stack = core_.reg(13);
+    const bool have_stack_args = stack <= std::numeric_limits<std::uint32_t>::max() - 4 &&
+        core_.read_memory(stack, &extra_count, sizeof extra_count) &&
+        core_.read_memory(stack + 4, &stride_mode, sizeof stride_mode);
+    const std::uint64_t context_bytes = static_cast<std::uint64_t>(context_count) * ContextSize;
+    const std::uint64_t ram_end = static_cast<std::uint64_t>(BootImage::RamBase) +
+        BootImage::RamSize;
+    const auto in_ram = [](std::uint32_t address, std::uint64_t size) {
+        return address >= BootImage::RamBase &&
+            static_cast<std::uint64_t>(address) + size <= ram_end;
+    };
+
+    if (!have_stack_args || context_count > ContextSlots || slot_count > ContextSlots ||
+        extra_count > ContextSlots || context_buffer == 0 || table_base == 0 ||
+        !in_ram(context_buffer, context_bytes) || !in_ram(ContextState, 0x24)) {
+        core_.set_reg(0, 0x12); // LL_STATUS_ERROR_BAD_PARAMETER
+        return;
+    }
+
+    std::uint32_t stride = stride_mode == 0 ? 0x2a :
+        stride_mode == 1 ? 0x106 : core_.reg(5);
+    stride += 6;
+
+    const std::array<std::uint8_t, 4> state = {
+        static_cast<std::uint8_t>(context_count),
+        static_cast<std::uint8_t>(slot_count),
+        static_cast<std::uint8_t>(extra_count),
+        static_cast<std::uint8_t>(stride_mode)};
+    const bool state_written = core_.write_memory(ContextState, state.data(), state.size()) &&
+        core_.write_memory(ContextState + 0x20, &context_buffer, sizeof context_buffer);
+    std::vector<std::uint8_t> zero_contexts(static_cast<std::size_t>(context_bytes), 0);
+    const bool contexts_cleared = context_bytes == 0 ||
+        core_.write_memory(context_buffer, zero_contexts.data(), zero_contexts.size());
+    if (!state_written || !contexts_cleared) {
+        core_.set_reg(0, 0x12);
+        return;
+    }
+
+    std::uint32_t pointer = table_base;
+    const auto write_pointer = [this](std::uint32_t address, std::uint32_t value) {
+        return core_.write_memory(address, &value, sizeof value);
+    };
+    for (std::uint32_t context = 0; context < context_count; ++context) {
+        const std::uint32_t object = context_buffer + context * ContextSize;
+        for (std::uint32_t slot = 0; slot < slot_count; ++slot) {
+            if (!write_pointer(object + 0x16c + slot * 4, pointer)) {
+                core_.set_reg(0, 0x12);
+                return;
+            }
+            pointer += stride;
+        }
+        for (std::uint32_t slot = 0; slot < extra_count; ++slot) {
+            if (!write_pointer(object + 0x18c + slot * 4, pointer)) {
+                core_.set_reg(0, 0x12);
+                return;
+            }
+            pointer += stride;
+        }
+        if (!write_pointer(object + 0x1ac, pointer)) {
+            core_.set_reg(0, 0x12);
+            return;
+        }
+        pointer += stride;
+        for (std::uint32_t slot = 0; slot < slot_count; ++slot) {
+            if (!write_pointer(object + 0x1b0 + slot * 4, pointer)) {
+                core_.set_reg(0, 0x12);
+                return;
+            }
+            pointer += stride;
+        }
+    }
+
+    if (!ll_context_warning_logged_) {
+        std::fprintf(stderr,
+                     "PHY6252: LL_InitConnectContext uses the observed PHY6222 context layout; BLE over-air state is not modeled\n");
+        ll_context_warning_logged_ = true;
+    }
+    core_.set_reg(0, 0); // LL_STATUS_SUCCESS
 }
 
 void Phy6252::dma_copy_channel3() {
