@@ -15,6 +15,7 @@ enum class Drive {
     High,     // strong
     PullDown, // weak
     PullUp,   // weak
+    PullUpStrong, // strong pull resistor; still loses to an actively driven output
 };
 
 enum class Level {

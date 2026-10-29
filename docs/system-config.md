@@ -298,8 +298,10 @@ behavior is inferred from the Zephyr driver and is not hardware-verified.
 - Pads follow the GPIO OUT/OEN registers: OEN bit 0 drives OUT, 1 releases the
   pad. The line level is read back through the GPIO input register; an
   undriven line with no pull reads as high, like an unwired input.
-- An open-drain net treats a `High` drive as released (wired-AND). A pull is a
-  weak driver that loses against any strong one.
+- An open-drain net treats a `High` drive as released (wired-AND). An explicit
+  board-level pull beats a conflicting on-chip weak pull, while a driven GPIO
+  output still overrides it. The PHY62xx strong pull-up is modeled separately
+  from its weak pull-up.
 - A UART link moves bytes the transmitting UART has finished sending to the
   other side's RX FIFO after `latency`; bytes wait while the FIFO is full.
   `baud` is accepted but the wire timing comes from each chip model.

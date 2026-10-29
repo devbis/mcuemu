@@ -16,7 +16,7 @@
 
 namespace phy6252emu {
 
-enum class GpioDrive { HiZ, Low, High, PullUp, PullDown };
+enum class GpioDrive { HiZ, Low, High, PullUp, PullUpStrong, PullDown };
 
 // Initial PB-03F model. Peripheral coverage is limited to observed Zephyr paths.
 class Phy6252 final : public cortexm::Bus {

@@ -10,6 +10,7 @@ Drive to_drive(phy6252emu::GpioDrive drive) {
     case phy6252emu::GpioDrive::Low: return Drive::Low;
     case phy6252emu::GpioDrive::High: return Drive::High;
     case phy6252emu::GpioDrive::PullUp: return Drive::PullUp;
+    case phy6252emu::GpioDrive::PullUpStrong: return Drive::PullUpStrong;
     case phy6252emu::GpioDrive::PullDown: return Drive::PullDown;
     default: return Drive::HiZ;
     }

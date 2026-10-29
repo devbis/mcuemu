@@ -736,6 +736,12 @@ short key1 press on GPIO8 and key-level transitions on GPIO3. It does not print
 the reference relay `On`/`Off` reports, and the paired pcap remains identical
 to the gateway-only capture.
 
+The firmware also samples GPIO3 during startup (`GPIO:3,3` followed by
+`High level` in the hardware log). This line is the second key input and must
+idle high. The offline replay now gives GPIO3 an explicit board pull-up, which
+reproduces that diagnostic; leaving the pad unconnected made the modeled input
+read low even though GPIO8 was biased correctly.
+
 Rerunning that 15-second scenario after correcting `efuse_read` confirms the
 GPIO path still reaches the firmware: UART reports key 1 down/up and key-level
 transitions, but no relay `On`/`Off` counters. The pcap has 19 coordinator
@@ -1026,6 +1032,7 @@ scratch working directory. The scenario writes `air.pcap` there and probes
 GPIO8 and GPIO3; inspect both the UART output and the captured frames.
 To replay the supplied no-coordinator button context, run
 `examples/phy6252-ts0001-offline.yaml`; it presses GPIO8 twice and writes only
-the relay GPIO2 transition to `relay.vcd`. The firmware toggles the local relay
-state, but the `On/Off` diagnostic callback seen in the reference UART remains
-unreproduced.
+the relay GPIO2 transition to `relay.vcd`. The scenario keeps GPIO3, the
+firmware's second key input, pulled high at idle. The firmware toggles the local
+relay state, but the `On/Off` diagnostic callback seen in the reference UART
+remains unreproduced.

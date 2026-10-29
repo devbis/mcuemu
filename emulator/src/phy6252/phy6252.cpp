@@ -2943,6 +2943,8 @@ GpioDrive Phy6252::gpio_drive(unsigned pin) const noexcept {
     const auto it = control_registers_.find(pull_address);
     const std::uint32_t pull_value = it == control_registers_.end() ? 0 : it->second;
     const std::uint32_t pull = (pull_value >> GpioPullShift[pin]) & 3u;
+    if (pull == 1)
+        return GpioDrive::PullUpStrong;
     if (pull == 2)
         return GpioDrive::PullUp;
     if (pull == 3)

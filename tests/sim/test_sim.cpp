@@ -75,6 +75,15 @@ void test_net_push_pull_resolution() {
     CHECK(net.level() == sim::Level::High);
     b.set_drive(sim::Drive::Low, 50);
     CHECK(net.level() == sim::Level::Low);
+
+    // The board's explicit resistor dominates a conflicting weak pad pull.
+    sim::Net gpio("gpio");
+    gpio.set_pull(sim::Drive::PullUp);
+    sim::Pin &pad = gpio.attach("pad");
+    pad.set_drive(sim::Drive::PullDown, 60);
+    CHECK(gpio.level() == sim::Level::High);
+    pad.set_drive(sim::Drive::Low, 70);
+    CHECK(gpio.level() == sim::Level::Low);
 }
 
 void test_net_open_drain_is_wired_and() {
@@ -208,6 +217,9 @@ void test_phy6252_pads_follow_nets() {
     world.connect(mcu, "GPIO0", pull_net);
     mcu.chip().write(0x4000f008, 2u << 1, 4);
     CHECK(mcu.chip().gpio_drive(0) == phy6252emu::GpioDrive::PullUp);
+    CHECK(pull_net.level() == sim::Level::High);
+    mcu.chip().write(0x4000f008, 1u << 1, 4); // SDK GPIO_PULL_UP_S
+    CHECK(mcu.chip().gpio_drive(0) == phy6252emu::GpioDrive::PullUpStrong);
     CHECK(pull_net.level() == sim::Level::High);
 
     bool unknown = false;

@@ -34,7 +34,7 @@ Pin &Net::attach(std::string owner) {
 }
 
 void Net::resolve(std::uint64_t time_ns) {
-    bool strong_low = false, strong_high = false;
+    bool strong_low = false, strong_high = false, strong_pull_up = false;
     bool weak_low = pull_ == Drive::PullDown, weak_high = pull_ == Drive::PullUp;
     std::optional<std::uint32_t> analog;
     for (const auto &pin : pins_) {
@@ -46,6 +46,7 @@ void Net::resolve(std::uint64_t time_ns) {
         case Drive::High: strong_high = true; break;
         case Drive::PullDown: weak_low = true; break;
         case Drive::PullUp: weak_high = true; break;
+        case Drive::PullUpStrong: strong_pull_up = true; break;
         case Drive::HiZ: break;
         }
         if (pin->analog_mv())
@@ -61,6 +62,14 @@ void Net::resolve(std::uint64_t time_ns) {
         level = Level::Low;
     } else if (strong_high) {
         level = Level::High;
+    } else if (strong_pull_up) {
+        level = Level::High;
+    } else if (pull_ == Drive::PullUp) {
+        // A board resistor is assumed to dominate an opposing on-chip weak
+        // pull; a driven GPIO output still wins in the branches above.
+        level = Level::High;
+    } else if (pull_ == Drive::PullDown) {
+        level = Level::Low;
     } else if (weak_low && weak_high) {
         level = Level::Floating;
     } else if (weak_low) {

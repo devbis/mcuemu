@@ -14,6 +14,7 @@ devices:
         firmware: ../firmware/phy6252-ts0001.bin
     nets:
       - { id: key1_line, pull: up, pins: [mcu.GPIO8] }
+      - { id: key2_line, pull: up, pins: [mcu.GPIO3] }
       - { id: relay_line, pins: [mcu.GPIO2] }
     parts:
       - { id: key1, type: button, pins: { out: key1_line } }
