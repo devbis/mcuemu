@@ -635,6 +635,15 @@ the coordinator or sampleLight; TS0001 transmitted none. This verifies that a
 joinable network was active on channel 25, but does not establish that its PAN,
 extended PAN, or security state matches the saved TS0001 network.
 
+To test whether the trailing `0x87DB` in the UART line was the saved PAN ID, a
+second scratch coordinator set both its MAC PIB and NWK NIB PAN ID to `0x87DB`
+after formation, while remaining on channel 25. The pcap again has 75 frames;
+the transmitted data frames use PAN `0x87DB`, sampleLight associated at 9.045 s
+as `0x3d34`, and it exchanged 9 uplink and 7 downlink NWK data frames. TS0001
+still transmitted no frame. Therefore channel 25 plus PAN `0x87DB` is not
+sufficient to restore the relay's network path; the saved extended PAN,
+security material, or another stack initialization state remains unresolved.
+
 An LL helper trace of the same-channel first-boot run for 10 s saw 317
 `ll_hw_set_srx` calls and 317 radio triggers: 302 on channel 11 and 15 on
 channel 26. It saw no `STX`, `TRX`, or `RTX` helper calls, no TX FIFO data and
