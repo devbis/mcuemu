@@ -314,8 +314,10 @@ at `0x1fff8b94` and skips its callback dispatcher; the image's static callback
 table at `0x1fff7e78` is populated. The saved-NVM 15 s run likewise has only 19
 gateway frames and no TS0001 frame. All runs continue without a CPU fault. The
 transition from this commissioning callback to an outbound Zigbee frame remains
-unknown. Keep the cleared-NVM image outside the repository with the other local
-test inputs.
+unknown. In a separate 20 s run, gateway startup was delayed so its first beacon
+request began at 6.416 s, about 4.5 ms after the TS0001 SRX start at 6.411 s.
+The pcap still contained 19 gateway frames and no TS0001 frame. Keep the
+cleared-NVM image outside the repository with the other local test inputs.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
