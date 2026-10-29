@@ -799,6 +799,26 @@ void test_switch_to_stopped_xosc() {
     CHECK_EQ(d.read_sfr(SLEEPSTA) & 0x18, RstClockLoss);
 }
 
+// Model-defined (docs/cc2530.md "Clock loss"): a stopped oscillator stands
+// for a damaged crystal, so a power cut keeps it stopped and the switch to it
+// never completes; the power-on reset of a firmware load brings it back.
+void test_power_cut_keeps_stopped_oscillator() {
+    const ClockProgram c = clock_program(false, false);
+    Cc2530F256 d;
+    load(d, c.p.flash);
+    d.stop_oscillator(Cc2530Oscillator::Xosc32M, 0);
+    d.power_cut();
+    CHECK_EQ(d.read_sfr(SLEEPSTA) & 0x18, 0x00); // power-on
+    run_until(d, 3000);
+    CHECK(in_poll_loop(d, c));
+    CHECK_EQ(d.read_sfr(CLKCONSTA), 0xc9);
+    CHECK_EQ(d.diagnostics().power_cuts, 1u);
+
+    load(d, c.p.flash);
+    run_to(d, c.ready, 3000, "load after cut");
+    CHECK_EQ(d.read_sfr(CLKCONSTA), 0x80);
+}
+
 // 5.2: in PM1/PM2 the detector "is automatically stopped and restarted when
 // the clocks start up again". The XOSC stops while the chip is in PM1/PM2:
 // no reset there; the wake (Sleep Timer compare 100) restarts monitoring
@@ -951,6 +971,7 @@ int main() {
     test_clock_loss_32k();
     test_xosc_stop_without_detector();
     test_switch_to_stopped_xosc();
+    test_power_cut_keeps_stopped_oscillator();
     test_clock_loss_suspended_in_pm1_pm2();
     test_clock_loss_pm3_entry();
     test_unselected_oscillators_not_watched();
