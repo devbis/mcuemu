@@ -738,34 +738,33 @@ payload beginning `01 00 00 00`. The payload matches the changed relay-state
 byte. This confirms the local button event is copied into the image's
 flash-backed queue.
 
-A PC trace through the enqueue helper `0x11038700` narrows the missing dispatch
-step. `FUN_00020054` returns task-slot index 1; the helper then reads the state
-byte at `0x1fff8f4c + 4 + 0x388a` (`0x1fffc7da`) as 1. The branch at
-`0x11038762` skips the call to `0x1103d734`, which the disassembly suggests is
-the queue-worker notification path. The queue write succeeds, but this enqueue
-does not issue that notification for slot 1. The trace does not establish why
-the slot is already marked or whether this is the only route to the callback.
+A PC trace through the enqueue helper `0x11038700` shows that
+`FUN_00020054` returns slot 1 and the status byte at
+`0x1fff8f4c + 4 + 0x388a` (`0x1fffc7da`) is 1. The branch at `0x11038762`
+therefore skips `0x1103d734`. This is not evidence that the application event
+callback was left asleep: `0x1103d734` walks the configured queue region in
+4 KiB steps, calls ROM entry `0x1fff40d8` for each page, then runs
+`0x1103d5b8`/`0x11037348` bookkeeping. The status bits guard that storage
+operation. The ROM entry's exact symbol is unresolved, but the page loop makes
+flash-queue maintenance a better fit than a callback notification. Do not
+clear this status byte in the model or treat it as the missing callback wakeup.
 
-The ROM/image disassembly clarifies the guard: `0x11038700` calls
-`0x1103d734(slot)` only when both low status bits at `0x1fff8f4c + 0x3888 +
-slot*4 + 2` are clear. The subsequent `0x11037348` path sets bit 0 and clears
-bit 1, consistent with bit 0 marking an active worker and bit 1 a pending
-wakeup. In this button trace slot 1 has value 1, so the worker is considered
-active and the notification is deliberately skipped. The notification helper
-sets bit 1 before calling `0x1103d734`; its follow-up path through
-`0x1103d5b8` and `0x11037348` clears bit 1 and leaves bit 0 set. This matches
-the observed branch but does not explain why the active worker has not
-consumed the newly appended record. Do not clear the status bit in the model:
-the queue worker's lifecycle and scheduler state still need to be identified.
+The image call chain also shows that `app_device_SW_state_set` (`0x11020b18`)
+ends by passing the changed application-state bytes to `0x1103d248`, which
+creates the flash-backed record. Separately, the startup routine
+`0x11020890` reads records through `0x1103d1f0`. These observations support
+that the queue stores state for later restoration; they do not show that it
+dispatches the runtime `0x1102ddd8` diagnostic callback. The callback's route
+from the local button state change remains unresolved.
 
 A 15-second run traces the receive wrapper at `0x1103d1f0`. The startup routine
 `0x11020890` polls event IDs `0x7001`, `0x7002`, and `0x7003` successfully, then
 finds `0x7005` empty. Those four reads all happen around cycle 14.46 million,
 before the GPIO8 press; there are no later receive-wrapper calls during the
 run. At 15 seconds the queue descriptor still has write offset `0xc94`, and
-the callback at `0x1102ddd8` has not run. The observed startup poll therefore
-does not consume the button's later record. The runtime consumer or wakeup
-path for task `0x20` remains unidentified.
+the callback at `0x1102ddd8` has not run. The startup poll reads before the
+button press and does not establish how this persistent record is consumed at
+runtime. The callback route remains a separate unresolved path.
 
 The local button also posts three volatile task messages through
 `0x11040b60` and `0x110425f8`. A post-press RAM snapshot at `0x1fffc574`
