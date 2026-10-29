@@ -684,6 +684,18 @@ the callback at `0x1102ddd8` has not run. The observed startup poll therefore
 does not consume the button's later record. The runtime consumer or wakeup
 path for task `0x20` remains unidentified.
 
+The local button also posts three volatile task messages through
+`0x11040b60` and `0x110425f8`. A post-press RAM snapshot at `0x1fffc574`
+retains entries for message types `0x0c`, `0x0d`, and `0x0a`; each points to
+`0x11043eb5`. Disassembly shows `0x1104263c` registers callback/context
+pointers in this table, and its only direct firmware callsite is the startup
+path at `0x11040a02`. The adjacent routine at `0x11042674` scans a context
+table and can call `0x11043ee4`, but a PC trace over `0x1104263c..0x11042712`
+from 0.9 to 4 seconds has no hits. This does not identify the consumer for
+the queued messages or establish whether their processing requires another
+scheduler notification. It does rule out treating `0x1104263c` itself as the
+runtime dispatcher.
+
 Separately, `0x110219b4` reaches `0x11021f34`, which builds a command for
 cluster `0x0006`. Its lookup in `0x1102e1f4` finds the endpoint-1/cluster-6
 entry in the table at `0x1fffc0f8` and selects descriptor `0x1fffc178` with
