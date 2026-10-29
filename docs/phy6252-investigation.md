@@ -597,9 +597,12 @@ transitions, but no relay `On`/`Off` counters. The pcap has 19 coordinator
 frames (16 command, 3 data) and no TS0001 transmission. Compared with the
 supplied hardware UART log, `power report time`, `set read local time`, and
 `fixReport time` remain `4744`, `39`, and `326790` instead of `3288`, `44`, and
-`330785`; the hardware log's relay-counter lines are absent as well. The GPIO
-stimulus alone is not enough to exercise the application's Zigbee command
-callback.
+`330785`; the hardware log's relay-counter lines are absent as well. The user
+confirms that the `On`/`Off` lines in the hardware log follow pressing the
+relay's local toggle button; they are not evidence of a remote Zigbee command.
+The emulator recognizes the GPIO8 key press and release, but its application
+path still does not reach the local relay state changes that produce those
+counters.
 
 For a separate first-boot probe, a temporary copy of the TS0001 dump had its
 `0x6000`-byte NVM range at `0x11079000` erased. The image reported
