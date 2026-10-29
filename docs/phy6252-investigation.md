@@ -282,6 +282,14 @@ does not attach to this gateway, but it does not explain the absence of any
 outbound frame during first-boot commissioning; that radio path remains
 unverified.
 
+An instrumented 10 s saved-state probe confirms that the PHY receive path is
+active: while the TS0001 was listening on channel 25, the emulator accepted the
+gateway's Beacon Request at 4.298 s with RSSI -42 dBm (8-byte MAC payload). The
+capture still contains only gateway frames and no TS0001 response or other
+transmission. This shows that the missing outbound traffic occurs after basic
+PHY reception; it does not identify the remaining Zigbee stack or network-state
+failure.
+
 The reusable `examples/phy6252-ts0001.yaml` probe also reproduces the reference
 short key1 press on GPIO8 and key-level transitions on GPIO3. It does not print
 the reference relay `On`/`Off` reports, and the paired pcap remains identical
