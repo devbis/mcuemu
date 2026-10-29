@@ -152,6 +152,23 @@ constexpr std::array<IrqSource, 18> IrqSources{{
     {"WDT", SfrIrcon2, 0x10, SfrIen2, 0x20, 5, false},
 }};
 
+// SWRU191F 2.5.1, IRCON bit 6: "Must be written 0. Writing a 1 always
+// enables the interrupt source." Figure 2-4 ORs ircon.6 with STIF into the
+// sleep timer (ST, interrupt 5) request ahead of STIE/EA, and ircon.6 is not
+// one of the shaded flags the hardware clears on ISR entry, so a 1 requests
+// the ST interrupt until software writes it 0.
+constexpr unsigned SourceSt = 5;
+constexpr std::uint8_t IrconStRequest = 0x40;
+
+// The source's request input: its flag bits, plus ircon.6 for ST.
+bool flag_requested(const std::array<std::uint8_t, 256> &sfr, unsigned source) {
+    const IrqSource &irq = IrqSources[source];
+    const std::uint8_t mask =
+        source == SourceSt ? static_cast<std::uint8_t>(irq.flag_mask | IrconStRequest)
+                           : irq.flag_mask;
+    return (sfr[irq.flag_sfr] & mask) != 0;
+}
+
 // Interrupt polling sequence within one priority level (Table 2-8).
 constexpr std::array<std::uint8_t, 18> PollingOrder{
     0, 16, 8, 1, 9, 2, 10, 3, 11, 4, 12, 5, 13, 6, 7, 14, 15, 17};
@@ -997,8 +1014,8 @@ void Cc2530F256::sfr_write(std::uint8_t address, std::uint8_t value) {
         break;
     case SfrIrcon:
     case SfrTcon: case SfrS0con: case SfrS1con: case SfrIrcon2:
-        if (address == SfrIrcon && (value & 0x40u))
-            ++diagnostics_.ircon_bit6_writes; // "must be written 0"; not modeled
+        if (address == SfrIrcon && (value & IrconStRequest))
+            ++diagnostics_.ircon_bit6_writes; // "must be written 0": requests ST
         sfr_[address] = value;
         // Level-sensitive sources (port interrupts) re-assert a flag that
         // firmware cleared while their condition persists.
@@ -1182,7 +1199,7 @@ Cc2530F256::Request Cc2530F256::pending_interrupt() const {
     int best_level = -1;
     for (const std::uint8_t source : PollingOrder) {
         const IrqSource &irq = IrqSources[source];
-        if (!(sfr_[irq.flag_sfr] & irq.flag_mask) || !(sfr_[irq.enable_sfr] & irq.enable_mask))
+        if (!flag_requested(sfr_, source) || !(sfr_[irq.enable_sfr] & irq.enable_mask))
             continue;
         const int level = (((sfr_[SfrIp1] >> irq.group) & 1) << 1) |
                           ((sfr_[SfrIp0] >> irq.group) & 1);
@@ -1290,7 +1307,8 @@ void Cc2530F256::enter_power_mode() {
 //    (EA, the source's enable bit and its flag set), whatever its priority
 //    relative to the ISRs in progress.
 //  - PM1/PM2: "reset, an external interrupt or when the sleep timer
-//    expires": EA plus enable and flag of P0INT, P1INT, P2INT or ST.
+//    expires": EA plus enable and flag of P0INT, P1INT, P2INT or ST (the
+//    ST request includes IRCON bit 6, Figure 2-4).
 //  - PM3: "reset or an external interrupt": EA plus enable and flag of
 //    P0INT, P1INT or P2INT.
 // Resets are applied separately (apply_pending_reset).
@@ -1304,7 +1322,8 @@ bool Cc2530F256::wake_request(Cc2530PowerMode mode) const {
         if (source == Irq::St && mode == Cc2530PowerMode::Pm3)
             continue;
         const IrqSource &irq = IrqSources[static_cast<unsigned>(source)];
-        if ((sfr_[irq.flag_sfr] & irq.flag_mask) && (sfr_[irq.enable_sfr] & irq.enable_mask))
+        if (flag_requested(sfr_, static_cast<unsigned>(source)) &&
+            (sfr_[irq.enable_sfr] & irq.enable_mask))
             return true;
     }
     return false;
