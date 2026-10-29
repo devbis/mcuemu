@@ -815,6 +815,14 @@ counter labels in the supplied UART log and confirms the absent lines are
 caused by this handler not running; it does not reveal which dispatcher should
 call it after the GPIO8 event.
 
+The maintainer confirmed that the `*** On:... Off:... toggle:... ***` lines in
+the reference UART log follow operation of the relay's physical toggle button.
+They belong to the local button/state callback path. A 10-second host-ROM run
+with GPIO8 presses at 6 s and 7 s prints both `key 1 Down/up` pairs and toggles
+the GPIO2 relay output on each press, but never prints the `On`/`Off` counters.
+This reproduces the physical input and output behavior while leaving the
+application callback gap above unresolved.
+
 A 15-second run traces the receive wrapper at `0x1103d1f0`. The startup routine
 `0x11020890` polls event IDs `0x7001`, `0x7002`, and `0x7003` successfully, then
 finds `0x7005` empty. Those four reads all happen around cycle 14.46 million,
