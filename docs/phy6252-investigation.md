@@ -1219,12 +1219,33 @@ buffer at `0x1fffd140` and length 11, then called `ll_hw_set_stx` at
 checks the LL FIFO write pointer against the configured depth, copies the
 buffer through the TX data port, and returns the number of words written.
 The emulator now models that contract, including the word pointer and
-byte-count tail; a unit test checks an 11-byte copy. The same trace no longer
-faults at the helper, but it does not reach the known `ll_hw_go` (`0x10cf8`)
-or `ll_hw_trigger` (`0x11420`) entries. Its air-source trace contains frames
-from the coordinator and sampleLight only, with no TS0001 transmission. The
-remaining observed stall is after STX selection and before the LL TX trigger;
-the closed image's transition through that path is still unresolved.
+byte-count tail; a unit test checks an 11-byte copy.
+
+The follow-up same-channel run proves the closed image's radio path does
+transmit and receive. The air-source trace records a TS0001 MAC Beacon Request
+on channel 11 at 6.411874 s. The RX helper then returns coordinator Beacon
+frames (sequence numbers `0x4f` and `0x50`) to the image. In a 20-second replay
+with the channel-11 network, sampleLight associates at 9.045 s as `0x28a3` and
+exchanges 9 uplink and 6 downlink NWK frames. TS0001 does not continue with an
+Association Request or NWK traffic in this capture. This corrects the earlier
+post-helper conclusion that the relay emitted no frame: the first Beacon
+Request was lost in truncated trace output. The remaining gap is Zigbee
+commissioning after the first scan request, not basic PHY6252 TX/RX.
+
+A separate 15-second replay used the supplied saved-state image with an active
+channel-25 sampleGW network. The relay logs `Restored nwk success on reboot`
+and `network state=12`; a GPIO8 press is registered as key 1 down/up and the
+application prints its two Tuya data-point reports. The 75-frame pcap contains
+no TS0001 transmission. This is not yet a valid test of the saved parent link:
+the coordinator's frames use PAN ID `0xa6dc`, while the saved ZB-info record
+only suggests `0xa9d9` as the relay's PAN ID. A prior scratch network using
+candidate saved identity fields also got no relay frame, but the complete
+parent/security state is not decoded. The UART's restored-state message and
+application reports therefore do not establish an active Zigbee link. The
+remaining issue is above basic PHY TX/RX: either the saved network identity and
+parent state are still unmatched, or the closed stack is not reaching a valid
+MAC/NWK transmit request. The current evidence does not distinguish those
+causes.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
