@@ -1196,6 +1196,14 @@ that the 6222 dump matches the closed image's ROM ABI; keep the host-trap TS0001
 boot result and the external-ROM Zephyr result as separate compatibility
 evidence.
 
+After modeling the supplied ROM's AON RTC delay at `0x8900`, the 20-second
+first-boot replay was repeated with the active channel-11 coordinator,
+sampleLight, and the supplied eFuse and RF-calibration inputs. Its 76-frame
+pcap again shows sampleLight associating at 9.045 s (`0x3acc`) and exchanging
+9 uplink and 6 downlink NWK frames. The TS0001 receives channel-11 traffic but
+still contributes no transmission. The RTC wait was a separate ROM gap and is
+not the remaining commissioning-to-TX blocker.
+
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
 instruction tracing for a PC interval and prints registers on a fault.
