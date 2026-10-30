@@ -759,15 +759,15 @@ int main() {
         CHECK(native.read(0x4000f064, 4) == 977);
 
         // TX data port: word stores to 0x40031400 append at the write pointer (LL+0x50 bits
-        // 26:16), LL+0x18 = 1 resets the FIFO, and the read pointer catches up after the frame.
+        // 26:16), LL+0x58 = 1 resets the FIFO, and the read pointer catches up after the frame.
         mcuemu::VirtualAir native_air;
         native.connect_radio(native_air, "native");
-        native.write(0x40031018, 1, 4);
+        native.write(0x40031058, 1, 4);
         CHECK(native.read(0x40031050, 4) == 0);
         native.write(0x40031400, 0x11111111u, 4);
         native.write(0x40031400, 0x22222222u, 4);
         CHECK(native.read(0x40031050, 4) == (2u << 16));
-        native.write(0x40031018, 1, 4);
+        native.write(0x40031058, 1, 4);
         CHECK(native.read(0x40031050, 4) == 0);
         native.write(0x40031400, 0x5a000105u, 4); // PHR 5, payload 01 00 5a, FCS follows
         native.write(0x40031400, 0x00000000u, 4);

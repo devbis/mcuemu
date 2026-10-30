@@ -1334,9 +1334,9 @@ all found by following the closed image into the ROM code:
    the selection now changes the core clock.
 3. **The TX data port.** `ll_hw_write_tfifo` stores every word to
    `0x40031400` and the baseband advances its write pointer (LL+0x50 bits
-   26:16), like the RX port on reads; `ll_hw_rst_tfifo` writes 1 to LL+0x18; and
+   26:16), like the RX port on reads; `ll_hw_rst_tfifo` stores 1 and `ll_hw_rst_rfifo` 0x100 in LL+0x58; and
    the read pointer catches up when the frame has been sent. Word stores to
-   the port offset 0 are now appended at the write pointer, LL+0x18 = 1 resets
+   the port offset 0 are now appended at the write pointer, LL+0x58 bit 0 (bit 8 for RX) resets
    the FIFO, and the pointers follow the frame. Byte and offset stores (the
    Zephyr driver) stay plain RAM writes. Before this the ROM's writes
    overwrote one word and every later frame repeated the first one.

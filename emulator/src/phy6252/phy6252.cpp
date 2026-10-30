@@ -886,12 +886,15 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             const std::uint32_t foot0_out = core_.reg(2);
             const std::uint32_t foot1_out = core_.reg(3);
             const std::uint16_t packet_length = rx_fifo_[0];
-            constexpr std::uint32_t foot0 = 2; // inferred small carrier-frequency offset
-            const std::uint32_t rssi_magnitude = static_cast<std::uint32_t>(
-                std::clamp(-static_cast<int>(radio_rx_rssi_), 0, 127));
-            const std::uint32_t foot1 = rssi_magnitude << 24;
             const std::size_t fifo_words = 1 + (packet_length >> 2);
             const std::size_t fifo_bytes = fifo_words * sizeof(std::uint32_t);
+            // The footer words were stored behind the packet when the frame arrived, so the
+            // level reported with it does not change when the status is cleared afterwards.
+            std::uint32_t foot0 = 0, foot1 = 0;
+            if (fifo_bytes + 2 * sizeof(std::uint32_t) <= rx_fifo_.size()) {
+                std::memcpy(&foot0, rx_fifo_.data() + fifo_bytes, sizeof foot0);
+                std::memcpy(&foot1, rx_fifo_.data() + fifo_bytes + sizeof foot0, sizeof foot1);
+            }
             const std::uint16_t reported_length = packet_length + 1;
             const bool valid = packet_length >= 2 && packet_length <= 127 &&
                 packet != 0 && length_out != 0 && foot0_out != 0 && foot1_out != 0 &&
@@ -2871,13 +2874,20 @@ void Phy6252::write_register_impl(std::uint32_t address, std::uint32_t value, un
                 radio_rtx_warning_logged_ = true;
             }
             break;
-        case 0x18:
-            // ll_hw_rst_tfifo() of the dumped ROM stores 1 here; the Zephyr driver stores
-            // timing values (192 us) instead.
+        case 0x58:
+            // FIFO reset strobes of the dumped ROM: ll_hw_rst_tfifo() stores 1 and ll_hw_rst_rfifo()
+            // stores 0x100 here (the TS0001 does both around every operation).
             ll_registers_[aligned] = written;
-            if (written == 1u) {
+            if (written & 1u) {
                 tx_fifo_.clear();
                 ll_registers_[RadioLlBase + 0x50] = 0;
+            }
+            if (written & 0x100u) {
+                rx_fifo_.fill(0);
+                rx_fifo_read_ = 0;
+                rx_fifo_stream_read_ = 0;
+                rx_fifo_stream_size_ = 0;
+                ll_registers_[RadioRxFifoStatus] = 0;
             }
             break;
         case 0x28:
