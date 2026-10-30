@@ -1181,6 +1181,15 @@ thread instruction. A new TS0001 trace shows the second `0x20` event matching
 the waiter value `0x82000020`, unlinking the waiter, and resuming the task;
 the priority key is reset only after the wait returns.
 
+The scratch PC trace did not list the selected BDB callback because it matched
+the odd Thumb function pointer `0x1fff4acd`; Unicorn's code hook reports the
+instruction address without that bit. The dispatcher does execute `BLX r2`
+with `r2=0x1fff4acd` at `0x1fff4be4` and returns at `0x1fff4be6`, so callback
+execution is established. Its body at `0x1fff4acc` tests event byte 1 bit
+`0x20` and calls `0x1fff6310`; the saved trace did not capture the event bytes
+or which body branch ran. That callback branch is still a concrete point to
+trace before assigning the remaining stall to another ROM or peripheral gap.
+
 This scheduler fix does not yet make the closed image transmit. A 20-second
 first-boot run with an active channel-11 coordinator and sample light still
 captured no TS0001 frame, with or without the supplied external ROM dump. The
