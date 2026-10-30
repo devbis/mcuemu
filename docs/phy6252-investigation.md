@@ -1157,21 +1157,37 @@ or `TRX` operation from the relay in this run. The missing frame therefore
 occurs before the model's TX/ACK operation is requested; implementing `TRX`
 alone does not unblock the saved-state network path.
 
-An instruction trace of the first-boot run narrows that gap to the proprietary
-stack's event handling. The LMAC task first waits on FreeRTOS event group
-`0x1fffd2a0`; the deferred `0x20` event wakes it once, and its BDB dispatcher
-moves from state 0 to state 1. Later, Timer1 runs the image callback
-`0x1fff49d9`, which calls `0x1fff4cb4(1, 1)`. That function successfully queues
-the deferred `0x1fff65d5(group, 0x20)` callback, and the callback runs. At that
-second event-group update, however, the only listed waiter has item value
-`0x2`; the set bit `0x20` does not match, so the task is not unblocked and the
-BDB dispatcher does not run again. The item is still linked into the event
-group's wait list even though its value has been reset to the task's normal
-priority key. The trace still shows no `STX`/`TRX` call. This shows where the
-current closed-stack run stops before radio TX, but not why the linked waiter
-loses its event mask. The event-list inconsistency could come from the image's
-task flow or from our RTOS/scheduling model; it is not evidence of a PHY
-transmitter defect.
+An instruction trace initially appeared to show the proprietary stack losing
+its FreeRTOS event mask. The LMAC task waits on event group `0x1fffd2a0`; the
+deferred `0x20` event wakes it once and its BDB dispatcher moves from state 0
+to state 1. Later, Timer1 runs the image callback `0x1fff49d9`, which calls
+`0x1fff4cb4(1, 1)` and queues `0x1fff65d5(group, 0x20)`. The queued callback
+runs, but the first trace showed the waiter still linked with item value `2`.
+
+The follow-up identified a Cortex-M scheduling defect behind that stale item.
+The image's FreeRTOS yield writes `ICSR.PENDSVSET`; the core had continued to
+the next thread instruction before entering PendSV, so
+`uxTaskResetEventItemValue` ran while the task was still linked on the event
+list. The Cortex-M core now ends the translated block at that yield boundary.
+A regression test verifies that PendSV observes the state before the next
+thread instruction. A new TS0001 trace shows the second `0x20` event matching
+the waiter value `0x82000020`, unlinking the waiter, and resuming the task;
+the priority key is reset only after the wait returns.
+
+This scheduler fix does not yet make the closed image transmit. A 20-second
+first-boot run with an active channel-11 coordinator and sample light still
+captured no TS0001 frame, with or without the supplied external ROM dump. The
+other nodes exchanged 9 uplink and 6 downlink NWK frames. The current
+no-ROM LL trace still has no TS0001 TX FIFO writes or `STX`/`TRX` request, so
+the remaining failure is after the corrected task wake and before a transmit
+request reaches the modeled radio. Do not attribute this remaining gap to the
+PHY transmitter or claim TS0001 network support yet.
+
+The external-ROM TS0001 run also produced no UART output, while the same ROM
+is verified with the independent PB-03F Zephyr image. This does not establish
+that the 6222 dump matches the closed image's ROM ABI; keep the host-trap TS0001
+boot result and the external-ROM Zephyr result as separate compatibility
+evidence.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
