@@ -895,6 +895,12 @@ counter labels in the supplied UART log and confirms the absent lines are
 caused by this handler not running in the emulator; it does not identify what
 dispatches the handler in the hardware run.
 
+Headless Ghidra xrefs in the TS0001 image show the format string referenced
+from `0x1102ddd8`, but no direct static callsite for that handler. This is
+consistent with its registration in the event table and indirect dispatch;
+the references do not establish whether the event originates from a local
+button or an over-the-air state change.
+
 The maintainer said the reference UART log was captured with no coordinator,
 but later clarified that it is uncertain whether the `On`/`Off` lines follow a
 physical button press or an over-the-air toggle. The log does not timestamp
