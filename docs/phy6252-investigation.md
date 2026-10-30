@@ -1109,6 +1109,11 @@ the missing TS0001 exchange; the first outbound frame after this steering path
 and the stack's later RX state remain unknown. This test used the cleared-NVM
 first-boot image (`network state=0`), unlike the supplied `log.txt`, which
 restores state 12 and includes Tuya reports and relay `On`/`Off` counters.
+Repeating this first-boot network run with both local module eFuse and RF
+calibration inputs still produced 76 frames: `sampleLight` joined at 9.045 s
+and exchanged 9 uplink (5 unicast) and 6 downlink NWK frames, while the pcap
+had no TS0001 source (`0x87db`). Missing calibration inputs therefore do not
+explain the relay's lack of TX in this commissioning scenario.
 
 A separate 12 s run used the saved-state TS0001 image and a coordinator built
 with `DEFAULT_CHANNEL=25`, matching the channel observed during the relay's
