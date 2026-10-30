@@ -999,9 +999,13 @@ For a separate first-boot probe, a temporary copy of the TS0001 dump had its
 `Device started for the first time` with network state 0. Holding GPIO8 from
 1 s to 8 s reports `KEY 1 longPress` and `zb bdb devNetOpt = 0`; with the
 supplied NVM contents, the same input reports option 7. In the erased-NVM
-case, the `devNetOpt = 0` path selects channel 11 (`0x400300b4 = 5`), arms
-Timer1 with `set_timer(..., 1512)`, then its callback writes `0x70ee5763` to RF
-register `0x4003004c` and reads `0x400300e4` and `0x400300e8`. The PHY+ SDK
+case, the `devNetOpt = 0` path selects channel 11 (`0x400300b4 = 5`). An
+earlier trace attributed a 1512-us `set_timer` call to this callback, but that
+interpretation used preloaded SRAM bytes which are replaced by the runtime
+stack image described below. A direct trace of ROM `set_timer` in the
+8-second first-boot run records Timer1 with `time=0x25a` (602 us) and callback
+`0x1fff49d9`. The callback's RF register effects still need to be checked
+against the decoded runtime image. The PHY+ SDK
 example names `0x4003004c` as the syncword register; that register's hardware
 effect is not verified here. The model samples shared-air energy at the `0xe8`
 read. In a timing probe, a gateway beacon request on channel 11 ended 120 us
@@ -1016,19 +1020,48 @@ successfully enqueues a BDB event through the image's queue wrapper at
 non-null queue entry (`0x1fffe748`) through `0x1fff8b94` and calls the image's
 callback dispatcher at `0x1fff4bb0`. A PC trace shows state 0 and event 0
 selecting table row `(0, 0, 1, 0x1fff4a69)` at `0x1fff7e78`. The dispatcher
-updates the state to 1 and invokes that callback. The callback calls ROM
-`LL_Rand` and arms Timer1 for 1512 us with image callback `0x1fff49d9`. Timer1
-IRQ20 reaches the registered image handler `0x1fff2565`, which calls that
-callback; it sets event-group bit `0x20` and PendSV runs afterward. That path
-changes channel and syncword, samples RSSI, and starts one more SRX around
-6.411 s. The trace does not show the BDB dispatcher receiving event 1, so the
-next expected table row `(1, 1, 2, 0x1fff4acd)` is not reached during the 7 s
-probe. No later TX operation starts in the LL trace, and the 20 s pcap has 20
-gateway frames but no TS0001 frame. The image resumes its main loop around
-8.0 s. The saved-NVM 15 s run likewise has only 19 gateway frames and no
-TS0001 frame. All runs continue without a CPU fault. The transition from the
-commissioning callback path to an outbound Zigbee frame remains unknown. In a
-separate 20 s run,
+updates the state to 1 and invokes that callback. The callback's code was
+initially analyzed from the package's preloaded SRAM bytes, which is incorrect
+for this address at runtime. A write trace shows PC `0x1ffff52e` decoding a
+16 KiB runtime stack image into SRAM `0x1fff4000..0x1fff7fff`, from the XIP
+stream beginning at `0x11011808`. The captured image is a scratch analysis
+artifact and is not part of the repository. It contains the dispatcher,
+callback code and state table; its bytes at `0x1fff4a00..0x1fff4aff` happen to
+match full-flash bytes `[0x149d0:0x14ad0]`, but they are part of the decoded
+runtime image. Runtime callback `0x1fff4a69` schedules Timer1 for
+`0x25a` microseconds with callback `0x1fff49d9`. That timer callback runs in
+IRQ20; its current trace then queues event work through `0x1fff4cb4`. The
+previous claim that the first callback itself calls `LL_Rand` and arms Timer1
+with `0x1fff49d9` came from stale bytes and is withdrawn.
+
+Timer1 IRQ20 reaches the registered image handler `0x1fff2565`; a trace shows it
+setting event-group bit `0x20`, after which PendSV runs. The observed timer
+callback changes channel and syncword, samples RSSI, and starts another SRX
+around 6.411 s. Its event work does not lead to the next table row
+`(1, 1, 2, 0x1fff4acd)` in the traced sequence.
+
+The ROM `ll_hw_read_rfifo_zb` trap was entered three times by IRQ4 during the
+8-second first-boot run, so received packets reached the closed stack's FIFO
+read path. A capture of the helper's output contains a MAC Beacon Request
+(command ID `0x07`), an encrypted Zigbee NWK broadcast on PAN `0xa75c`, then
+another Beacon Request. The run's air pcap also contains a MAC beacon from that
+PAN at 6.756687 s with `Association Permit` set. A 1 ms radio-mode trace sees
+the PHY6252 receiving at 6.300 s, then `radio_receiving` turns off at 6.412 s;
+direct samples around 6.756 s remain off. The beacon therefore arrives outside
+the firmware's RX window and is not passed to the FIFO helper.
+
+The same run has no TX FIFO writes and no `STX` or `TRX` mode request, so the
+modeled transmitter never receives a request. The evidence points to the
+closed stack's receive/commissioning progression: its next table row
+`(1, 1, 2, 0x1fff4acd)` is not reached, RX has stopped by the time the
+coordinator advertises association, and the stack never asks the PHY to send.
+It does not yet distinguish a missing ROM callback contract from a stack-state
+or timing issue earlier in the scan. No later TX operation starts in the LL
+trace, and the 20 s pcap has 20 gateway frames but no TS0001 frame. The image
+resumes its main loop around 8.0 s. The saved-NVM 15 s run likewise has only
+19 gateway frames and no TS0001 frame. All runs continue without a CPU fault.
+The transition from the commissioning callback path to an outbound Zigbee
+frame remains unknown. In a separate 20 s run,
 gateway startup was delayed so its first beacon request began at 6.416 s, about
 4.5 ms after the TS0001 SRX start at 6.411 s. The pcap still contained 19
 gateway frames and no TS0001 frame. Keep the cleared-NVM image outside the
