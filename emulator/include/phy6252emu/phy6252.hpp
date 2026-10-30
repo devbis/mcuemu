@@ -33,6 +33,8 @@ public:
     void load_efuse_dump(const std::vector<std::uint8_t> &dump);
     // Four raw kCal bytes: channel 2/66 at fDev 0, then channel 2/66 at fDev 1.
     void load_rf_calibration_dump(const std::vector<std::uint8_t> &dump);
+    // Seed the deterministic LL_Rand stand-in; zero is remapped because xorshift32 locks at zero.
+    void set_random_seed(std::uint32_t seed) noexcept;
     void reset();
     cortexm::RunResult run(std::uint64_t until_cycle);
     cortexm::Core &core() noexcept { return core_; }
@@ -80,6 +82,7 @@ private:
     std::uint64_t radio_rx_after_ns_{0};
     std::uint64_t radio_rx_deadline_cycle_{0};
     bool radio_tx_active_{false};
+    bool radio_tx_wait_for_rx_{false};
     bool radio_rx_active_{false};
     std::int8_t radio_rx_rssi_{-100};
     std::uint32_t spif_config_{0x80000000u};
@@ -91,6 +94,13 @@ private:
     bool watchdog_interrupt_pending_{false};
     std::uint64_t rtc_epoch_ns_{0};
     std::uint32_t rtc_epoch_count_{0};
+    struct RtcWait {
+        bool active{false};
+        std::uint32_t start_count{0};
+        std::uint32_t ticks{0};
+        std::uint32_t return_pc{0};
+        std::uint64_t deadline_ns{0};
+    } rtc_wait_;
     bool sleep_allowed_{false};
     std::uint32_t sleep_mode_{0};
     bool system_sleep_request_{false};
@@ -99,6 +109,7 @@ private:
     bool unexported_init_hook_warned_{false};
     bool pendsv_dispatch_warning_logged_{false};
     bool ll_rand_warning_logged_{false};
+    bool radio_rtx_warning_logged_{false};
     bool baseband_irq_dispatch_warning_logged_{false};
     bool gpio_irq_dispatch_warning_logged_{false};
     bool gpio_control_warning_logged_{false};
@@ -121,6 +132,7 @@ private:
     bool ll_20_warning_logged_{false};
     bool ll_68_warning_logged_{false};
     std::uint32_t heap_start_{0}, heap_size_{0};
+    std::uint32_t random_seed_{0x6d2b79f5};
     std::uint32_t random_state_{0x6d2b79f5};
     std::map<std::uint32_t, std::uint32_t> free_heap_blocks_;
     std::unordered_map<std::uint32_t, std::uint32_t> heap_allocations_;
@@ -146,7 +158,7 @@ private:
     std::uint32_t gpio_input_data() const noexcept;
     void update_gpio_irq();
     void notify_gpio(std::uint32_t changed);
-    void start_radio_tx();
+    void start_radio_tx(bool wait_for_rx = false);
     void schedule_radio_rx_timeout();
     void update_radio_irq();
     std::int8_t radio_energy_dbm(std::uint64_t at_ns) const;

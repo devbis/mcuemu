@@ -92,6 +92,110 @@ void test_aon_gpio_wakeup() {
                                                &marker, sizeof marker));
     CHECK(marker == 0x5a);
 }
+
+std::array<std::uint8_t, 8> random_bytes_for_seed(
+    const std::vector<std::uint8_t> &image, std::uint32_t seed) {
+    using namespace phy6252emu;
+    Phy6252 chip;
+    chip.load_firmware(image);
+    chip.set_random_seed(seed);
+    chip.reset();
+    constexpr std::uint32_t buffer = BootImage::RamBase + 0x100;
+    chip.core().set_reg(0, buffer);
+    chip.core().set_reg(1, 8);
+    chip.core().set_reg(14, 0x11010109);
+    chip.core().set_reg(15, 0x5e04);
+    CHECK(chip.run(chip.core().cycles() + 16).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(chip.core().reg(0) == 0);
+    std::array<std::uint8_t, 8> bytes{};
+    CHECK(chip.core().read_memory(buffer, bytes.data(), bytes.size()));
+    return bytes;
+}
+
+void test_random_seed(const std::vector<std::uint8_t> &image) {
+    const auto first = random_bytes_for_seed(image, 0x12345678);
+    CHECK(first == random_bytes_for_seed(image, 0x12345678));
+    CHECK(first != random_bytes_for_seed(image, 0x12345679));
+    CHECK(random_bytes_for_seed(image, 0) ==
+          random_bytes_for_seed(image, 0x6d2b79f5));
+}
+
+void test_direct_rom_baseband_wrapper(const std::vector<std::uint8_t> &image) {
+    using namespace phy6252emu;
+    Phy6252 chip;
+    chip.load_firmware(image);
+    chip.reset();
+    CHECK(chip.run(100).reason == cortexm::StopReason::Deadline);
+
+    constexpr std::uint32_t callback_address = BootImage::RamBase + 0x2200;
+    constexpr std::uint32_t callback = callback_address | 1u;
+    constexpr std::uint32_t marker_address = BootImage::RamBase + 0x2300;
+    const std::array<std::uint8_t, 24> callback_code = {
+        0x03, 0x49, // ldr r1, [pc, #12] ; marker address
+        0x08, 0x60, // str r0, [r1]
+        0x01, 0x22, // movs r2, #1
+        0x03, 0x49, // ldr r1, [pc, #12] ; LL IRQ clear register
+        0x0a, 0x60, // str r2, [r1]
+        0x70, 0x47, // bx lr
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x23, 0xff, 0x1f, // marker address
+        0x14, 0x10, 0x03, 0x40, // 0x40031014 LL IRQ clear
+    };
+    const std::uint32_t zero = 0;
+    const std::uint32_t enable_radio_irq = 1u << 4;
+    const std::uint32_t initial_r0 = 0x13579bdf;
+    const std::uint32_t initial_r4 = 0x2468ace0;
+    CHECK(chip.core().write_memory(0x1fff0390, &callback, sizeof callback));
+    CHECK(chip.core().write_memory(callback_address, callback_code.data(),
+                                   callback_code.size()));
+    CHECK(chip.core().write_memory(marker_address, &zero, sizeof zero));
+    CHECK(chip.core().write_memory(0xe000e100, &enable_radio_irq,
+                                   sizeof enable_radio_irq));
+    chip.core().set_reg(0, initial_r0);
+    chip.core().set_reg(4, initial_r4);
+    const std::uint32_t initial_sp = chip.core().reg(13);
+    chip.core().set_irq_line(4, true);
+    chip.core().set_interrupts_masked(false);
+    CHECK(chip.run(chip.core().cycles() + 128).reason ==
+          cortexm::StopReason::Deadline);
+
+    std::uint32_t marker = 0;
+    CHECK(chip.core().read_memory(marker_address, &marker, sizeof marker));
+    CHECK(marker == callback); // ROM's BLX wrapper leaves the callback pointer in r0.
+    CHECK(chip.core().reg(0) == initial_r0); // exception return restores interrupted state
+    CHECK(chip.core().reg(4) == initial_r4);
+    CHECK(chip.core().reg(13) == initial_sp);
+}
+
+void test_rom_rtc_wait(const std::vector<std::uint8_t> &image) {
+    using namespace phy6252emu;
+    Phy6252 chip;
+    chip.load_firmware(image);
+    chip.reset();
+
+    constexpr std::uint32_t return_address = BootImage::RamBase + 0x3000;
+    constexpr std::array<std::uint8_t, 2> return_code = {0x00, 0xbe}; // bkpt #0
+    CHECK(chip.core().write_memory(return_address, return_code.data(), return_code.size()));
+    chip.write(0x40001064, 3, 4); // Timer6 expires while the ROM waits.
+    chip.write(0x4000106c, 7, 4); // enable, one-shot, interrupt masked
+    const std::uint64_t start_cycle = chip.core().cycles();
+    const std::uint32_t start_count = chip.read(0x4000f028, 4);
+    chip.core().set_reg(0, 8); // eight 32.768 kHz ticks
+    chip.core().set_reg(14, return_address | 1u);
+    chip.core().set_reg(15, 0x8900);
+
+    CHECK(chip.run(start_cycle + 1000).reason == cortexm::StopReason::Deadline);
+    CHECK(chip.core().cycles() == start_cycle + 1000);
+    CHECK(chip.core().pc() == return_address);
+    CHECK(static_cast<std::uint32_t>(chip.read(0x4000f028, 4) - start_count) < 8);
+    CHECK(chip.read(0x40001074, 4) == 1); // peripheral deadline serviced during the wait
+
+    CHECK(chip.run(start_cycle + 10000).reason == cortexm::StopReason::Halted);
+    const std::uint32_t end_count = chip.read(0x4000f028, 4);
+    CHECK(static_cast<std::uint32_t>(end_count - start_count) >= 8);
+    CHECK(chip.core().reg(0) == end_count);
+}
 }
 
 int main() {
@@ -104,6 +208,9 @@ int main() {
     put(image, 0xe100, 0x1fff2000); put(image, 0xe104, 0x11010109);
     image[0xe108] = 0xfe; image[0xe109] = 0xe7; // b .
     put(image, 0xe110, 0x1fff2000); put(image, 0xe114, 0x11010109);
+    test_direct_rom_baseband_wrapper(image);
+    test_rom_rtc_wait(image);
+    test_random_seed(image);
     BootImage boot = load_boot_image(image);
     CHECK(boot.flash[0x10108] == 0xfe);
     CHECK(boot.ram[0x1838 + 1] == 0x20);
@@ -407,6 +514,22 @@ int main() {
     rom_test_chip.write(0x40031400, 0x78563412, 4);
     invoke_radio_rom(0x110e8); // ll_hw_rst_tfifo
     CHECK(rom_test_chip.read(0x40031400, 4) == 0);
+    constexpr std::uint32_t tx_packet_source = 0x1fff2400;
+    const std::array<std::uint8_t, 11> tx_packet_bytes = {
+        10, 0x01, 0x00, 0x5a, 0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6, 0x07};
+    CHECK(rom_test_chip.core().write_memory(tx_packet_source, tx_packet_bytes.data(),
+                                           tx_packet_bytes.size()));
+    rom_test_chip.core().set_reg(0, tx_packet_source);
+    rom_test_chip.core().set_reg(1, tx_packet_bytes.size());
+    rom_test_chip.core().set_reg(14, 0x11010109);
+    rom_test_chip.core().set_reg(15, 0x115c0); // ll_hw_write_tfifo
+    CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 64).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(rom_test_chip.core().reg(0) == 3); // ceil(11 / 4) words
+    CHECK(rom_test_chip.read(0x40031050, 4) == 0x00030000);
+    for (std::size_t i = 0; i < tx_packet_bytes.size(); ++i)
+        CHECK(rom_test_chip.read(0x40031400 + i, 1) == tx_packet_bytes[i]);
+    invoke_radio_rom(0x110e8); // reset the FIFO pointers before the MMIO TX test
     rom_test_chip.write(0x40031c00, 0x78563412, 4);
     invoke_radio_rom(0x110b0); // ll_hw_rst_rfifo
     CHECK(rom_test_chip.read(0x40031c00, 4) == 0);
@@ -454,7 +577,7 @@ int main() {
     CHECK((rom_test_chip.read(0x400300e8, 4) >> 24) == 50); // SDK RF RSSI is positive -dBm
     CHECK(rom_test_chip.read(0x40031054, 4) == (16u << 16)); // eight packet bytes plus two footers
     invoke_radio_rom(0x10bbc); // ll_hw_get_irq_status
-    CHECK(rom_test_chip.core().reg(0) == radio_irq_status);
+    CHECK(rom_test_chip.core().reg(0) == (radio_irq_status & ~((1u << 1) | (1u << 3))));
     constexpr std::uint32_t radio_packet = 0x1fff2300;
     constexpr std::uint32_t radio_length = 0x1fff2320;
     constexpr std::uint32_t radio_foot0 = 0x1fff2324;
@@ -585,16 +708,20 @@ int main() {
     irq_chip.reset();
     CHECK(irq_chip.run(100).reason == cortexm::StopReason::Deadline);
     constexpr std::uint32_t irq_callback = 0x1fff2201;
+    constexpr std::uint32_t gpio_callback_argument = 0x1fff2310;
     CHECK(irq_chip.core().write_memory(0x1fff03c0, &irq_callback, sizeof irq_callback));
-    const std::array<std::uint8_t, 24> gpio_irq_callback = {
+    const std::array<std::uint8_t, 36> gpio_irq_callback = {
+        0x05, 0x49, // ldr r1, [pc, #20] ; incoming r0 marker
+        0x08, 0x60, // str r0, [r1]
         0x07, 0x20, // movs r0, #7
-        0x03, 0x49, // ldr r1, [pc, #12] ; marker address
+        0x05, 0x49, // ldr r1, [pc, #20] ; marker address
         0x08, 0x60, // str r0, [r1]
         0x01, 0x20, // movs r0, #1
-        0x02, 0x49, // ldr r1, [pc, #8] ; GPIO interrupt status
+        0x04, 0x49, // ldr r1, [pc, #16] ; GPIO interrupt status
         0x08, 0x60, // str r0, [r1] ; clear edge status
         0x70, 0x47, // bx lr
-        0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x10, 0x23, 0xff, 0x1f, // 0x1fff2310 incoming r0 marker
         0x00, 0x23, 0xff, 0x1f, // 0x1fff2300 marker
         0x4c, 0x80, 0x00, 0x40, // 0x4000804c GPIO interrupt status
     };
@@ -612,11 +739,17 @@ int main() {
     std::uint32_t irq_marker = 0;
     CHECK(irq_chip.core().read_memory(0x1fff2300, &irq_marker, sizeof irq_marker));
     CHECK(irq_marker == 0); // changing level mode to edge is not itself an edge
+    CHECK(irq_chip.core().read_memory(gpio_callback_argument, &irq_marker,
+                                       sizeof irq_marker));
+    CHECK(irq_marker == 0);
     irq_chip.set_gpio_input(0, true);
     CHECK(irq_chip.run(irq_chip.core().cycles() + 100).reason ==
           cortexm::StopReason::Deadline);
     CHECK(irq_chip.core().read_memory(0x1fff2300, &irq_marker, sizeof irq_marker));
     CHECK(irq_marker == 7);
+    CHECK(irq_chip.core().read_memory(gpio_callback_argument, &irq_marker,
+                                       sizeof irq_marker));
+    CHECK(irq_marker == irq_callback); // ROM's GPIO wrapper tail-branches with its pointer in r0.
 
     Phy6252 timer_irq_chip;
     timer_irq_chip.load_firmware(image);
@@ -1292,6 +1425,58 @@ int main() {
     CHECK(chip.read(0x40031c01 + sizeof rx_frame, 1) == 0x7b);
     CHECK(chip.read(0x40031c02 + sizeof rx_frame, 1) == 0xa8);
     CHECK(static_cast<std::int8_t>(chip.read(0x400300e4, 4) >> 24) == -50);
+
+    // PHY+ selects TRX when transmitting a packet that expects a response.
+    // The controller completes only after the RX window receives a frame or
+    // reaches LL+0x28's timeout.
+    chip.write(0x40031014, 0x3fffu, 4);
+    chip.write(0x40031028, 1500, 4);
+    chip.write(0x40031004, 0x010102, 4); // TRX: transmit, then receive
+    chip.write(0x4003100c, 0x0f, 4);
+    chip.write(0x40031400, sizeof(tx_frame) + 2, 1);
+    for (std::size_t i = 0; i < sizeof tx_frame; ++i)
+        chip.write(0x40031401 + static_cast<std::uint32_t>(i), tx_frame[i], 1);
+    const std::size_t frames_before_trx = air.frames().size();
+    chip.write(0x40031000, 1, 4);
+    CHECK(air.frames().size() == frames_before_trx + 1);
+    const auto trx_tx = air.frames().back();
+    CHECK(trx_tx.source == "phy6252");
+    const std::uint64_t ack_start_ns = trx_tx.end_ns + 192000;
+    const std::uint8_t ack_frame[] = {0x02, 0x00, 0xa6};
+    const std::uint64_t ack_id = air.transmit(
+        "coordinator", "phy6252", mcuemu::RadioProtocol::Zigbee802154,
+        trx_tx.channel, ack_start_ns,
+        std::vector<std::uint8_t>(ack_frame, ack_frame + sizeof ack_frame));
+    const auto ack_it = std::find_if(air.frames().begin(), air.frames().end(),
+        [ack_id](const auto &frame) { return frame.id == ack_id; });
+    CHECK(ack_it != air.frames().end());
+    CHECK(chip.run(chip.core().ns_to_cycles(trx_tx.end_ns + 100000)).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK((chip.read(0x40031010, 4) & 1u) == 0); // TX alone does not finish TRX.
+    if (ack_it != air.frames().end()) {
+        CHECK(chip.run(chip.core().ns_to_cycles(ack_it->end_ns + 20000)).reason ==
+              cortexm::StopReason::Deadline);
+    }
+    CHECK((chip.read(0x40031010, 4) & ((1u << 0) | (1u << 10))) ==
+          ((1u << 0) | (1u << 10)));
+    CHECK(chip.read(0x40031c00, 1) == sizeof(ack_frame) + 2);
+    for (std::size_t i = 0; i < sizeof ack_frame; ++i)
+        CHECK(chip.read(0x40031c01 + static_cast<std::uint32_t>(i), 1) == ack_frame[i]);
+
+    chip.write(0x40031014, 0x3fffu, 4);
+    chip.write(0x40031028, 500, 4); // No response: complete with MD and RTO.
+    chip.write(0x40031004, 0x010102, 4);
+    chip.write(0x40031400, sizeof(tx_frame) + 2, 1);
+    for (std::size_t i = 0; i < sizeof tx_frame; ++i)
+        chip.write(0x40031401 + static_cast<std::uint32_t>(i), tx_frame[i], 1);
+    chip.write(0x40031000, 1, 4);
+    const auto timeout_tx = air.frames().back();
+    CHECK(chip.run(chip.core().ns_to_cycles(timeout_tx.end_ns + 550000)).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK((chip.read(0x40031010, 4) & ((1u << 0) | (1u << 2))) ==
+          ((1u << 0) | (1u << 2)));
+    CHECK((chip.read(0x40031010, 4) & (1u << 10)) == 0);
+
     chip.write(0x40031f00, 0x1fff0a4a, 4);
     CHECK(chip.read(0x40031f00, 4) == 0x1fff0a4a);
     chip.write(0x40031fa0, 0x1fff0a4a, 4);

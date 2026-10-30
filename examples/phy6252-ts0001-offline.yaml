@@ -12,12 +12,15 @@ devices:
       - id: mcu
         model: phy6252
         firmware: ../firmware/phy6252-ts0001.bin
+        efuse: ../firmware/phy6222-efuse.bin
+        rf_calibration: ../firmware/phy6222-rfcal.bin
     nets:
       - { id: key1_line, pull: up, pins: [mcu.GPIO8] }
       - { id: key2_line, pull: up, pins: [mcu.GPIO3] }
       - { id: relay_line, pins: [mcu.GPIO2] }
     parts:
       - { id: key1, type: button, pins: { out: key1_line } }
+      - { id: key2, type: button, pins: { out: key2_line } }
 
 attach:
   - { endpoint: ts0001.relay_line, sink: "vcd:relay.vcd" }
