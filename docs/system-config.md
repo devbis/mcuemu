@@ -14,7 +14,7 @@ version: 1                 # required
 world:
   duration: 10ms           # run length unless --for is given
   quantum: 5us             # max skew between MCUs (default 5us)
-  seed: 1
+  seed: 1                  # deterministic radio propagation and PHY6252 LL_Rand
   radio:                   # radio media, see "Radio" below
     - { id: air0, model: log_distance, path_loss_exponent: 2.7 }
 devices:
@@ -24,6 +24,8 @@ devices:
         model: tlsr8258    # tlsr8258 | ca51f253l3 | nrf52840 | efr32mg21 | esp32c6 | bl702
         variant: F1K       # tlsr8258 only: F512 (default) | F1K
         firmware: fw/a.bin # relative to this file; or a list of flash pieces, see below
+        efuse: data/chip.efuse # phy6252 only: optional 32-byte external eFuse dump
+        rom: data/phy6252-rom.bin # phy6252 only: optional 96 KiB ROM or 128 KiB dump
         clock_hz: 48MHz    # 48000000 | 48MHz | 32kHz
         supply_mv: 3300    # tlsr8258 only: supply seen by the ADC's VBAT input (default 3300)
         start_at: 100us    # power-on delay on the world timeline
@@ -84,6 +86,35 @@ firmware:
 file where it starts (default 0) and `size` its length (default: the rest of
 the file); numbers may be decimal or `0x` hex. Only `tlsr8258` accepts more
 than a single image at offset 0.
+
+For `phy6252`, `efuse:` optionally supplies a raw 32-byte external dump, four
+8-byte blocks in block-number order. The dump is kept outside the repository.
+Without it, `efuse_read` returns the SDK's `PPlus_ERR_UNINITIALIZED` status
+for every block and leaves the caller's buffer unchanged when using the
+default host-trap ROM. With an external `rom:`, it backs the ROM code's AON
+eFuse data registers; absent data is reported as an unimplemented register
+access.
+
+`phy6252` also accepts optional `rom:` to execute an external ROM dump instead
+of the default ROM-call traps. Supply exactly 96 KiB, or a 128 KiB dump whose
+last 32 KiB are erased (`0xff`). The dump's interrupt vector table is used as
+provided. ROM dumps remain external test inputs. The supplied PHY6222 ROM dump
+has been tested with the PB-03F PHY6252 Zephyr image through Zigbee association
+and bidirectional NWK traffic; see
+[`phy6252-investigation.md`](phy6252-investigation.md). Other ROM and firmware
+pairings still need their own validation.
+
+For PHY6252 RF power calibration, `rf_calibration:` optionally supplies four
+raw `kCal` bytes in this order: channel 2 and 66 at `fDev=0`, then channel 2
+and 66 at `fDev=1`. This external input replaces the analog `RF+0xf4` result
+when the related SDK's calibration trigger is observed. It is required only by
+ROM/firmware paths that execute that calibration; the emulator does not embed
+unit-specific results.
+
+The external-ROM PHY6252 path currently returns the captured P622ZB2S flash
+JEDEC ID (`c8 64 13`) for the documented three-byte `RDID` command. This ID
+comes from that module's `SoC_info.txt`; other flash variants are not yet
+configurable.
 
 ## Inserting devices from files
 
@@ -228,6 +259,10 @@ frame (`zigbee-802.15.4 ch15 d.a -> * 3B 010203`) at its start time.
 hears every frame (RSSI reads -50 dBm) and any overlap on that channel is a
 collision. `log_distance` adds geometry:
 
+`world.seed` also selects a repeatable `LL_Rand` stream for each PHY6252 MCU,
+derived from the seed and its instance name. Other PHY6252 runs use the fixed
+standalone default seed.
+
 - received power = TX power - loss; a frame below the receiver's sensitivity
   is not heard;
 - a frame is decoded only if SINR >= threshold, where interference is every
@@ -250,7 +285,9 @@ TX power comes from the node's `tx_power_dbm`, not from the chip's registers.
 Zigbee RF path; `ble` on it is rejected (its BLE registers are not modeled),
 so BLE traffic comes from scripted parts, which can use the `radio` API in
 [scripting.md](scripting.md). `nrf52840`, `efr32mg21`, `esp32c6` and `bl702` connect an 802.15.4 radio (`zigbee`)
-and reject `ble`. `ca51f253l3` has no radio.
+and reject `ble`. `ca51f253l3` has no radio. The experimental `phy6252` model
+connects its Zephyr PB-03F 802.15.4 path to shared `zigbee` air; this PHY
+behavior is inferred from the Zephyr driver and is not hardware-verified.
 
 ## Naming
 
@@ -258,9 +295,9 @@ and reject `ble`. `ca51f253l3` has no radio.
 - Net: `device.net` for device-scope nets, the plain id for world-scope nets.
   Every net is also an endpoint with the same name.
 - Pads: `tlsr8258` has `PA0`..`PE7`. `nrf52840` has `P0.00`..`P0.31` and
-  `P1.00`..`P1.15`. `efr32mg21` has `PA0`..`PD15`. `esp32c6` has `GPIO0`..`GPIO30`, `esp32h2` `GPIO0`..`GPIO27` (plain GPIO and pull-ups; the GPIO matrix to other peripherals is not modelled). `ca51f253l3` has no GPIO model yet, so no pad can be wired.
+  `P1.00`..`P1.15`. `efr32mg21` has `PA0`..`PD15`. `esp32c6` has `GPIO0`..`GPIO30`, `esp32h2` `GPIO0`..`GPIO27` (plain GPIO and pull-ups; the GPIO matrix to other peripherals is not modelled). `phy6252` exposes `GPIO0`..`GPIO22` (plain GPIO, direction, pulls and basic interrupts; alternate pad functions are not modelled); `ca51f253l3` has no GPIO model yet.
 - UART: `uartN`. `tlsr8258` has `uart0`; `nrf52840` has `uart0`/`uart1` (UARTE0
-  and UARTE1); `efr32mg21` has none yet; `esp32c6`/`esp32h2` have `uart0` (the console, with a receive FIFO and interrupts); `ca51f253l3` has `uart0`/`uart1` (transmit only), so a link to
+  and UARTE1); `efr32mg21` has none yet; `phy6252` has polling `uart0` without interrupts; `esp32c6`/`esp32h2` have `uart0` (the console, with a receive FIFO and interrupts); `ca51f253l3` has `uart0`/`uart1` (transmit only), so a link to
   it is one-way and reports a warning.
 
 ## Semantics
@@ -268,8 +305,10 @@ and reject `ble`. `ca51f253l3` has no radio.
 - Pads follow the GPIO OUT/OEN registers: OEN bit 0 drives OUT, 1 releases the
   pad. The line level is read back through the GPIO input register; an
   undriven line with no pull reads as high, like an unwired input.
-- An open-drain net treats a `High` drive as released (wired-AND). A pull is a
-  weak driver that loses against any strong one.
+- An open-drain net treats a `High` drive as released (wired-AND). An explicit
+  board-level pull beats a conflicting on-chip weak pull, while a driven GPIO
+  output still overrides it. The PHY62xx strong pull-up is modeled separately
+  from its weak pull-up.
 - A UART link moves bytes the transmitting UART has finished sending to the
   other side's RX FIFO after `latency`; bytes wait while the FIFO is full.
   `baud` is accepted but the wire timing comes from each chip model.

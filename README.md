@@ -23,6 +23,7 @@ radio medium in YAML, and mcuemu runs them on one virtual timeline.
 | Cmsemicron CA51F253L3 | MCS-51 | CPU, Timer0, UART1, PWM; no GPIO, ADC or radio |
 | Silicon Labs EFR32MG21 (BRD4181A) | Cortex-M33 | NVIC, SysTick, FPU, WFE; CMU/HFXO, GPIO/EXTI, MSC; a radio with the interface of the zigbee-rs driver (not the silicon's); the zigbee-rs sensor image joins a TLSR8258 coordinator |
 | Nordic nRF52840 (Pro Micro / nice!nano board) | Cortex-M4F | NVIC, SysTick, FPU, WFE; clocks, GPIO/GPIOTE, UARTE, TWIM, SAADC, TIMER, RTC, RNG, ECB, WDT, NVMC, PPI; 802.15.4 RADIO; the Embassy Zigbee sensor image joins a TLSR8258 coordinator; no BLE yet |
+| PHY6252 (Ai-Thinker PB-03F) | Cortex-M0 | Experimental 512 KiB flash model, polling UART, GPIO, timers, AON and inferred 802.15.4 path; both the Zephyr ED and closed TS0001 firmware join a TLSR8258 coordinator and exchange NWK data in `sim`. TS0001's specific Tuya relay command path remains unverified |
 
 Support is partial and driven by the firmware tested so far. See
 [`docs/status.md`](docs/status.md) and the per-chip docs.
@@ -39,6 +40,7 @@ Support is partial and driven by the firmware tested so far. See
   [`docs/nrf52840.md`](docs/nrf52840.md) (Cortex-M core, peripherals, status),
   [`docs/efr32mg21.md`](docs/efr32mg21.md) (Cortex-M33, what is and is not the silicon) —
   chip models.
+- [`docs/phy6252-investigation.md`](docs/phy6252-investigation.md) — experimental PHY6252 boot, ROM, radio and firmware evidence.
 - [`examples/`](examples/) — ready-made systems (`mcuemu sim examples/world.yaml`).
 
 ## Running a system
