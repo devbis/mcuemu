@@ -1050,6 +1050,15 @@ the PHY6252 receiving at 6.300 s, then `radio_receiving` turns off at 6.412 s;
 direct samples around 6.756 s remain off. The beacon therefore arrives outside
 the firmware's RX window and is not passed to the FIFO helper.
 
+A follow-up first-boot run held GPIO8 from 1 s through 8 s, then sampled the
+radio mode every millisecond through 20 s. After release it saw no further RX
+window and no more `ll_hw_read_rfifo_zb` calls. The same capture contains live
+coordinator/sampleLight traffic, including the light's association and NWK
+exchange, while the TS0001 emits no frame. This narrows the failure to the
+closed stack not scheduling or keeping its receive path active after the
+initial commissioning callback; the shared air and another Zigbee node remain
+active.
+
 The same run has no TX FIFO writes and no `STX` or `TRX` mode request, so the
 modeled transmitter never receives a request. The evidence points to the
 closed stack's receive/commissioning progression: its next table row
