@@ -94,12 +94,14 @@ void test_config_parsing() {
         "version: 1\ndevices:\n  - id: d\n    mcus:\n"
         "      - {id: m, model: phy6252, firmware: fw/relay.bin, efuse: data/chip.efuse}\n",
         "/base/dir");
-    CHECK(efuse_config.devices[0].mcus[0].efuse == "/base/dir/data/chip.efuse");
+    CHECK(std::filesystem::path(*efuse_config.devices[0].mcus[0].efuse).generic_string() ==
+          "/base/dir/data/chip.efuse");
     const sim::SystemConfig rom_config = sim::parse_system_config(
         "version: 1\ndevices:\n  - id: d\n    mcus:\n"
         "      - {id: m, model: phy6252, firmware: fw/relay.bin, rom: data/rom.bin}\n",
         "/base/dir");
-    CHECK(rom_config.devices[0].mcus[0].rom == "/base/dir/data/rom.bin");
+    CHECK(std::filesystem::path(*rom_config.devices[0].mcus[0].rom).generic_string() ==
+          "/base/dir/data/rom.bin");
     const sim::SystemConfig rom_boot_config = sim::parse_system_config(
         "version: 1\ndevices:\n  - id: d\n    mcus:\n"
         "      - {id: m, model: phy6252, firmware: fw/relay.bin, rom: data/rom.bin, boot_from_rom: true}\n",

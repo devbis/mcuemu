@@ -8,6 +8,7 @@
 #include <charconv>
 #include <cctype>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <span>
 #include <stdexcept>
