@@ -1,5 +1,6 @@
 #include "cortexm/core.hpp"
 
+#include <unicorn/arm.h>
 #include <unicorn/unicorn.h>
 
 #include <algorithm>
@@ -56,7 +57,7 @@ struct Core::Region {
     std::vector<std::uint8_t> storage;
 };
 
-enum class Cause { None, Deadline, StepLimit, Hint, Halted, Reset };
+enum class Cause { None, Deadline, StepLimit, Hint, Halted, Reset, CodeInvalidation, ExceptionBoundary };
 
 struct Core::Impl final : Bus {
     Core &core;
@@ -64,8 +65,12 @@ struct Core::Impl final : Bus {
     WriteProtectHandler write_protect;
     ServiceHandler service;
     std::vector<std::function<void()>> deferred;
-
     uc_hook hooks[3]{};
+    uc_hook invalid_hook{};
+    std::uint64_t invalid_address{0};
+    std::uint64_t invalid_value{0};
+    unsigned invalid_size{0};
+    bool invalid_write{false};
     std::uint64_t deadline{0};
     std::uint64_t service_deadline{Never};
     Cause cause{Cause::None};
@@ -74,6 +79,9 @@ struct Core::Impl final : Bus {
     bool event{false};
     bool sleep_wfe{false};
     bool reset_pending{false};
+    bool running{false};
+    bool code_invalidation_pending{false};
+    bool exception_boundary_pending{false};
 
     // SysTick.
     std::uint32_t st_ctrl{0}, st_reload{0}, st_value{0};
@@ -123,6 +131,16 @@ struct Core::Impl final : Bus {
                                    static_cast<std::uint32_t>(value));
     }
 
+    static bool invalid_access(uc_engine *, uc_mem_type type, std::uint64_t address, int size,
+                               std::int64_t value, void *user) {
+        auto *self = static_cast<Impl *>(user);
+        self->invalid_address = address;
+        self->invalid_size = static_cast<unsigned>(size);
+        self->invalid_value = static_cast<std::uint64_t>(value);
+        self->invalid_write = type == UC_MEM_WRITE_UNMAPPED || type == UC_MEM_WRITE_PROT;
+        return false; // Preserve the engine fault; record details for the host diagnostic.
+    }
+
     void build() {
         if (core.uc_) {
             uc_close(core.uc_);
@@ -132,7 +150,8 @@ struct Core::Impl final : Bus {
         if (uc_open(UC_ARCH_ARM, static_cast<uc_mode>(UC_MODE_THUMB | UC_MODE_MCLASS), &uc) != UC_ERR_OK)
             throw std::runtime_error("cannot create the ARM engine");
         core.uc_ = uc;
-        const uc_cpu_arm model = core.config_.model == Model::M3    ? UC_CPU_ARM_CORTEX_M3
+        const uc_cpu_arm model = core.config_.model == Model::M0    ? UC_CPU_ARM_CORTEX_M0
+                                 : core.config_.model == Model::M3    ? UC_CPU_ARM_CORTEX_M3
                                  : core.config_.model == Model::M33 ? UC_CPU_ARM_CORTEX_M33
                                                                     : UC_CPU_ARM_CORTEX_M4;
         check(uc_ctl_set_cpu_model(uc, model), "set CPU model");
@@ -161,6 +180,9 @@ struct Core::Impl final : Bus {
         check(uc_hook_add(uc, &hooks[2], UC_HOOK_MEM_WRITE_PROT,
                           reinterpret_cast<void *>(&Impl::write_prot_hook), this, 1, 0),
               "add write-protect hook");
+        check(uc_hook_add(uc, &invalid_hook, UC_HOOK_MEM_INVALID,
+                          reinterpret_cast<void *>(&Impl::invalid_access), this, 1, 0),
+              "add invalid memory hook");
         std::uint32_t priority_bits = core.config_.priority_bits;
         check(uc_arm_nvic(uc, UC_ARM_NVIC_CONFIG, core.config_.irq_count, &priority_bits, 0),
               "configure NVIC");
@@ -186,6 +208,18 @@ struct Core::Impl final : Bus {
 
     // ---- per-instruction hook ------------------------------------------
     void on_instruction(std::uint32_t address, unsigned size) {
+        if (exception_boundary_pending) {
+            exception_boundary_pending = false;
+            cause = Cause::ExceptionBoundary;
+            uc_emu_stop(core.uc_);
+            return;
+        }
+        if (code_invalidation_pending) {
+            code_invalidation_pending = false;
+            cause = Cause::CodeInvalidation;
+            uc_emu_stop(core.uc_);
+            return;
+        }
         if (!deferred.empty()) {
             auto actions = std::move(deferred);
             deferred.clear();
@@ -197,11 +231,53 @@ struct Core::Impl final : Bus {
             uc_emu_stop(core.uc_);
             return;
         }
+        if (core.stack_trace_ != nullptr) {
+            std::uint32_t msp = 0, psp = 0;
+            if (uc_reg_read(core.uc_, UC_ARM_REG_MSP, &msp) == UC_ERR_OK &&
+                uc_reg_read(core.uc_, UC_ARM_REG_PSP, &psp) == UC_ERR_OK) {
+                auto trace_bank = [&](const char *name, std::uint32_t value,
+                                      std::uint32_t &last, bool &last_valid,
+                                      bool &initialized) {
+                    const bool valid = value >= core.stack_lower_bound_ &&
+                                       value <= core.stack_upper_bound_;
+                    if ((!initialized && value != 0 && !valid) ||
+                        (initialized && valid != last_valid)) {
+                        *core.stack_trace_ << name << " trace: 0x" << std::hex << last
+                                           << " -> 0x" << value;
+                        if (core.last_instruction_pc_ != 0)
+                            *core.stack_trace_ << " after 0x" << core.last_instruction_pc_;
+                        *core.stack_trace_ << " before 0x" << address << " ("
+                                           << (valid ? "valid" : "outside SRAM") << ")\n" << std::dec;
+                    }
+                    last = value;
+                    last_valid = valid;
+                    initialized = true;
+                };
+                trace_bank("MSP", msp, core.last_msp_, core.last_msp_valid_,
+                           core.msp_trace_initialized_);
+                trace_bank("PSP", psp, core.last_psp_, core.last_psp_valid_,
+                           core.psp_trace_initialized_);
+            }
+        }
+        if (core.config_.track_last_instruction_pc || core.pc_trace_ != nullptr ||
+            core.stack_trace_ != nullptr) {
+            core.previous_instruction_pc_ = core.last_instruction_pc_;
+            core.last_instruction_pc_ = address;
+        }
         if (core.pc_trace_ != nullptr && address >= core.pc_first_ && address <= core.pc_last_) {
             *core.pc_trace_ << "PC 0x" << std::hex << address << std::dec << " cycles=" << core.cycles_;
             if (core.pc_trace_regs_) {
                 for (unsigned reg = 0; reg != 13; ++reg)
                     *core.pc_trace_ << " r" << reg << "=0x" << std::hex << core.reg(reg) << std::dec;
+                *core.pc_trace_ << " sp=0x" << std::hex << core.reg(13)
+                                << " lr=0x" << core.reg(14);
+                std::uint32_t msp = 0, psp = 0, control = 0, ipsr = 0;
+                uc_reg_read(core.uc_, UC_ARM_REG_MSP, &msp);
+                uc_reg_read(core.uc_, UC_ARM_REG_PSP, &psp);
+                uc_reg_read(core.uc_, UC_ARM_REG_CONTROL, &control);
+                uc_reg_read(core.uc_, UC_ARM_REG_IPSR, &ipsr);
+                *core.pc_trace_ << " msp=0x" << msp << " psp=0x" << psp
+                                << " control=0x" << control << " ipsr=0x" << ipsr << std::dec;
             }
             *core.pc_trace_ << '\n';
         }
@@ -266,6 +342,8 @@ struct Core::Impl final : Bus {
     std::uint32_t read(std::uint32_t address, unsigned size) override {
         if (address >= ScsBase && address < ScsBase + 0x1000) {
             const std::uint32_t offset = address - ScsBase;
+            if (!core.config_.vtor_present && (offset & ~3u) == 0xd08)
+                return 0;
             if (offset >= 0x10 && offset < 0x20)
                 return systick_read(offset);
             std::uint32_t value = 0;
@@ -297,9 +375,20 @@ struct Core::Impl final : Bus {
     void write(std::uint32_t address, std::uint32_t value, unsigned size) override {
         if (address >= ScsBase && address < ScsBase + 0x1000) {
             const std::uint32_t offset = address - ScsBase;
+            if (!core.config_.vtor_present && (offset & ~3u) == 0xd08)
+                return;
             if (offset >= 0x10 && offset < 0x20) {
                 systick_write(offset, value);
                 return;
+            }
+            if ((offset & ~3u) == 0xd04) {
+                const unsigned shift = size < 4 ? (offset & 3u) * 8 : 0;
+                const std::uint32_t write_value = value << shift;
+                // FreeRTOS pends PendSV from its yield macro. End the current
+                // translated block before the thread can execute past that
+                // store, so the NVIC takes the exception at the next entry.
+                exception_boundary_pending = (write_value & (1u << 28)) != 0 &&
+                                             (write_value & (1u << 27)) == 0;
             }
             uc_arm_nvic(core.uc_, UC_ARM_NVIC_SCS_WRITE, offset, &value, size);
             std::uint32_t reset = 0;
@@ -422,6 +511,7 @@ void Core::reset(std::uint32_t vector_table) {
     impl_->build();
     impl_->event = false;
     impl_->deferred.clear();
+    impl_->exception_boundary_pending = false;
     impl_->st_ctrl = impl_->st_reload = impl_->st_value = 0;
     impl_->st_countflag = false;
     impl_->st_cycle = cycles_;
@@ -429,7 +519,7 @@ void Core::reset(std::uint32_t vector_table) {
     sleeping_ = false;
     std::uint32_t vector[2] = {0, 0};
     read_memory(vector_table, vector, sizeof vector);
-    if (vector_table != 0)
+    if (vector_table != 0 && config_.vtor_present)
         uc_arm_nvic(uc_, UC_ARM_NVIC_SCS_WRITE, 0xd08, &vector_table, 4);
     std::uint32_t sp = vector[0];
     std::uint32_t pc = vector[1] & ~1u;
@@ -438,6 +528,9 @@ void Core::reset(std::uint32_t vector_table) {
     impl_->service_deadline = 0; // service once before the first instruction
     impl_->deadline = 0;
     impl_->reset_pending = false;
+    last_instruction_pc_ = 0;
+    previous_instruction_pc_ = 0;
+    msp_trace_initialized_ = psp_trace_initialized_ = false;
 }
 
 void Core::request_reset() {
@@ -448,9 +541,24 @@ void Core::request_reset() {
     }
 }
 
+void Core::set_vtor(std::uint32_t address) {
+    if (uc_ && config_.vtor_present)
+        uc_arm_nvic(uc_, UC_ARM_NVIC_SCS_WRITE, 0xd08, &address, 4);
+}
+
 void Core::invalidate_code() {
     if (uc_)
         uc_ctl_flush_tb(uc_);
+}
+
+void Core::request_code_invalidation() {
+    if (!uc_)
+        return;
+    if (!impl_->running) {
+        uc_ctl_flush_tb(uc_);
+        return;
+    }
+    impl_->code_invalidation_pending = true;
 }
 
 void Core::set_service_handler(ServiceHandler handler) { impl_->service = std::move(handler); }
@@ -465,12 +573,38 @@ void Core::request_service(std::uint64_t at_cycle) noexcept {
 
 std::uint64_t Core::cycles_to_ns(std::uint64_t cycles) const noexcept {
     const std::uint64_t hz = config_.clock_hz;
-    return cycles / hz * 1000000000ull + cycles % hz * 1000000000ull / hz;
+    if (cycles >= clock_epoch_cycles_) {
+        const std::uint64_t elapsed = cycles - clock_epoch_cycles_;
+        return clock_epoch_ns_ + elapsed / hz * 1000000000ull +
+               elapsed % hz * 1000000000ull / hz;
+    }
+    const std::uint64_t elapsed = clock_epoch_cycles_ - cycles;
+    const std::uint64_t ns = elapsed / hz * 1000000000ull +
+                             elapsed % hz * 1000000000ull / hz;
+    return ns > clock_epoch_ns_ ? 0 : clock_epoch_ns_ - ns;
 }
 
 std::uint64_t Core::ns_to_cycles(std::uint64_t ns) const noexcept {
     const std::uint64_t hz = config_.clock_hz;
-    return ns / 1000000000ull * hz + ns % 1000000000ull * hz / 1000000000ull;
+    if (ns >= clock_epoch_ns_) {
+        const std::uint64_t elapsed = ns - clock_epoch_ns_;
+        return clock_epoch_cycles_ + elapsed / 1000000000ull * hz +
+               elapsed % 1000000000ull * hz / 1000000000ull;
+    }
+    const std::uint64_t elapsed = clock_epoch_ns_ - ns;
+    const std::uint64_t cycles = elapsed / 1000000000ull * hz +
+                                 elapsed % 1000000000ull * hz / 1000000000ull;
+    return cycles > clock_epoch_cycles_ ? 0 : clock_epoch_cycles_ - cycles;
+}
+
+void Core::set_clock_hz(std::uint32_t clock_hz) {
+    if (clock_hz == 0)
+        throw std::invalid_argument("Cortex-M clock must be nonzero");
+    if (clock_hz == config_.clock_hz)
+        return;
+    clock_epoch_ns_ = cycles_to_ns(cycles_);
+    clock_epoch_cycles_ = cycles_;
+    config_.clock_hz = clock_hz;
 }
 
 void Core::advance_to(std::uint64_t cycle) noexcept {
@@ -483,6 +617,20 @@ void Core::set_irq_line(unsigned irq, bool level) {
         return;
     std::uint32_t value = level ? 1 : 0;
     uc_arm_nvic(uc_, UC_ARM_NVIC_SET_IRQ, 16 + irq, &value, 0);
+}
+
+bool Core::interrupts_masked() {
+    std::uint32_t value = 0;
+    if (uc_)
+        uc_reg_read(uc_, UC_ARM_REG_PRIMASK, &value);
+    return (value & 1u) != 0;
+}
+
+void Core::set_interrupts_masked(bool masked) {
+    if (!uc_)
+        return;
+    std::uint32_t value = masked ? 1u : 0u;
+    uc_reg_write(uc_, UC_ARM_REG_PRIMASK, &value);
 }
 
 bool Core::interrupt_pending() {
@@ -551,9 +699,15 @@ RunResult Core::run(std::uint64_t until_cycle) {
         if (impl.deadline <= cycles_)
             impl.deadline = cycles_ + 1;
         impl.cause = Cause::None;
+        impl.invalid_address = 0;
+        impl.invalid_value = 0;
+        impl.invalid_size = 0;
+        impl.invalid_write = false;
 
         std::uint32_t pc_value = pc() | 1u;
+        impl.running = true;
         const uc_err error = uc_emu_start(uc_, pc_value, 0x100000000ull, 0, 0);
+        impl.running = false;
 
         switch (impl.cause) {
         case Cause::Deadline:
@@ -601,11 +755,25 @@ RunResult Core::run(std::uint64_t until_cycle) {
             result.reason = StopReason::Reset;
             result.message = "system reset requested";
             return result;
+        case Cause::CodeInvalidation:
+            uc_ctl_flush_tb(uc_);
+            break;
+        case Cause::ExceptionBoundary:
+            break;
         case Cause::None:
             if (error != UC_ERR_OK) {
                 result.reason = StopReason::Fault;
-                char buffer[96];
-                std::snprintf(buffer, sizeof buffer, "%s at pc 0x%x", uc_strerror(error), pc());
+                char buffer[192];
+                if (impl.invalid_size != 0) {
+                    std::snprintf(buffer, sizeof buffer,
+                                  "%s at pc 0x%x (invalid %s 0x%llx size=%u value=0x%llx)",
+                                  uc_strerror(error), pc(), impl.invalid_write ? "write" : "read",
+                                  static_cast<unsigned long long>(impl.invalid_address),
+                                  impl.invalid_size,
+                                  static_cast<unsigned long long>(impl.invalid_value));
+                } else {
+                    std::snprintf(buffer, sizeof buffer, "%s at pc 0x%x", uc_strerror(error), pc());
+                }
                 result.message = buffer;
                 return result;
             }

@@ -13,12 +13,18 @@ namespace {
 
 constexpr std::uint64_t Never = std::numeric_limits<std::uint64_t>::max();
 
+cortexm::Core::Config fixture_config(bool track_last_pc) {
+    cortexm::Core::Config config;
+    config.track_last_instruction_pc = track_last_pc;
+    return config;
+}
+
 struct Fixture {
     cortexm::Core core;
     std::uint8_t *flash;
 
-    explicit Fixture(const std::vector<std::uint8_t> &program)
-        : core(cortexm::Core::Config{}) {
+    explicit Fixture(const std::vector<std::uint8_t> &program, bool track_last_pc = false)
+        : core(fixture_config(track_last_pc)) {
         flash = core.map_memory(0, 0x10000, false);
         core.map_memory(0x20000000, 0x40000, true);
         std::memcpy(flash, program.data(), program.size());
@@ -82,6 +88,13 @@ void test_core_systick_interrupt() {
     CHECK(f.word(0x20000100) == 10); // every 1000 cycles from about cycle 10
 }
 
+void test_core_pendsv_preempts_after_yield_store() {
+    Fixture f(nrf52_programs::pendsv_yield);
+    CHECK(f.core.run(2000).reason == cortexm::StopReason::Deadline);
+    CHECK(f.word(0x20000104) == 1); // PendSV ran before the next thread instruction
+    CHECK(f.word(0x20000100) == 2); // the thread resumed after the exception return
+}
+
 // Zephyr runs threads on the process stack. Entering the handler must switch to
 // the main stack (the exception frame stays on PSP) and the return must pop that
 // frame; the NVIC's acknowledge once skipped the stack switch and popped zeros.
@@ -126,6 +139,14 @@ void test_core_reset_and_breakpoint() {
     const cortexm::RunResult stopped = bkpt.core.run(1000);
     CHECK(stopped.reason == cortexm::StopReason::Halted);
     CHECK(bkpt.core.reg(0) == 7); // stopped at the breakpoint, before the next move
+}
+
+void test_core_tracks_the_two_most_recent_instruction_addresses() {
+    Fixture f(nrf52_programs::wfe, true);
+    CHECK(f.core.run(2000).reason == cortexm::StopReason::Deadline);
+    CHECK(f.core.last_instruction_pc() != 0);
+    CHECK(f.core.previous_instruction_pc() != 0);
+    CHECK(f.core.previous_instruction_pc() != f.core.last_instruction_pc());
 }
 
 void test_core_store_to_flash_reaches_the_handler() {
