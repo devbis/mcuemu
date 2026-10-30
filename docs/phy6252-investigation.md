@@ -232,6 +232,14 @@ available. Under the modeled wrapper, the 15-second network run contains only
 none. The dump remains an external analysis input; no ROM bytes or Ghidra
 project files are stored in the repository.
 
+A diagnostic experiment temporarily passed `r0=0` and `r0=1` to the saved-state
+TS0001 callback instead of the callback address. Both 15-second captures were
+byte-identical to the pointer-in-`r0` run: 19 coordinator frames and no TS0001
+transmission. Neither accepted scalar value is sufficient to resume the
+outbound radio path. The emulator retains the ROM-disassembly-based pointer
+argument; the experiment does not validate the callback ABI for the relay's
+actual ROM revision.
+
 The supplied `SoC_info.txt` reports the attached flash ID as `0x1364c8` and a
 512 KiB capacity. The external-ROM path accepts the SDK's three-byte `RDID`
 controller command and returns `c8 64 13` in wire order. This is tied to the
