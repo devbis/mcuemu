@@ -47,8 +47,8 @@ env:
   TC32_RUST_URL: https://github.com/modern-tc32/rust/releases/download/tc32-1.99.0-20261009-d79c44/tc32-rust-toolchain-linux-amd64.tar.gz
   TC32_RUST_SHA256: a3b1e187a03311d00551e0df33b78746e5f1d853d5bb48f4b2977583d33e9356
   ZEPHYR_ZIGBEE_RELEASE: https://github.com/devbis/zephyr-tlsr8258/releases/download/zephyr-zigbee-20261030-de387d
-  ZEPHYR_EFR32_ROUTER_SHA256: d7811e2fb91264c7c1fe722fae3de7dd9fcc962ea7a974faf788457567337537
-  ZEPHYR_EFR32_ED_SHA256: 7e573442b28d6b62bd46ab6e070b9be31dd2287b32ae998455705e2b5718b252
+  ZEPHYR_EFR32_ROUTER_SHA256: 1f172bc0ee806ce247ee1f04463bf3c5ce1c14a174ca656989b60640b5fbcc8d
+  ZEPHYR_EFR32_ED_SHA256: 905a9add7a49915924ef897eb5f09d4504b1e1158a9deb599fd58f201f4749b6
   THERMOSTAT_BASE: https://github.com/slacky1965/tuya_thermostat_full_custom_r02_zrd/raw/refs/heads/main/bin
 
 jobs:
