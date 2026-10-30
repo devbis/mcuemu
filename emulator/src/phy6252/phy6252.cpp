@@ -4,6 +4,7 @@
 #include <unicorn/unicorn.h>
 
 #include <algorithm>
+#include <ostream>
 #include <array>
 #include <charconv>
 #include <cctype>
@@ -522,6 +523,7 @@ void Phy6252::reset() {
     radio_rx_after_ns_ = 0;
     radio_rx_deadline_cycle_ = 0;
     radio_tx_active_ = false;
+    radio_tx_pending_ = false;
     radio_tx_wait_for_rx_ = false;
     radio_rx_active_ = false;
     radio_rx_rssi_ = -100;
@@ -2128,6 +2130,14 @@ void Phy6252::write(std::uint32_t address, std::uint32_t value, unsigned size) {
 }
 
 std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
+    const std::uint32_t value = read_register_impl(address, size);
+    if (mmio_trace_ && address >= mmio_trace_first_ && address <= mmio_trace_last_)
+        *mmio_trace_ << "R " << std::hex << address << " = " << value << std::dec << " cycles="
+                     << core_.cycles() << '\n';
+    return value;
+}
+
+std::uint32_t Phy6252::read_register_impl(std::uint32_t address, unsigned size) {
     if (size != 1 && size != 2 && size != 4) {
         unsupported_register(address, "read", 0, size);
         return 0;
@@ -2480,6 +2490,13 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
 }
 
 void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigned size) {
+    if (mmio_trace_ && address >= mmio_trace_first_ && address <= mmio_trace_last_)
+        *mmio_trace_ << "W " << std::hex << address << " = " << value << std::dec << " cycles="
+                     << core_.cycles() << '\n';
+    write_register_impl(address, value, size);
+}
+
+void Phy6252::write_register_impl(std::uint32_t address, std::uint32_t value, unsigned size) {
     if (size != 1 && size != 2 && size != 4) {
         unsupported_register(address, "write", value, size);
         return;
@@ -2776,8 +2793,9 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
                 // PHY_ABORT cancels controller completion but cannot retract a frame already on air.
                 radio_tx_active_ = false;
                 radio_tx_wait_for_rx_ = false;
+                radio_tx_pending_ = false;
             } else if ((ll_registers_[RadioLlBase + 0x04] & 7u) == 0) {
-                start_radio_tx();
+                trigger_radio_tx(false);
             } else if ((ll_registers_[RadioLlBase + 0x04] & 7u) == 1) {
                 radio_rx_active_ = true;
                 radio_rx_after_ns_ = core_.cycles_to_ns(core_.cycles());
@@ -2787,7 +2805,7 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             } else if ((ll_registers_[RadioLlBase + 0x04] & 7u) == 2) {
                 // PHY62xx PHY+ uses TRX for TX followed by an RX response/ACK
                 // window, with its timeout programmed through LL+0x28.
-                start_radio_tx(true);
+                trigger_radio_tx(true);
             } else if ((ll_registers_[RadioLlBase + 0x04] & 7u) == 3 &&
                        !radio_rtx_warning_logged_) {
                 std::fprintf(stderr,
@@ -3184,6 +3202,26 @@ std::int8_t Phy6252::radio_energy_dbm(std::uint64_t at_ns) const {
     return static_cast<std::int8_t>(std::clamp(strongest, -127.0, 0.0));
 }
 
+void Phy6252::trigger_radio_tx(bool wait_for_rx) {
+    // ll_hw_set_trx_settle() packs bb << 16 | afe << 8 | pll (microseconds, per the PHY62xx SDK);
+    // the baseband needs their sum before the first symbol and reads the TX FIFO only then.
+    // The Zephyr driver never programs the register, so it keeps its immediate start.
+    const auto settle_it = rf_registers_.find(RadioRfSettle);
+    const std::uint32_t settle = settle_it == rf_registers_.end() ? 0 : settle_it->second;
+    const std::uint64_t settle_us = ((settle >> 16) & 0xffu) + ((settle >> 8) & 0xffu) + (settle & 0xffu);
+    if (settle_us == 0) {
+        start_radio_tx(wait_for_rx);
+        return;
+    }
+    radio_rx_active_ = false;
+    radio_rx_deadline_cycle_ = 0;
+    radio_tx_pending_ = true;
+    radio_tx_pending_wait_for_rx_ = wait_for_rx;
+    radio_tx_pending_cycle_ = std::max(core_.cycles() + 1,
+        core_.ns_to_cycles(core_.cycles_to_ns(core_.cycles()) + settle_us * 1000u));
+    core_.request_service(radio_tx_pending_cycle_);
+}
+
 void Phy6252::start_radio_tx(bool wait_for_rx) {
     radio_rx_active_ = false;
     radio_rx_deadline_cycle_ = 0;
@@ -3292,11 +3330,16 @@ void Phy6252::sync_timer(unsigned timer, std::uint64_t now) {
         return;
 
     if (state.control & TimerUserMode) {
+        // DesignWare user-defined mode: on reaching zero the counter reloads
+        // LoadCount and keeps running until the handler stops it, so the timer
+        // is periodic. The closed TS0001 stack depends on this: it starts
+        // timer 6 once with 15.36 ms and counts ticks from its interrupt, and
+        // its scan, join and retry timers are all measured in those ticks.
         const std::uint64_t until_zero = state.current == 0 ? 1 : state.current;
         if (ticks >= until_zero) {
-            state.current = 0;
-            state.control &= ~TimerEnable;
-            state.cycle_remainder = 0;
+            const std::uint64_t period = state.load == 0 ? 1 : state.load;
+            const std::uint64_t after_zero = (ticks - until_zero) % period;
+            state.current = static_cast<std::uint32_t>(period - after_zero);
             state.interrupt_pending = true;
         } else {
             state.current -= static_cast<std::uint32_t>(ticks);
@@ -3323,6 +3366,10 @@ void Phy6252::update_timer_irq(unsigned timer) {
 }
 
 std::uint64_t Phy6252::service_radio(std::uint64_t now) {
+    if (radio_tx_pending_ && now >= radio_tx_pending_cycle_) {
+        radio_tx_pending_ = false;
+        start_radio_tx(radio_tx_pending_wait_for_rx_);
+    }
     if (radio_tx_active_ && now >= radio_tx_end_cycle_) {
         radio_tx_active_ = false;
         if (radio_tx_wait_for_rx_) {
@@ -3338,6 +3385,8 @@ std::uint64_t Phy6252::service_radio(std::uint64_t now) {
 
     std::uint64_t next = radio_tx_active_ ? radio_tx_end_cycle_ :
         std::numeric_limits<std::uint64_t>::max();
+    if (radio_tx_pending_)
+        next = std::min(next, radio_tx_pending_cycle_);
     if (radio_rx_active_ && air_) {
         const std::uint64_t now_ns = core_.cycles_to_ns(now);
         for (const mcuemu::RadioFrame &frame : air_->receive(

@@ -1,5 +1,7 @@
 #include "sim/phy6252_mcu.hpp"
+#include <cstdlib>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <stdexcept>
 
@@ -37,8 +39,58 @@ void Phy6252Mcu::load_firmware(const std::string &path) {
     reset();
 }
 void Phy6252Mcu::reset() { chip_.reset(); state_ = McuState::Running; fault_.clear(); }
+namespace {
+// Debug aid: MCUEMU_PHY6252_TRACE_PC="FROM_NS:TO_NS" prints every executed
+// instruction (cycle count, address) of every phy6252 MCU in that window to stderr;
+// MCUEMU_PHY6252_TRACE_RANGE="FIRST:LAST" limits it to those addresses.
+bool trace_window(std::uint64_t &from, std::uint64_t &to) {
+    static const char *text = std::getenv("MCUEMU_PHY6252_TRACE_PC");
+    if (!text) return false;
+    char *end = nullptr;
+    from = std::strtoull(text, &end, 0);
+    if (*end != ':') return false;
+    to = std::strtoull(end + 1, nullptr, 0);
+    return true;
+}
+} // namespace
+
 McuState Phy6252Mcu::run_until(std::uint64_t target_ns) {
     if (state_ != McuState::Running) return state_;
+    // Debug aid: MCUEMU_PHY6252_DUMP_SRAM="NS:PATH" writes the 64 KiB SRAM once the clock passes NS.
+    static bool dumped = false;
+    if (!dumped) {
+        if (const char *text = std::getenv("MCUEMU_PHY6252_DUMP_SRAM")) {
+            char *end = nullptr;
+            const std::uint64_t at = std::strtoull(text, &end, 0);
+            if (*end == ':' && time_ns() >= at) {
+                dumped = true;
+                std::vector<std::uint8_t> sram(0x10000);
+                if (chip_.core().read_memory(0x1fff0000u, sram.data(), sram.size()))
+                    std::ofstream(end + 1, std::ios::binary).write(reinterpret_cast<const char *>(sram.data()), sram.size());
+            }
+        }
+    }
+    std::uint64_t trace_from = 0, trace_to = 0;
+    if (trace_window(trace_from, trace_to))
+    {
+        std::uint32_t first = 0, last = 0xffffffffu;
+        if (const char *range = std::getenv("MCUEMU_PHY6252_TRACE_RANGE")) {
+            char *end = nullptr;
+            first = static_cast<std::uint32_t>(std::strtoull(range, &end, 0));
+            if (*end == ':') last = static_cast<std::uint32_t>(std::strtoull(end + 1, nullptr, 0));
+        }
+        chip_.core().set_pc_trace(time_ns() >= trace_from && time_ns() < trace_to ? &std::cerr : nullptr,
+                                  first, last, false);
+        std::uint32_t mmio_first = 0x40030000u, mmio_last = 0x40031fffu;
+        if (const char *range = std::getenv("MCUEMU_PHY6252_TRACE_MMIO")) {
+            char *end = nullptr;
+            mmio_first = static_cast<std::uint32_t>(std::strtoull(range, &end, 0));
+            if (*end == ':') mmio_last = static_cast<std::uint32_t>(std::strtoull(end + 1, nullptr, 0));
+        }
+        chip_.set_mmio_trace(std::getenv("MCUEMU_PHY6252_TRACE_MMIO") && time_ns() >= trace_from &&
+                                     time_ns() < trace_to ? &std::cerr : nullptr,
+                             mmio_first, mmio_last);
+    }
     const auto result = chip_.run(chip_.core().ns_to_cycles(target_ns));
     if (result.reason == cortexm::StopReason::Fault || result.reason == cortexm::StopReason::Halted) {
         state_ = result.reason == cortexm::StopReason::Fault ? McuState::Fault : McuState::Halted;

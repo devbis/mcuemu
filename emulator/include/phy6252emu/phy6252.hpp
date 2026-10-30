@@ -4,6 +4,7 @@
 #include "phy6252emu/image.hpp"
 #include "mcuemu/radio.hpp"
 
+#include <iosfwd>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -48,6 +49,12 @@ public:
     void set_gpio_observer(std::function<void(unsigned)> observer);
     void set_gpio_input(unsigned pin, bool high);
     GpioDrive gpio_drive(unsigned pin) const noexcept;
+    // Debug aid: logs register accesses in [first, last] (address, value, cycle) to `out`.
+    void set_mmio_trace(std::ostream *out, std::uint32_t first, std::uint32_t last) noexcept {
+        mmio_trace_ = out;
+        mmio_trace_first_ = first;
+        mmio_trace_last_ = last;
+    }
     std::uint32_t read(std::uint32_t address, unsigned size) override;
     void write(std::uint32_t address, std::uint32_t value, unsigned size) override;
 
@@ -83,6 +90,11 @@ private:
     std::uint64_t radio_rx_deadline_cycle_{0};
     bool radio_tx_active_{false};
     bool radio_tx_wait_for_rx_{false};
+    // A triggered TX starts after the TRX settle time (RF+0xbc) and reads its FIFO then, so a
+    // frame written right after the trigger is still sent (the TS0001 builds its ACKs that way).
+    bool radio_tx_pending_{false};
+    bool radio_tx_pending_wait_for_rx_{false};
+    std::uint64_t radio_tx_pending_cycle_{0};
     bool radio_rx_active_{false};
     std::int8_t radio_rx_rssi_{-100};
     std::uint32_t spif_config_{0x80000000u};
@@ -149,8 +161,12 @@ private:
     std::uint32_t gpio_interrupt_status_{0}, gpio_input_{0};
     std::function<void(unsigned)> gpio_observer_;
 
+    std::ostream *mmio_trace_{nullptr};
+    std::uint32_t mmio_trace_first_{0}, mmio_trace_last_{0};
     std::uint32_t read_register(std::uint32_t address, unsigned size);
+    std::uint32_t read_register_impl(std::uint32_t address, unsigned size);
     void write_register(std::uint32_t address, std::uint32_t value, unsigned size);
+    void write_register_impl(std::uint32_t address, std::uint32_t value, unsigned size);
     std::uint64_t service_peripherals(std::uint64_t now);
     std::uint64_t service_radio(std::uint64_t now);
     void sync_timer(unsigned timer, std::uint64_t now);
@@ -158,6 +174,7 @@ private:
     std::uint32_t gpio_input_data() const noexcept;
     void update_gpio_irq();
     void notify_gpio(std::uint32_t changed);
+    void trigger_radio_tx(bool wait_for_rx);
     void start_radio_tx(bool wait_for_rx = false);
     void schedule_radio_rx_timeout();
     void update_radio_irq();

@@ -386,10 +386,10 @@ int main() {
     chip.core().advance_to(fast_clock_start + 32);
     CHECK(chip.read(0x4000102c, 4) == 0xfffffffbu); // still four AP_TIM ticks at 32 MHz HCLK
     chip.write(0x40001064, 3, 4); // Timer5 load count
-    chip.write(0x4000106c, 3, 4); // enable one-shot
+    chip.write(0x4000106c, 3, 4); // enable, user-defined mode
     const std::uint64_t fast_timer_start = chip.core().cycles();
     chip.core().advance_to(fast_timer_start + 24);
-    CHECK(chip.read(0x40001068, 4) == 0);
+    CHECK(chip.read(0x40001068, 4) == 3); // reloaded with LoadCount after reaching zero
     CHECK(chip.read(0x40001074, 4) == 1); // three 4 MHz ticks took 24 HCLK cycles
     chip.reset();
     CHECK(chip.read(0x4000f018, 4) == 0x01064040); // captured AON PMCTL1
@@ -544,6 +544,14 @@ int main() {
     invoke_radio_rom(0x10cf8); // ll_hw_go
     CHECK(rom_test_chip.read(0x4003100c, 4) == 1); // ll_hw_go uses MD-only IRQs
     CHECK((rom_test_chip.read(0x40030094, 4) & 0xffu) == 0x2b); // clamped channel 2 TP cap
+    const std::uint32_t tx_settle = rom_test_chip.read(0x400300bc, 4);
+    if (tx_settle != 0) {
+        // The baseband reads the TX FIFO only after bb + afe + pll microseconds, so nothing is
+        // on the air at the trigger itself.
+        CHECK(phy_air.frames().empty());
+        CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 40000).reason ==
+              cortexm::StopReason::Deadline);
+    }
     CHECK(phy_air.frames().size() == 1);
     if (!phy_air.frames().empty()) {
         CHECK(phy_air.frames()[0].payload == std::vector<std::uint8_t>({0x01, 0x00, 0x5a}));
@@ -553,6 +561,24 @@ int main() {
     CHECK((rom_test_chip.read(0x40031010, 4) & 1u) != 0);
     invoke_radio_rom(0x10adc); // ll_hw_clr_irq
     CHECK(rom_test_chip.read(0x40031010, 4) == 0);
+    if (tx_settle != 0) {
+        // The TS0001 triggers its ACK first and writes the frame into the TX FIFO right after;
+        // the settle delay is what makes that work.
+        invoke_radio_rom(0x110e8); // ll_hw_rst_tfifo
+        invoke_radio_rom(0x112b8); // ll_hw_set_stx
+        invoke_radio_rom(0x10cf8); // ll_hw_go
+        rom_test_chip.write(0x40031400, 5, 1);
+        rom_test_chip.write(0x40031401, 0x02, 1);
+        rom_test_chip.write(0x40031402, 0x00, 1);
+        rom_test_chip.write(0x40031403, 0x77, 1);
+        CHECK(phy_air.frames().size() == 1);
+        CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 40000).reason ==
+              cortexm::StopReason::Deadline);
+        CHECK(phy_air.frames().size() == 2);
+        if (phy_air.frames().size() == 2)
+            CHECK(phy_air.frames()[1].payload == std::vector<std::uint8_t>({0x02, 0x00, 0x77}));
+        invoke_radio_rom(0x10adc); // ll_hw_clr_irq
+    }
 
     invoke_radio_rom(0x112a4); // ll_hw_set_srx
     invoke_radio_rom(0x11420); // ll_hw_trigger
@@ -1514,13 +1540,19 @@ int main() {
     chip.reset();
     const std::uint64_t timer_start = chip.core().cycles();
     chip.write(0x40001050, 5, 4); // Timer5 load count
-    chip.write(0x40001058, 3, 4); // enable, user-defined one-shot, IRQ unmasked
+    chip.write(0x40001058, 3, 4); // enable, user-defined mode, IRQ unmasked
     CHECK(chip.run(timer_start + 8).reason == cortexm::StopReason::Deadline);
     CHECK(chip.read(0x40001054, 4) == 3); // two ticks at 4 MHz
     CHECK(chip.run(timer_start + 20).reason == cortexm::StopReason::Deadline);
-    CHECK(chip.read(0x40001054, 4) == 0);
+    CHECK(chip.read(0x40001054, 4) == 5); // user-defined mode reloads LoadCount and keeps running
     CHECK(chip.read(0x40001060, 4) == 1);
     CHECK(chip.read(0x4000105c, 4) == 1); // EOI returns and clears pending
+    CHECK(chip.read(0x40001060, 4) == 0);
+    CHECK(chip.run(timer_start + 40).reason == cortexm::StopReason::Deadline);
+    CHECK(chip.read(0x40001060, 4) == 1); // periodic: the next period raises the IRQ again
+    CHECK(chip.read(0x4000105c, 4) == 1);
+    chip.write(0x40001058, 0, 4); // the handler stops it, as the SDK's one-shot users do
+    CHECK(chip.run(timer_start + 80).reason == cortexm::StopReason::Deadline);
     CHECK(chip.read(0x40001060, 4) == 0);
     chip.reset();
     const std::uint64_t timer6_start = chip.core().cycles();
