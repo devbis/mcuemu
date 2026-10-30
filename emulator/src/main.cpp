@@ -6,6 +6,7 @@
 #include "efr32emu/run_command.hpp"
 #include "esp32emu/run_command.hpp"
 #include "nrf52emu/run_command.hpp"
+#include "phy6252emu/run_command.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -64,7 +65,7 @@ void usage(std::ostream &out) {
            "       mcuemu serve --root DIR [--port N] [--bind ADDR] [--token T]\n"
            "       [--allow-origin ORIGIN]... [--max-sessions N] [--idle-timeout SEC]\n\n"
            "Models: TLSR8258F512, TLSR8258F1K, CA51F253L3 (MCS-51), NRF52840 (Cortex-M4), EFR32MG21 (Cortex-M33),\n"
-           "        ESP32C6, ESP32H2 (RISC-V, work in progress; `run`; esp32c6/esp32h2 in `sim`)\n"
+           "        ESP32C6, ESP32H2 (RISC-V), PHY6252 (Cortex-M0; experimental)\n"
            "Firmware is loaded as a raw image at flash address 0.\n"
            "Trace ranges are inclusive; addresses accept decimal or 0x hex.\n";
 }
@@ -305,6 +306,8 @@ int run_command(int argc, char **argv) {
             return efr32emu::run_command(argc, argv);
         else if (std::string(argv[i]) == "--model" && is_esp32_model(argv[i + 1]))
             return esp32emu::run_command(argc, argv);
+        else if (std::string(argv[i]) == "--model" && std::string(argv[i + 1]) == "PHY6252")
+            return phy6252emu::run_command(argc, argv);
 
     std::string firmware;
     std::string model;
@@ -895,6 +898,7 @@ int main(int argc, char **argv) {
                          "CA51F253L3 (32 KiB code flash, MCS-51; `run` and `sim`)\n"
                          "NRF52840 (1 MiB flash, 256 KiB RAM, Cortex-M4F; `run`)\n"
                          "EFR32MG21 (512 KiB flash, 64 KiB RAM, Cortex-M33; `run` and `sim`)\n"
+                         "PHY6252 (512 KiB flash, 64 KiB RAM, Cortex-M0; experimental)\n"
                          "ESP32C6 (4 MiB flash, 512 KiB SRAM) and ESP32H2 (320 KiB SRAM), RISC-V RV32IMAC; work in progress\n";
             return 0;
         }

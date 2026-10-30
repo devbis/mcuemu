@@ -50,7 +50,7 @@ target_compile_options(mcuemu-core PRIVATE ${MCUEMU_WARNING_FLAGS})
 target_link_libraries(mcuemu-core PUBLIC unicorn)
 
 add_executable(mcuemu emulator/src/main.cpp)
-target_link_libraries(mcuemu PRIVATE mcuemu-core mcs51emu nrf52emu efr32emu esp32emu simcore)
+target_link_libraries(mcuemu PRIVATE mcuemu-core mcs51emu nrf52emu efr32emu esp32emu phy6252emu simcore)
 
 add_library(mcs51emu
     emulator/src/mcs51/ca51f253l3.cpp
@@ -65,6 +65,11 @@ add_library(cortexm emulator/src/cortexm/core.cpp)
 target_include_directories(cortexm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(cortexm PRIVATE ${MCUEMU_WARNING_FLAGS})
 target_link_libraries(cortexm PUBLIC unicorn)
+
+add_library(phy6252emu emulator/src/phy6252/image.cpp emulator/src/phy6252/phy6252.cpp emulator/src/phy6252/run_command.cpp)
+target_include_directories(phy6252emu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
+target_compile_options(phy6252emu PRIVATE ${MCUEMU_WARNING_FLAGS})
+target_link_libraries(phy6252emu PUBLIC cortexm mcuemu-core)
 
 # Generic RV32 hart on the fork's RISC-V backend (traps, host interrupt line, WFI, cycle clock).
 add_library(riscvcore emulator/src/riscv/core.cpp)
@@ -206,10 +211,11 @@ add_library(simcore
     emulator/src/sim/efr32mg21_mcu.cpp
     emulator/src/sim/esp32_mcu.cpp
     emulator/src/sim/bl702_mcu.cpp
+    emulator/src/sim/phy6252_mcu.cpp
 )
 target_include_directories(simcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(simcore PRIVATE ${MCUEMU_WARNING_FLAGS})
-target_link_libraries(simcore PUBLIC mcuemu-core mcs51emu nrf52emu efr32emu esp32emu bl702emu ${MCUEMU_YAML_TARGET} lua54
+target_link_libraries(simcore PUBLIC mcuemu-core mcs51emu nrf52emu efr32emu esp32emu bl702emu phy6252emu ${MCUEMU_YAML_TARGET} lua54
     nlohmann_json::nlohmann_json)
 if(WIN32)
     target_link_libraries(simcore PUBLIC ws2_32)
@@ -217,6 +223,9 @@ endif()
 
 if(MCUEMU_BUILD_TESTS)
     enable_testing()
+    add_executable(phy6252emu-tests tests/phy6252/test_image.cpp)
+    target_link_libraries(phy6252emu-tests PRIVATE phy6252emu cortexm)
+    add_test(NAME phy6252emu-tests COMMAND phy6252emu-tests)
     add_executable(mcuemu-tests
         tests/test_main.cpp
         tests/tc32/test_cpu.cpp

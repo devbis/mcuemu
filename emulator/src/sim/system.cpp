@@ -5,17 +5,32 @@
 #include "sim/efr32mg21_mcu.hpp"
 #include "sim/esp32_mcu.hpp"
 #include "sim/nrf52840_mcu.hpp"
+#include "sim/phy6252_mcu.hpp"
 #include "sim/tlsr8258_mcu.hpp"
 
 #include <functional>
 #include <tuple>
 #include <algorithm>
+#include <cstdint>
 #include <deque>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <set>
 #include <sstream>
 
 namespace sim {
+
+namespace {
+std::uint32_t phy6252_random_seed(std::uint64_t world_seed,
+                                 const std::string &instance_name) {
+    std::uint64_t hash = 1469598103934665603ull ^ world_seed;
+    for (unsigned char byte : instance_name)
+        hash = (hash ^ byte) * 1099511628211ull;
+    const std::uint32_t seed = static_cast<std::uint32_t>(hash ^ (hash >> 32));
+    return seed == 0 ? 0x6d2b79f5u : seed;
+}
+} // namespace
 
 void McuRegistry::add(std::string model, Factory factory) {
     factories_[std::move(model)] = std::move(factory);
@@ -122,6 +137,37 @@ const McuRegistry &McuRegistry::builtin() {
             if (config.flash_timing)
                 throw std::invalid_argument("flash_timing is only modelled for tlsr8258");
             return std::make_unique<Bl702Mcu>(name);
+        });
+        r.add("phy6252", [](const McuConfig &config, const std::string &name) {
+            if (config.variant || config.clock_hz || config.supply_mv || config.flash_timing)
+                throw std::invalid_argument("phy6252 does not accept variant, clock_hz, supply_mv or flash_timing");
+            auto mcu = std::make_unique<Phy6252Mcu>(name);
+            if (config.rom) {
+                std::ifstream input(*config.rom, std::ios::binary);
+                if (!input)
+                    throw std::invalid_argument("cannot open PHY6252 ROM dump: " + *config.rom);
+                const std::vector<std::uint8_t> dump(
+                    (std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+                mcu->chip().load_rom_dump(dump);
+            }
+            mcu->chip().set_boot_from_rom(config.boot_from_rom);
+            if (config.efuse) {
+                std::ifstream input(*config.efuse, std::ios::binary);
+                if (!input)
+                    throw std::invalid_argument("cannot open eFuse dump: " + *config.efuse);
+                const std::vector<std::uint8_t> dump(
+                    (std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+                mcu->chip().load_efuse_dump(dump);
+            }
+            if (config.rf_calibration) {
+                std::ifstream input(*config.rf_calibration, std::ios::binary);
+                if (!input)
+                    throw std::invalid_argument("cannot open RF calibration dump: " + *config.rf_calibration);
+                const std::vector<std::uint8_t> dump(
+                    (std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+                mcu->chip().load_rf_calibration_dump(dump);
+            }
+            return mcu;
         });
         return r;
     }();
@@ -369,6 +415,9 @@ std::unique_ptr<System> build_system(const SystemConfig &config,
             std::unique_ptr<Mcu> mcu;
             try {
                 mcu = (*factory)(mcu_config, name);
+                if (auto *phy6252 = dynamic_cast<Phy6252Mcu *>(mcu.get()))
+                    phy6252->chip().set_random_seed(
+                        phy6252_random_seed(config.seed, name));
                 mcu->load_images(mcu_config.images);
             } catch (const std::exception &error) {
                 fail_at(mcu_config.line, "mcu '" + name + "': " + error.what());
