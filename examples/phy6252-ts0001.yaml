@@ -27,6 +27,8 @@ devices:
       - id: mcu
         model: phy6252
         firmware: ../firmware/phy6252-ts0001.bin
+        efuse: ../firmware/phy6222-efuse.bin
+        rf_calibration: ../firmware/phy6222-rfcal.bin
         radio: { air: air0, position: [3, 0, 1], tx_power_dbm: 0, protocols: [zigbee] }
     nets:
       - { id: key1_line, pull: up, pins: [mcu.GPIO8] }

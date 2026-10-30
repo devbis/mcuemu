@@ -714,6 +714,14 @@ now matches the captured log; the two report intervals differ because they are
 also seeded random values. This does not change the offline-only status of the
 TS0001 radio path.
 
+The 15-second network example, now using those same local board inputs, prints
+`power report time = 3184`, `set read local time: 42`, and
+`fix Report time = 356870`. Its pcap has 19 frames: 16 coordinator Beacon
+Requests and three coordinator Data frames, with no TS0001 source frame. The
+radio-attached run consumes the seeded generator along a different startup
+path, so its UART values differ from the offline test while remaining
+repeatable for that scenario.
+
 The earlier sampleGW data frames carried MAC PAN ID `0xA75C` (wire bytes
 `5c a7`). A later scratch coordinator used the candidate PAN ID `0xA9D9`,
 short address `0x87DB`, candidate extended PAN ID and candidate NWK key. Its
@@ -1086,9 +1094,11 @@ default direct-image path for the verified Zephyr compatibility scenario.
 Firmware inputs can be the package beginning at physical flash offset `0x2000`
 or a 512 KiB full flash dump; keep local images outside the repository.
 For the TS0001 capture setup, place the full dump at
-`firmware/phy6252-ts0001.bin` and run `examples/phy6252-ts0001.yaml` from a
-scratch working directory. The scenario writes `air.pcap` there and probes
-GPIO8 and GPIO3; inspect both the UART output and the captured frames.
+`firmware/phy6252-ts0001.bin`, with the captured module data at
+`firmware/phy6222-efuse.bin` and `firmware/phy6222-rfcal.bin`. Run
+`examples/phy6252-ts0001.yaml` from a scratch working directory. The scenario
+writes `air.pcap` there and probes GPIO8 and GPIO3; inspect both the UART output
+and the captured frames.
 To replay the supplied no-coordinator button context, run
 `examples/phy6252-ts0001-offline.yaml`; it presses GPIO8 twice and writes only
 the relay GPIO2 transition to `relay.vcd`. The scenario keeps GPIO3, the
