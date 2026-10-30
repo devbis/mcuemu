@@ -220,10 +220,16 @@ in `r0`, saves `r4` and `lr`, and returns through a small synthetic
 `pop {r4,pc}` trampoline. A null slot still stops with an explicit error rather
 than inventing the ROM's `0x4e24` fallback. The saved-state TS0001 baseband slot
 points to `0x1fff2985`, an interior Thumb entry within a larger RAM routine
-starting at `0x1fff28f1`. With the wrapper ABI modeled, the 15-second network
-run still contains only 16 coordinator Beacon Requests and 3 coordinator Data
-frames; TS0001 sends none. The ABI mismatch was real but did not explain the
-missing TX. The dump remains an external analysis input; no ROM bytes or Ghidra
+starting at `0x1fff28f1`. Its XIP initializer at `0x110148d0` writes that entry
+to the callback slot. The surrounding routine uses `r0` as a mode value and the
+block at `0x1fff2984` returns `0x12` for values other than 0 or 1. The dumped
+ROM's wrapper leaves the callback address in `r0`, so this image and ROM dump
+appear to have an incompatible IRQ callback ABI. That is a concrete candidate
+for the stalled TS0001 radio path, but it is not proven to be the cause: the
+relay may use a different ROM revision, and no hardware register trace is
+available. Under the modeled wrapper, the 15-second network run contains only
+16 coordinator Beacon Requests and 3 coordinator Data frames; TS0001 sends
+none. The dump remains an external analysis input; no ROM bytes or Ghidra
 project files are stored in the repository.
 
 The supplied `SoC_info.txt` reports the attached flash ID as `0x1364c8` and a
@@ -1063,12 +1069,15 @@ and cannot establish the relay's network identity. The 10-second candidate
 identity run above also had no TS0001 transmission, so its saved parent state
 or another stack initialization issue remains unresolved.
 
-An LL helper trace of the same-channel first-boot run for 10 s saw 317
+A pre-ABI-fix LL trace of a same-channel first-boot run saw 317
 `ll_hw_set_srx` calls and 317 radio triggers: 302 on channel 11 and 15 on
-channel 26. It saw no `STX`, `TRX`, or `RTX` helper calls, no TX FIFO data and
-no TS0001 transmission. The observed stall therefore occurs before this image
-sets up an LL transmit operation; implementing combined radio modes would not
-change this tested path.
+channel 26, with no `STX`, `TRX`, or `RTX` calls and no TX FIFO data. That run
+used the earlier host trap, which preserved the interrupted `r0` instead of
+matching the supplied ROM's callback call. Do not treat its repeated-receive
+count as behavior of the current wrapper model. The current 15-second pcap
+still has no TS0001 frame; the callback ABI mismatch above now needs comparison
+against the exact ROM running on the relay before attributing the stall to the
+radio model.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
