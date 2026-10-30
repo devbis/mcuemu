@@ -1,0 +1,35 @@
+# PB-03F Zephyr end device using the external PHY6222 ROM dump.
+# Keep the supplied ROM, eFuse and RF calibration inputs local under firmware/;
+# this compatibility run has joined the sample gateway and exchanged NWK data.
+version: 1
+
+world:
+  seed: 1
+  duration: 10s
+  radio:
+    - id: air0
+      model: log_distance
+      reference_loss_db: 40
+      path_loss_exponent: 2.5
+
+devices:
+  - id: coordinator
+    mcus:
+      - id: mcu
+        model: tlsr8258
+        variant: F1K
+        firmware: ../firmware/samplegw_tb03f.bin
+        radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+  - id: pb03f
+    mcus:
+      - id: mcu
+        model: phy6252
+        firmware: ../firmware/phy6252-zephyr-ed.bin
+        rom: ../firmware/phy6222-rom.bin
+        efuse: ../firmware/phy6222-efuse.bin
+        rf_calibration: ../firmware/phy6222-rfcal.bin
+        radio: { air: air0, position: [4, 0, 1], tx_power_dbm: 0, protocols: [zigbee] }
+
+attach:
+  - { endpoint: air0, sink: "pcap:air.pcap" }

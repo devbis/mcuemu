@@ -26,6 +26,7 @@ cortexm::Core::Config config() {
     return c;
 }
 constexpr std::uint32_t RomSize = 0x18000, UartBase = 0x40004000;
+constexpr std::uint32_t FlashReadAliasBase = 0x22000000;
 constexpr std::uint32_t RomNmiHandler = 0x8481;
 constexpr std::uint32_t RomHardFaultHandler = 0x28f1;
 constexpr std::uint32_t RomPendSvHandler = 0x84cd;
@@ -38,6 +39,10 @@ constexpr std::uint32_t WatchdogTimeout = WatchdogBase + 0x04;
 constexpr std::uint32_t WatchdogIrq = 10;
 constexpr std::uint32_t GpioBase = 0x40008000;
 constexpr std::uint32_t DmaBase = 0x40010000;
+constexpr std::uint32_t DmaChannel0Control = DmaBase + 0x018;
+constexpr std::uint32_t DmaChannel0ControlHigh = DmaBase + 0x01c;
+constexpr std::uint32_t DmaChannel0Config = DmaBase + 0x040;
+constexpr std::uint32_t DmaChannel0ConfigHigh = DmaBase + 0x044;
 constexpr std::uint32_t DmaChannel3Sar = DmaBase + 0x108;
 constexpr std::uint32_t DmaChannel3Dar = DmaBase + 0x110;
 constexpr std::uint32_t DmaChannel3CtlHigh = DmaBase + 0x124;
@@ -46,6 +51,7 @@ constexpr std::uint32_t DmaRawTransfer = DmaBase + 0x2c0;
 constexpr std::uint32_t DmaClearTransfer = DmaBase + 0x338;
 constexpr std::uint32_t DmaConfig = DmaBase + 0x398;
 constexpr std::uint32_t DmaChannelEnable = DmaBase + 0x3a0;
+constexpr std::uint32_t DmaChannel0Mask = 1u << 0;
 constexpr std::uint32_t DmaChannel3Mask = 1u << 3;
 constexpr std::uint32_t FlashControlBase = 0x4000c000;
 constexpr std::uint32_t PcrBase = 0x40000000;
@@ -59,6 +65,9 @@ constexpr std::uint32_t SpifSramPartition = FlashControlBase + 0x818;
 constexpr std::uint32_t SpifRemap = FlashControlBase + 0x824;
 constexpr std::uint32_t SpifModeBit = FlashControlBase + 0x828;
 constexpr std::uint32_t SpifWriteCompletionControl = FlashControlBase + 0x838;
+constexpr std::uint32_t SpifLowWriteProtection = FlashControlBase + 0x850;
+constexpr std::uint32_t SpifUpWriteProtection = FlashControlBase + 0x854;
+constexpr std::uint32_t SpifWriteProtection = FlashControlBase + 0x858;
 constexpr std::uint32_t SpifCommand = FlashControlBase + 0x890;
 constexpr std::uint32_t SpifCommandAddress = FlashControlBase + 0x894;
 constexpr std::uint32_t SpifReadData = FlashControlBase + 0x8a0;
@@ -69,6 +78,14 @@ constexpr std::uint32_t SpifPollStatus = FlashControlBase + 0x8b0;
 constexpr std::uint32_t FlashSectorSize = 4096;
 constexpr std::uint32_t FlashReady = 0x80000000;
 constexpr std::uint32_t SpifReadStatus = 0x05900001;
+constexpr std::uint32_t SpifReadId = 0x9fa00001;
+constexpr std::uint32_t SpifWriteEnable = 0x06000001;
+constexpr std::uint32_t SpifWriteDisable = 0x04000001;
+constexpr std::uint32_t SpifSectorErase = 0x200a0001;
+constexpr std::uint32_t SpifBlockErase64 = 0xd80a0001;
+constexpr std::uint32_t FlashBlock64Size = 0x10000;
+// SoC_info.txt for the supplied P622ZB2S module records FlashID 0x1364c8.
+constexpr std::uint32_t CapturedFlashJedecId = 0x001364c8;
 constexpr std::uint32_t PcrReset = PcrBase;
 constexpr std::uint32_t PcrReset1 = PcrBase + 0x04;
 constexpr std::uint32_t PcrClock = PcrBase + 0x08;
@@ -90,7 +107,9 @@ constexpr std::uint32_t MuxPadEnable = 0x40003814;
 constexpr std::uint32_t MuxSelectBase = 0x40003818;
 constexpr std::uint32_t AonPullBase = 0x4000f008;
 constexpr std::uint32_t AonPullEnd = 0x4000f014;
+constexpr std::uint32_t AonPmctl1 = 0x4000f018;
 constexpr std::uint32_t AonPmctl2_0 = 0x4000f01c;
+constexpr std::uint32_t AonPowerSleep = 0x4000f004;
 constexpr std::uint32_t AonRtcControl = 0x4000f024;
 constexpr std::uint32_t AonRtcCount = 0x4000f028;
 constexpr std::uint32_t AonRtcClock = 0x4000f03c;
@@ -102,19 +121,35 @@ constexpr std::uint32_t AonWakeMask0 = 0x4000f0a0;
 constexpr std::uint32_t AonWakeMask1 = 0x4000f0a4;
 constexpr std::uint32_t AonWakeSource0 = 0x4000f0b0;
 constexpr std::uint32_t AonWakeSource1 = 0x4000f0b4;
+constexpr std::uint32_t AonSleepFlag = 0x4000f0a8;
+constexpr std::uint32_t AonEfuseDataBase = 0x4000f160;
+constexpr std::uint32_t AonEfuseSecurityState = 0x4000f180;
 constexpr std::uint32_t RadioClockControl = 0x4000f040;
 constexpr std::uint32_t RadioClockConfig = 0x4000f044;
 constexpr std::uint32_t AonEfuseConfig = 0x4000f054;
+constexpr std::uint32_t AonChipState = 0x4000f058;
+constexpr std::uint32_t AonCalReadWrite = 0x4000f05c;
+constexpr std::uint32_t AonCalReadOnly0 = 0x4000f060;
+constexpr std::uint32_t AonCalReadOnly1 = 0x4000f064;
+constexpr std::uint32_t AonCalReadOnly2 = 0x4000f068;
+constexpr std::uint32_t RfTpCal0 = 0x1fff0a44;
+constexpr std::uint32_t RfTpCal1 = 0x1fff0a45;
+constexpr std::uint8_t ObservedRfTpCal0 = 0x2b;
+constexpr std::uint8_t ObservedRfTpCal1 = 0x23;
 constexpr std::uint32_t AonEfuseProgram0 = 0x4000f140;
 constexpr std::uint32_t AonEfuseProgram1 = 0x4000f144;
 constexpr std::uint32_t AonXtal16Control = 0x4000f0bc;
 constexpr std::uint32_t AonSleepR0 = 0x4000f0c0;
 constexpr std::uint32_t RadioRfBase = 0x40030000;
+constexpr std::uint32_t RadioRfSettle = RadioRfBase + 0xbc;
 constexpr std::uint32_t RadioLlBase = 0x40031000;
+constexpr std::uint32_t RadioRxFifoStatus = RadioLlBase + 0x54;
+constexpr std::uint32_t RadioRxTimeout = RadioLlBase + 0x28;
 constexpr std::uint32_t RadioTxFifo = 0x40031400;
 constexpr std::uint32_t RadioRxFifo = 0x40031c00;
 constexpr std::uint32_t RadioTxFifoSize = 0x800;
 constexpr std::uint32_t RadioRxFifoSize = 0x800;
+constexpr std::uint32_t RadioFifoPointerMask = 0x7ff;
 constexpr std::uint32_t RadioBasebandMemoryEnd = RadioRxFifo + RadioRxFifoSize;
 constexpr unsigned RadioIrq = 4;
 constexpr std::uint32_t RadioIrqMd = 1u << 0;
@@ -125,10 +160,10 @@ constexpr std::uint32_t RadioIrqCokZephyr = 1u << 1;
 constexpr std::uint32_t RadioIrqRto = 1u << 2;
 constexpr std::uint32_t RadioIrqRtoZephyr = 1u << 3;
 constexpr std::uint32_t RadioIrqMask = 0x3fffu;
-constexpr std::uint32_t RadioModeStx = 0x00;
-constexpr std::uint32_t RadioModeSrx = 0x01;
-constexpr std::uint32_t RadioModeTrx = 0x10;
-constexpr std::uint32_t RadioModeRtx = 0x12;
+constexpr std::uint32_t RadioModeStx = 0x000100;
+constexpr std::uint32_t RadioModeSrx = 0x010001;
+constexpr std::uint32_t RadioModeTrx = 0x010102;
+constexpr std::uint32_t RadioModeRtx = 0x010103;
 constexpr std::uint32_t RomLlIrqHandler = 0x4e25;
 constexpr std::uint32_t RomGpioIrqHandler = 0x112d;
 constexpr std::uint32_t RomTimerIrqDispatch = 0x17ff1; // Private host trap; no exported ROM symbol.
@@ -141,7 +176,11 @@ constexpr std::uint32_t GpioMask = 0x007fffff;
 constexpr std::uint32_t TimerEnable = 1u << 0;
 constexpr std::uint32_t TimerUserMode = 1u << 1;
 constexpr std::uint32_t TimerInterruptMask = 1u << 2;
-constexpr std::uint64_t TimerCyclesPerTick = 4; // Zephyr configures both counters at 4 MHz
+constexpr std::uint32_t TimerClockHz = 4000000; // SDK hal_timer_set_loadtimer documents a 4 MHz source
+
+std::uint64_t timer_cycles_per_tick(std::uint32_t core_clock_hz) {
+    return std::max<std::uint64_t>(1, core_clock_hz / TimerClockHz);
+}
 
 bool mux_select_register(std::uint32_t address) {
     return address >= MuxSelectBase && address <= MuxSelectBase + 5 * 4 &&
@@ -155,10 +194,12 @@ constexpr std::array<std::uint8_t, 23> GpioPullShift = {
 
 bool phy_rf_register(std::uint32_t offset) {
     switch (offset) {
-    case 0x00: case 0x0c: case 0x40: case 0x48: case 0x4c:
-    case 0x80: case 0x90: case 0x94: case 0xb0: case 0xb4: case 0xb8:
+    case 0x00: case 0x0c: case 0x40: case 0x48: case 0x4c: case 0x50:
+    case 0x54: case 0x58: case 0x5c: case 0x60: case 0x64: case 0x68: case 0x6c: case 0x70: case 0x74:
+    case 0x78: case 0x80: case 0x8c: case 0x90: case 0x94: case 0xa0: case 0xa4: case 0xa8: case 0xac:
+    case 0xb0: case 0xb4: case 0xb8: case 0xbc: case 0xc4: case 0xc8:
     case 0xcc: case 0xd0: case 0xd4: case 0xd8: case 0xdc: case 0xe0:
-    case 0xe4: case 0xe8: case 0x104: case 0x108: case 0x10c:
+    case 0xe4: case 0xe8: case 0xec: case 0x104: case 0x108: case 0x10c: case 0x124:
         return true;
     default:
         return false;
@@ -168,7 +209,8 @@ bool phy_rf_register(std::uint32_t offset) {
 bool phy_ll_register(std::uint32_t offset) {
     switch (offset) {
     case 0x00: case 0x04: case 0x08: case 0x0c: case 0x10: case 0x14:
-    case 0x18: case 0x1c: case 0x28: case 0x34: case 0x38: case 0x40:
+    case 0x18: case 0x1c: case 0x20: case 0x24: case 0x28: case 0x2c: case 0x34: case 0x38: case 0x40:
+    case 0x54: case 0x58: case 0x60: case 0x68:
         return true;
     default:
         return false;
@@ -304,11 +346,35 @@ Phy6252::Phy6252() : core_(config()) {
         high_rom[i] = 0x00;
         high_rom[i + 1] = 0xbe;
     }
-    core_.set_write_protect_handler([](std::uint32_t address, unsigned size, std::uint32_t) {
-        return address < 0x100 && static_cast<std::uint64_t>(address) + size <= 0x100;
-    });
     flash_ = core_.map_memory(BootImage::FlashBase, BootImage::FlashSize, false);
     ram_ = core_.map_memory(BootImage::RamBase, BootImage::RamSize, true);
+    // ROM loader code reads XIP source bytes through this uncached alias.
+    core_.map_mmio(FlashReadAliasBase, BootImage::FlashSize, *this);
+    core_.set_write_protect_handler([this](std::uint32_t address, unsigned size, std::uint32_t) {
+        if (address < 0x100 && static_cast<std::uint64_t>(address) + size <= 0x100)
+            return true;
+
+        const std::uint64_t flash_end = static_cast<std::uint64_t>(BootImage::FlashBase) +
+                                        BootImage::FlashSize;
+        if (address < BootImage::FlashBase ||
+            static_cast<std::uint64_t>(address) + size > flash_end ||
+            size == 0 || size > sizeof(std::uint32_t))
+            return false;
+
+        const std::size_t offset = address - BootImage::FlashBase;
+        const bool write_enabled = control_registers_[SpifWriteProtection] == 0;
+        std::array<std::uint8_t, sizeof(std::uint32_t)> previous{};
+        std::copy_n(flash_ + offset, size, previous.begin());
+        core_.defer([this, offset, size, previous, write_enabled] {
+            // The controller's AHB programming window can clear flash bits,
+            // but programming cannot change a zero bit back to one. While
+            // locked, the AHB store completes without changing the XIP byte.
+            for (unsigned i = 0; i < size; ++i)
+                flash_[offset + i] = write_enabled ?
+                    static_cast<std::uint8_t>(flash_[offset + i] & previous[i]) : previous[i];
+        });
+        return true;
+    });
     core_.map_mmio(TimerBase, 0x1000, *this);
     core_.map_mmio(WatchdogBase, 0x1000, *this);
     core_.map_mmio(UartBase, 0x1000, *this);
@@ -334,57 +400,143 @@ void Phy6252::load_firmware(const std::vector<std::uint8_t> &image) {
     run_address_ = boot.run_address;
 }
 
+void Phy6252::load_rom_dump(const std::vector<std::uint8_t> &dump) {
+    constexpr std::size_t FullDumpSize = 0x20000;
+    if (run_address_ != 0)
+        throw std::invalid_argument("PHY6252 ROM dump must be loaded before firmware");
+    if (dump.size() != RomSize && dump.size() != FullDumpSize)
+        throw std::invalid_argument("PHY6252 ROM dump must be 96 KiB or 128 KiB");
+    if (dump.size() == FullDumpSize &&
+        !std::all_of(dump.begin() + RomSize, dump.end(),
+                     [](std::uint8_t byte) { return byte == 0xff; }))
+        throw std::invalid_argument("PHY6252 128 KiB ROM dump must have an erased 32 KiB tail");
+    rom_dump_.assign(dump.begin(), dump.begin() + RomSize);
+    std::copy(rom_dump_.begin(), rom_dump_.end(), vector_alias_);
+    std::copy(rom_dump_.begin(), rom_dump_.end(),
+              core_.host_pointer(0x10000000, RomSize));
+}
+
+void Phy6252::set_boot_from_rom(bool enabled) {
+    if (enabled && rom_dump_.empty())
+        throw std::invalid_argument("PHY6252 ROM boot requires an external ROM dump");
+    boot_from_rom_ = enabled;
+}
+
+void Phy6252::load_efuse_dump(const std::vector<std::uint8_t> &dump) {
+    constexpr std::size_t BlockSize = 8;
+    constexpr std::size_t BlockCount = 4;
+    if (dump.size() != BlockSize * BlockCount)
+        throw std::invalid_argument("PHY6252 eFuse dump must be exactly 32 bytes");
+    for (std::size_t block = 0; block < BlockCount; ++block) {
+        std::copy_n(dump.begin() + block * BlockSize, BlockSize,
+                    efuse_blocks_[block].begin());
+        efuse_block_present_[block] = true;
+    }
+    efuse_read_ready_.fill(false);
+}
+
+void Phy6252::load_rf_calibration_dump(const std::vector<std::uint8_t> &dump) {
+    if (dump.size() != rf_tp_calibration_.size())
+        throw std::invalid_argument("PHY6252 RF calibration dump must be exactly 4 bytes");
+    std::copy(dump.begin(), dump.end(), rf_tp_calibration_.begin());
+    rf_tp_calibration_present_ = true;
+}
+
 void Phy6252::reset() {
     if (!run_address_)
         throw std::runtime_error("PHY6252 firmware has not been loaded");
-    std::fill_n(vector_alias_, 0x100, 0);
-    const std::array<std::pair<unsigned, std::uint32_t>, 3> rom_vectors = {{
-        {2, RomNmiHandler}, {3, RomHardFaultHandler}, {14, RomPendSvHandler},
-    }};
-    for (const auto &[index, handler] : rom_vectors)
-        std::memcpy(vector_alias_ + index * sizeof(std::uint32_t), &handler, sizeof handler);
-    const std::array<std::pair<unsigned, std::uint32_t>, 2> irq_vectors = {{
-        {16 + 4, RomLlIrqHandler}, {16 + 16, RomGpioIrqHandler},
-    }};
-    for (const auto &[index, handler] : irq_vectors)
-        std::memcpy(vector_alias_ + index * sizeof(std::uint32_t), &handler, sizeof handler);
-    for (unsigned timer = 0; timer < TimerCount; ++timer) {
-        const std::uint32_t handler = RomTimerIrqDispatch;
-        const unsigned vector = 16 + 20 + timer;
-        std::memcpy(vector_alias_ + vector * sizeof handler, &handler, sizeof handler);
+    if (!rom_dump_.empty()) {
+        std::copy(rom_dump_.begin(), rom_dump_.end(), vector_alias_);
+        std::copy(rom_dump_.begin(), rom_dump_.end(),
+                  core_.host_pointer(0x10000000, RomSize));
+    } else {
+        std::fill_n(vector_alias_, 0x100, 0);
+        const std::array<std::pair<unsigned, std::uint32_t>, 3> rom_vectors = {{
+            {2, RomNmiHandler}, {3, RomHardFaultHandler}, {14, RomPendSvHandler},
+        }};
+        for (const auto &[index, handler] : rom_vectors)
+            std::memcpy(vector_alias_ + index * sizeof(std::uint32_t), &handler, sizeof handler);
+        const std::array<std::pair<unsigned, std::uint32_t>, 2> irq_vectors = {{
+            {16 + 4, RomLlIrqHandler}, {16 + 16, RomGpioIrqHandler},
+        }};
+        for (const auto &[index, handler] : irq_vectors)
+            std::memcpy(vector_alias_ + index * sizeof(std::uint32_t), &handler, sizeof handler);
+        for (unsigned timer = 0; timer < TimerCount; ++timer) {
+            const std::uint32_t handler = RomTimerIrqDispatch;
+            const unsigned vector = 16 + 20 + timer;
+            std::memcpy(vector_alias_ + vector * sizeof handler, &handler, sizeof handler);
+        }
     }
-    std::copy(boot_ram_.begin(), boot_ram_.end(), ram_);
+    if (boot_from_rom_) {
+        // The ROM must populate the image's RAM segments during cold boot.
+        std::fill_n(ram_, BootImage::RamSize, 0);
+    } else {
+        std::copy(boot_ram_.begin(), boot_ram_.end(), ram_);
+        // Direct image boot skips the board ROM's RF startup calibration; seed
+        // the observed outputs from the supplied TS0001 boot log and SDK map.
+        ram_[RfTpCal0 - BootImage::RamBase] = ObservedRfTpCal0;
+        ram_[RfTpCal1 - BootImage::RamBase] = ObservedRfTpCal1;
+    }
     lcr_ = ier_ = dll_ = dlm_ = mcr_ = scratch_ = 0;
     rx_.clear();
     tx_.clear();
     control_registers_.clear();
+    // Values captured from the supplied P622ZB2S AON register snapshot.
+    control_registers_[AonPmctl1] = 0x01064040;
+    control_registers_[AonEfuseConfig] = 0x8000;
+    control_registers_[AonChipState] = 0;
+    control_registers_[AonCalReadWrite] = 0x1f2;
+    control_registers_[AonCalReadOnly0] = 0x10c0;
+    control_registers_[AonCalReadOnly1] = 0;
+    control_registers_[AonCalReadOnly2] = 0x100;
+    // The related SDK's hw_spif_cache_config() starts with this protection
+    // state; its ROM flash-write path temporarily clears WR_PROTECTION.
+    control_registers_[SpifLowWriteProtection] = 0;
+    control_registers_[SpifUpWriteProtection] = 0x10;
+    control_registers_[SpifWriteProtection] = 0x2;
+    efuse_read_ready_.fill(false);
+    rf_tp_calibration_pending_ = false;
     rf_registers_.clear();
     ll_registers_.clear();
+    ll_registers_[RadioLlBase + 0x58] = 0x0200; // Related SDK's 2 KiB TX / 2 KiB RX split.
     tx_fifo_.clear();
     rx_fifo_.fill(0);
     rx_fifo_read_ = 0;
+    rx_fifo_stream_read_ = 0;
+    rx_fifo_stream_size_ = 0;
     radio_tx_end_cycle_ = 0;
     radio_rx_after_ns_ = 0;
     radio_rx_deadline_cycle_ = 0;
-    radio_rx_timeout_us_ = 0;
     radio_tx_active_ = false;
     radio_rx_active_ = false;
     radio_rx_rssi_ = -100;
     timers_ = {};
     for (TimerState &timer : timers_)
         timer.last_cycle = core_.cycles();
-    gpio_data_ = gpio_direction_ = gpio_interrupt_enable_ = 0;
+    if (!boot_from_rom_) {
+        // The SDK's WaitUs() polls AP_TIM3->CurrentCount continuously. ROM
+        // board init enables this down-counter before direct image startup.
+        TimerState &wait_timer = timers_[2];
+        wait_timer.load = std::numeric_limits<std::uint32_t>::max();
+        wait_timer.current = wait_timer.load;
+        wait_timer.control = TimerEnable | TimerInterruptMask;
+    }
+    gpio_data_ = gpio_direction_ = gpio_control_ = gpio_interrupt_enable_ = 0;
     gpio_interrupt_mask_ = GpioMask;
     gpio_interrupt_type_ = gpio_interrupt_polarity_ = 0;
     gpio_interrupt_status_ = gpio_input_ = 0;
     spif_config_ = FlashReady;
     spif_command_ = 0;
     spif_read_data_ = 0;
+    spif_write_enabled_ = false;
     dma_raw_transfer_status_ = dma_channel_enable_ = 0;
     watchdog_deadline_ns_ = 0;
     watchdog_interrupt_pending_ = false;
     sleep_allowed_ = false;
     sleep_mode_ = 0;
+    system_sleep_request_ = false;
+    system_sleeping_ = false;
+    system_sleep_wake_cycle_ = 0;
     unexported_init_hook_warned_ = false;
     pendsv_dispatch_warning_logged_ = false;
     ll_rand_warning_logged_ = false;
@@ -392,7 +544,6 @@ void Phy6252::reset() {
     gpio_irq_dispatch_warning_logged_ = false;
     timer_irq_dispatch_warning_logged_.fill(false);
     ll_context_warning_logged_ = false;
-    ll_settle_warning_logged_ = false;
     rf_sample_e8_warning_logged_ = false;
     heap_start_ = heap_size_ = 0;
     random_state_ = 0x6d2b79f5u;
@@ -400,14 +551,16 @@ void Phy6252::reset() {
     heap_allocations_.clear();
     pending_fault_.clear();
     core_.set_clock_hz(16000000);
-    core_.reset(run_address_);
+    // Direct image boot supplies board-init state that is not initialized by
+    // running the captured ROM reset path in this model.
+    core_.reset(boot_from_rom_ ? 0 : run_address_);
     core_.set_vtor(0);
     rtc_epoch_ns_ = core_.cycles_to_ns(core_.cycles());
     rtc_epoch_count_ = 0;
-    // The SDK ROM board init starts the always-on RTC before handing control
-    // to this image. Direct image boot skips that path; retain the observed
-    // running state required by the early RF startup wait loop.
-    control_registers_[AonRtcControl] = 1;
+    if (!boot_from_rom_) {
+        // Direct image boot skips the ROM's always-on RTC startup.
+        control_registers_[AonRtcControl] = 1;
+    }
     update_radio_irq();
     update_gpio_irq();
     core_.set_irq_line(WatchdogIrq, false);
@@ -418,6 +571,17 @@ void Phy6252::reset() {
 
 cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
     for (;;) {
+        if (system_sleeping_) {
+            if (system_sleep_wake_cycle_ > until_cycle) {
+                core_.advance_to(until_cycle);
+                return {cortexm::StopReason::Deadline, {}};
+            }
+            core_.advance_to(system_sleep_wake_cycle_);
+            system_sleeping_ = false;
+            // The captured ROM owns wake restoration. Resetting through its
+            // vector lets it inspect the retained AON sleep flag and RTC state.
+            core_.reset(0);
+        }
         auto result = core_.run(until_cycle);
         const auto pc = core_.pc();
         if (result.reason == cortexm::StopReason::Reset && !pending_fault_.empty()) {
@@ -450,6 +614,24 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             pending_fault_.clear();
             return result;
         }
+        if (result.reason == cortexm::StopReason::Reset && system_sleep_request_) {
+            system_sleep_request_ = false;
+            system_sleeping_ = true;
+            system_sleep_wake_cycle_ = std::numeric_limits<std::uint64_t>::max();
+            const std::uint32_t rtc_control = control_registers_[AonRtcControl];
+            constexpr std::uint32_t RtcCompare0Interrupt = 1u << 15;
+            constexpr std::uint32_t RtcCompare0Event = 1u << 20;
+            if ((rtc_control & (RtcCompare0Interrupt | RtcCompare0Event)) ==
+                (RtcCompare0Interrupt | RtcCompare0Event)) {
+                const std::uint64_t now_ns = core_.cycles_to_ns(core_.cycles());
+                const std::uint32_t current = rtc_count(now_ns);
+                const std::uint32_t delta = control_registers_[AonRtcCompare0] - current;
+                const std::uint64_t delay_ns =
+                    (static_cast<std::uint64_t>(delta) * 1000000000ull + 32767) / 32768;
+                system_sleep_wake_cycle_ = core_.ns_to_cycles(now_ns + delay_ns);
+            }
+            continue;
+        }
         if (result.reason != cortexm::StopReason::Halted ||
             !((pc < RomSize) || (pc >= 0x10000000 && pc < 0x10000000 + RomSize))) {
             if (result.reason == cortexm::StopReason::Fault) {
@@ -470,6 +652,14 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                 64000000, 96000000, 8000000, 4000000};
             const std::uint32_t selection = core_.reg(0);
             if (selection < SystemClockHz.size()) {
+                const std::uint64_t old_cycles_per_tick = timer_cycles_per_tick(core_.clock_hz());
+                const std::uint64_t new_cycles_per_tick = timer_cycles_per_tick(SystemClockHz[selection]);
+                for (unsigned timer = 0; timer < timers_.size(); ++timer) {
+                    sync_timer(timer, core_.cycles());
+                    TimerState &state = timers_[timer];
+                    state.cycle_remainder = state.cycle_remainder * new_cycles_per_tick /
+                        old_cycles_per_tick;
+                }
                 core_.set_clock_hz(SystemClockHz[selection]);
                 core_.set_reg(0, 0);
             } else {
@@ -552,8 +742,27 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             // ll_hw_clr_irq() writes the SDK's 14-bit IRQ mask to the W1C
             // status register (same sequence as phy_hw_go() in PHY+).
             write_register(RadioLlBase + 0x14, 0x3fffu, 4);
-        } else if (address == 0x10cf8 || address == 0x11420) {
-            // Both exported entries start the mode configured in LL_HW+0x04.
+        } else if (address == 0x10cf8) {
+            // ll_hw_go() clears pending status and selects MD-only interrupts
+            // before triggering the configured LL mode. The SDK then updates
+            // RF TP calibration from its two RAM-resident channel endpoints.
+            write_register(RadioLlBase + 0x14, RadioIrqMask, 4);
+            write_register(RadioLlBase + 0x0c, RadioIrqMd, 4);
+            write_register(RadioLlBase, 1, 4);
+            std::uint32_t channel = rf_registers_[RadioRfBase + 0xb4] & 0xffu;
+            channel = std::clamp(channel, 2u, 80u);
+            std::uint8_t tp0 = 0, tp1 = 0;
+            if (core_.read_memory(RfTpCal0, &tp0, sizeof tp0) &&
+                core_.read_memory(RfTpCal1, &tp1, sizeof tp1)) {
+                const std::uint32_t index = (channel - 2) >> 1;
+                const std::uint32_t cap = tp0 > tp1 ?
+                    ((static_cast<std::uint32_t>(tp0) << 5) -
+                     static_cast<std::uint32_t>(tp0 - tp1) * index + 16) >> 5 : tp0;
+                const std::uint32_t current = rf_registers_[RadioRfBase + 0x94];
+                write_register(RadioRfBase + 0x94, (current & ~0xffu) | (cap & 0xffu), 4);
+            }
+        } else if (address == 0x11420) {
+            // ll_hw_trigger() only starts the mode already configured by the caller.
             write_register(RadioLlBase, 1, 4);
         } else if (address == 0x11174) {
             // ll_hw_set_irq(mask) maps to LL_HW+0x0c, as the SDK's PHY+
@@ -561,27 +770,46 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             write_register(RadioLlBase + 0x0c, core_.reg(0), 4);
         } else if (address == 0x10f50) {
             // ll_hw_read_rfifo_zb(rxPkt, pktLen, pktFoot0, pktFoot1) copies
-            // the FIFO's length byte followed by the PSDU and its FCS.
+            // FIFO words and returns their count; pktLen includes the leading
+            // length byte, as in the SDK implementation.
             const std::uint32_t packet = core_.reg(0);
             const std::uint32_t length_out = core_.reg(1);
             const std::uint32_t foot0_out = core_.reg(2);
             const std::uint32_t foot1_out = core_.reg(3);
             const std::uint16_t packet_length = rx_fifo_[0];
-            const std::uint32_t foot0 =
-                (static_cast<std::uint32_t>(static_cast<std::uint8_t>(radio_rx_rssi_)) << 24) | 2u;
-            constexpr std::uint32_t foot1 = 0;
-            const std::size_t fifo_bytes = static_cast<std::size_t>(packet_length) + 1;
+            constexpr std::uint32_t foot0 = 2; // inferred small carrier-frequency offset
+            const std::uint32_t rssi_magnitude = static_cast<std::uint32_t>(
+                std::clamp(-static_cast<int>(radio_rx_rssi_), 0, 127));
+            const std::uint32_t foot1 = rssi_magnitude << 24;
+            const std::size_t fifo_words = 1 + (packet_length >> 2);
+            const std::size_t fifo_bytes = fifo_words * sizeof(std::uint32_t);
+            const std::uint16_t reported_length = packet_length + 1;
             const bool valid = packet_length >= 2 && packet_length <= 127 &&
                 packet != 0 && length_out != 0 && foot0_out != 0 && foot1_out != 0 &&
                 core_.write_memory(packet, rx_fifo_.data(), fifo_bytes) &&
-                core_.write_memory(length_out, &packet_length, sizeof packet_length) &&
+                core_.write_memory(length_out, &reported_length, sizeof reported_length) &&
                 core_.write_memory(foot0_out, &foot0, sizeof foot0) &&
                 core_.write_memory(foot1_out, &foot1, sizeof foot1);
             if (valid) {
                 rx_fifo_read_ = fifo_bytes;
-                core_.set_reg(0, 0); // LL_STATUS_SUCCESS
+                rx_fifo_stream_read_ = rx_fifo_stream_size_;
+                ll_registers_[RadioRxFifoStatus] =
+                    (static_cast<std::uint32_t>(rx_fifo_stream_size_) << 16) |
+                    static_cast<std::uint32_t>(rx_fifo_stream_read_);
+                core_.set_reg(0, static_cast<std::uint32_t>(fifo_words));
             } else {
-                core_.set_reg(0, 1);
+                const std::uint8_t empty_packet = 0;
+                const std::uint16_t empty_length = 0;
+                const std::uint32_t empty_footer = 0;
+                if (packet != 0)
+                    core_.write_memory(packet, &empty_packet, sizeof empty_packet);
+                if (length_out != 0)
+                    core_.write_memory(length_out, &empty_length, sizeof empty_length);
+                if (foot0_out != 0)
+                    core_.write_memory(foot0_out, &empty_footer, sizeof empty_footer);
+                if (foot1_out != 0)
+                    core_.write_memory(foot1_out, &empty_footer, sizeof empty_footer);
+                core_.set_reg(0, 0); // The SDK returns zero when its RX FIFO is empty.
             }
         } else if (address == 0x10bbc) {
             // ll_hw_get_irq_status() returns LL_HW+0x10, whose bit layout is
@@ -595,53 +823,59 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                 address == 0x112a4 ? RadioModeSrx :
                 address == 0x112b8 ? RadioModeStx : RadioModeTrx;
             ll_registers_[RadioLlBase + 0x04] = mode;
+            ll_registers_[RadioLlBase + 0x38] = 0x7;
         } else if (address == 0x110b0) {
             rx_fifo_.fill(0);
             rx_fifo_read_ = 0;
+            rx_fifo_stream_read_ = 0;
+            rx_fifo_stream_size_ = 0;
+            ll_registers_[RadioRxFifoStatus] = 0;
         } else if (address == 0x110e8) {
             tx_fifo_.clear();
         } else if (address == 0x11278 || address == 0x11284) {
-            // The PHY+ SDK wrapper names this parameter rxTimeOutUs. The
-            // timeout is applied to an active receive and reused by the next.
-            radio_rx_timeout_us_ = core_.reg(0);
-            if (radio_rx_active_)
-                schedule_radio_rx_timeout();
+            // The dumped ROM implements these helpers as writes to LL+0x28
+            // (timeout) and LL+0x24 (first timeout), respectively.
+            write_register(address == 0x11278 ? RadioRxTimeout : RadioLlBase + 0x24,
+                           core_.reg(0), 4);
         } else if (address == 0x113dc) {
-            // The SDK exposes three settle values, but the available sources
-            // do not identify their backing registers or clock units.
-            if (!ll_settle_warning_logged_) {
-                std::fprintf(stderr,
-                             "PHY6252: ll_hw_set_trx_settle reached (bb=%u afe=%u pll=%u); timing effect is not modeled\n",
-                             core_.reg(0), core_.reg(1), core_.reg(2));
-                ll_settle_warning_logged_ = true;
-            }
+            // The related PHY62xx SDK driver packs these values into BB_HW+0xbc.
+            // Preserve the register contract; PHY6252 timing remains unverified.
+            const std::uint32_t packed = ((core_.reg(0) & 0xffu) << 16) |
+                ((core_.reg(1) & 0xffu) << 8) | (core_.reg(2) & 0xffu);
+            write_register(RadioRfSettle, packed, 4);
         } else if (address == 0x10cdc) {
             // Return the current LL_HW operation mode; the symbol is exported
             // by the SDK ROM map but its declaration is omitted from headers.
-            core_.set_reg(0, ll_registers_[RadioLlBase + 0x04]);
+            core_.set_reg(0, ll_registers_[RadioLlBase + 0x04] & 0x0fu);
         } else if (address == 0x15cc8) {
             // timer.h wraps fine-time deltas at BASE_TIME_UNITS. Core cycles
             // are the only exposed 16 MHz clock in this model.
             core_.set_reg(0, static_cast<std::uint32_t>(core_.cycles()) & 0x3fffffu);
         } else if (address == 0xace0) {
-            // The SDK names this entry but omits its prototype. The simple
-            // block/buffer path is only a test fixture; TS0001 passes more
-            // arguments and its output layout is still unknown.
             const std::uint32_t block = core_.reg(0);
             const std::uint32_t destination = core_.reg(1);
-            constexpr std::array<std::uint8_t, 8> rf_calibration = {
-                0x2b, 0x23, 0, 0, 0, 0, 0, 0};
-            if (block == 1 && core_.reg(2) == 0 && core_.reg(3) == 0) {
-                if (!core_.write_memory(destination, rf_calibration.data(),
-                                        rf_calibration.size()))
-                    core_.set_reg(0, static_cast<std::uint32_t>(-22));
-                else
-                    core_.set_reg(0, 0);
+            // The PHY6222 SDK declares this same PHY62xx API as
+            // efuse_read(block, uint32_t *buf): two words per block. Its error
+            // enum defines INVALID_PARAM=6 and UNINITIALIZED=24. The PHY6252
+            // SDK exports the ROM symbol but omits its declaration.
+            if (block >= efuse_blocks_.size()) {
+                core_.set_reg(0, 6); // PPlus_ERR_INVALID_PARAM
+            } else if (!efuse_block_present_[block]) {
+                if (!efuse_missing_warning_logged_[block]) {
+                    std::fprintf(stderr,
+                                 "PHY6252: efuse_read block %u has no supplied device data; returning PPlus_ERR_UNINITIALIZED (24)\n",
+                                 block);
+                    efuse_missing_warning_logged_[block] = true;
+                }
+                core_.set_reg(0, 24); // PPlus_ERR_UNINITIALIZED
+            } else if (destination < BootImage::RamBase ||
+                       static_cast<std::uint64_t>(destination) + efuse_blocks_[block].size() >
+                           static_cast<std::uint64_t>(BootImage::RamBase) + BootImage::RamSize ||
+                       !core_.write_memory(destination, efuse_blocks_[block].data(),
+                                           efuse_blocks_[block].size())) {
+                core_.set_reg(0, 6); // PPlus_ERR_INVALID_PARAM
             } else {
-                std::fprintf(stderr,
-                             "PHY6252: unverified efuse_read call (block=%u r1=0x%08x r2=0x%08x r3=0x%08x lr=0x%08x); leaving memory unchanged\n",
-                             block, destination, core_.reg(2), core_.reg(3), core_.reg(14));
-                core_.set_reg(0, block == 1 ? 0 : static_cast<std::uint32_t>(-22));
+                core_.set_reg(0, 0); // PPlus_SUCCESS
             }
         } else if (address == 0x3fdc) {
             // SDK ROM symbol LL_ENC_AES128_Encrypt0(input, key, output).
@@ -843,6 +1077,19 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                     core_.set_reg(0, 0); // LL_STATUS_SUCCESS
                 }
             }
+        } else if (address == 0xa5c0) {
+            // The SDK ROM exports clear_timer(AP_TIM_TypeDef *). Its body is
+            // absent; match the public hal_timer_stop_counter() sequence.
+            const std::uint32_t base = core_.reg(0);
+            const int timer = timer_index(base);
+            if (timer < 0 || base != timer_base(static_cast<unsigned>(timer))) {
+                core_.set_reg(0, static_cast<std::uint32_t>(-22));
+            } else {
+                write_register(base + 0x08, 0, 4);
+                write_register(base, 0, 4);
+                write_register(base + 0x04, 0, 4);
+                core_.set_reg(0, 0);
+            }
         } else if (address == 0x13ae4) {
             rom_log_printf();
         } else if (address == 0xa2e0) {
@@ -966,10 +1213,20 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                     (read_length << 16) | (write_length << 24);
                 control_registers_[SpifModeBit] = mode_bits & 0xffu;
                 control_registers_[SpifDelay] = dummy_cycles & 0xffu;
-                // Flash status commands return ready with WIP clear in this model.
-                if (op == 0x05u)
+                if (op == 0x05u && address_length == 0 && read_length == 2 && write_length == 0)
                     spif_read_data_ = 0;
-                core_.set_reg(0, 0);
+                else if (op == 0x9fu && address_length == 0 && read_length == 3 && write_length == 0)
+                    spif_read_data_ = CapturedFlashJedecId;
+                else {
+                    std::fprintf(stderr,
+                                 "PHY6252: unmodeled ROM spif_cmd opcode=0x%02x addrlen=%u rdlen=%u wrlen=%u\n",
+                                 op, address_length, read_length, write_length);
+                    spif_read_data_ = 0;
+                    core_.set_reg(0, static_cast<std::uint32_t>(-22));
+                }
+                if ((op == 0x05u && address_length == 0 && read_length == 2 && write_length == 0) ||
+                    (op == 0x9fu && address_length == 0 && read_length == 3 && write_length == 0))
+                    core_.set_reg(0, 0);
             }
         } else if (address == 0x1713c) {
             // SDK ROM spif_rddata(destination, length). The model completes
@@ -1406,7 +1663,74 @@ void Phy6252::dma_copy_channel3() {
     dma_raw_transfer_status_ |= DmaChannel3Mask;
 }
 
+void Phy6252::dma_copy_channel0() {
+    const std::uint32_t source = control_registers_[DmaBase];
+    const std::uint32_t destination = control_registers_[DmaBase + 0x08];
+    const std::uint32_t control = control_registers_[DmaChannel0Control];
+    const std::uint32_t count = control_registers_[DmaChannel0ControlHigh];
+    const std::uint64_t source_end = static_cast<std::uint64_t>(source) + count;
+    const std::uint64_t destination_end = static_cast<std::uint64_t>(destination) + count;
+    const std::uint64_t flash_end =
+        static_cast<std::uint64_t>(BootImage::FlashBase) + BootImage::FlashSize;
+    const bool source_in_flash = source >= BootImage::FlashBase && source_end <= flash_end;
+    const bool source_in_ram = source >= BootImage::RamBase &&
+        source_end <= static_cast<std::uint64_t>(BootImage::RamBase) + BootImage::RamSize;
+    const bool destination_in_flash = destination >= BootImage::FlashBase &&
+        destination_end <= flash_end;
+    const bool destination_in_ram = destination >= BootImage::RamBase &&
+        destination_end <= static_cast<std::uint64_t>(BootImage::RamBase) + BootImage::RamSize;
+
+    // This is the byte-wide memory-to-memory setup found in the external ROM
+    // helper at 0x1000a92c. Other channel-0 modes still need their device model.
+    if ((control & ~1u) != 0 || count > 0x7ff ||
+        control_registers_[DmaChannel0Config] != 0 ||
+        control_registers_[DmaChannel0ConfigHigh] != 4 ||
+        (!source_in_flash && !source_in_ram) ||
+        (!destination_in_flash && !destination_in_ram)) {
+        unsupported_register(DmaChannel0Control, "unsupported DMA channel 0 transfer",
+                             control, 4);
+        return;
+    }
+
+    std::vector<std::uint8_t> buffer(count);
+    if (count != 0 && !core_.read_memory(source, buffer.data(), buffer.size())) {
+        unsupported_register(DmaBase, "DMA channel 0 source outside mapped memory");
+        return;
+    }
+
+    if (destination_in_flash) {
+        if (control_registers_[SpifWriteProtection] == 0) {
+            const std::size_t offset = destination - BootImage::FlashBase;
+            bool changed = false;
+            for (std::size_t i = 0; i < buffer.size(); ++i) {
+                const std::uint8_t programmed = flash_[offset + i] & buffer[i];
+                changed |= programmed != flash_[offset + i];
+                flash_[offset + i] = programmed;
+            }
+            if (changed)
+                core_.request_code_invalidation();
+        }
+    } else if (count != 0 && !core_.write_memory(destination, buffer.data(), buffer.size())) {
+        unsupported_register(DmaBase + 0x08, "DMA channel 0 destination outside mapped memory");
+        return;
+    }
+    dma_raw_transfer_status_ |= DmaChannel0Mask;
+}
+
 std::uint32_t Phy6252::read(std::uint32_t address, unsigned size) {
+    if (address >= FlashReadAliasBase &&
+        static_cast<std::uint64_t>(address) + size <=
+            static_cast<std::uint64_t>(FlashReadAliasBase) + BootImage::FlashSize) {
+        if (size != 1 && size != 2 && size != 4) {
+            unsupported_register(address, "read from XIP alias", 0, size);
+            return 0;
+        }
+        const std::size_t offset = address - FlashReadAliasBase;
+        std::uint32_t value = 0;
+        for (unsigned i = 0; i < size; ++i)
+            value |= static_cast<std::uint32_t>(flash_[offset + i]) << (8 * i);
+        return value;
+    }
     if (address >= UartBase && address < UartBase + 0x1000) {
         const auto reg = (address - UartBase) / 4;
         switch (reg) {
@@ -1442,12 +1766,29 @@ std::uint32_t Phy6252::read(std::uint32_t address, unsigned size) {
             return 0;
         }
         std::uint32_t value = 0;
-        for (unsigned i = 0; i < size; ++i) {
-            const std::size_t index = address - RadioRxFifo + i;
-            if (index < rx_fifo_.size()) {
-                value |= static_cast<std::uint32_t>(rx_fifo_[index]) << (8 * i);
-                if (index >= 1 && index <= rx_fifo_[0] && rx_fifo_read_ <= index)
-                    rx_fifo_read_ = index + 1;
+        if (address == RadioRxFifo) {
+            // The SDK ROM repeatedly reads the FIFO data port at one address;
+            // Zephyr also uses offset reads from the mapped FIFO window.
+            for (unsigned i = 0; i < size; ++i) {
+                const std::size_t index = rx_fifo_stream_read_ + i;
+                if (index < rx_fifo_stream_size_ && index < rx_fifo_.size()) {
+                    value |= static_cast<std::uint32_t>(rx_fifo_[index]) << (8 * i);
+                    if (index >= 1 && index <= rx_fifo_[0] && rx_fifo_read_ <= index)
+                        rx_fifo_read_ = index + 1;
+                }
+            }
+            rx_fifo_stream_read_ = std::min(rx_fifo_stream_read_ + size, rx_fifo_stream_size_);
+            ll_registers_[RadioRxFifoStatus] =
+                (static_cast<std::uint32_t>(rx_fifo_stream_size_ & RadioFifoPointerMask) << 16) |
+                static_cast<std::uint32_t>(rx_fifo_stream_read_ & RadioFifoPointerMask);
+        } else {
+            for (unsigned i = 0; i < size; ++i) {
+                const std::size_t index = address - RadioRxFifo + i;
+                if (index < rx_fifo_.size()) {
+                    value |= static_cast<std::uint32_t>(rx_fifo_[index]) << (8 * i);
+                    if (index >= 1 && index <= rx_fifo_[0] && rx_fifo_read_ <= index)
+                        rx_fifo_read_ = index + 1;
+                }
             }
         }
         return value;
@@ -1537,6 +1878,45 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
     }
     const std::uint32_t aligned = address & ~3u;
     std::uint32_t value;
+    if (aligned == RadioRfBase + 0xf4) {
+        if (!rf_tp_calibration_present_ || !rf_tp_calibration_pending_) {
+            unsupported_register(address, "read", 0, size);
+            return 0;
+        }
+        const unsigned channel = rf_registers_[RadioRfBase + 0xb4] & 0xffu;
+        const unsigned deviation = (rf_registers_[RadioRfBase + 0xd8] >> 18) & 0x7u;
+        unsigned result_index;
+        if (channel == 2 && deviation == 1)
+            result_index = 0;
+        else if (channel == 66 && deviation == 1)
+            result_index = 1;
+        else if (channel == 2 && deviation == 2)
+            result_index = 2;
+        else if (channel == 66 && deviation == 2)
+            result_index = 3;
+        else {
+            unsupported_register(address, "read", 0, size);
+            return 0;
+        }
+        rf_tp_calibration_pending_ = false;
+        value = static_cast<std::uint32_t>(rf_tp_calibration_[result_index]) << 16;
+        return lane_read(value, address, size);
+    }
+    if (aligned >= AonEfuseDataBase && aligned < AonEfuseSecurityState) {
+        const unsigned block = (aligned - AonEfuseDataBase) / 8;
+        const unsigned word = ((aligned - AonEfuseDataBase) % 8) / 4;
+        if (block >= efuse_blocks_.size() || !efuse_block_present_[block] ||
+            !efuse_read_ready_[block]) {
+            unsupported_register(address, "read", 0, size);
+            return 0;
+        }
+        const std::uint8_t *bytes = efuse_blocks_[block].data() + word * 4;
+        value = static_cast<std::uint32_t>(bytes[0]) |
+                (static_cast<std::uint32_t>(bytes[1]) << 8) |
+                (static_cast<std::uint32_t>(bytes[2]) << 16) |
+                (static_cast<std::uint32_t>(bytes[3]) << 24);
+        return lane_read(value, address, size);
+    }
     const int timer = timer_index(aligned);
     if (timer >= 0) {
         sync_timer(static_cast<unsigned>(timer), core_.cycles());
@@ -1562,6 +1942,7 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
         switch (aligned - GpioBase) {
         case 0x00: value = gpio_data_; break;
         case 0x04: value = gpio_direction_; break;
+        case 0x08: value = gpio_control_; break;
         case 0x30: value = gpio_interrupt_enable_; break;
         case 0x34: value = gpio_interrupt_mask_; break;
         case 0x38: value = gpio_interrupt_type_; break;
@@ -1582,7 +1963,8 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
             value = dma_channel_enable_;
         else if (aligned == DmaClearTransfer)
             value = 0;
-        else if (aligned >= DmaChannel3Sar && aligned <= DmaChannel3Config + 4)
+        else if ((aligned >= DmaBase && aligned <= DmaChannel0ConfigHigh) ||
+                 (aligned >= DmaChannel3Sar && aligned <= DmaChannel3Config + 4))
             value = control_registers_[aligned];
         else if (aligned == DmaConfig)
             value = control_registers_[aligned];
@@ -1644,16 +2026,64 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
             unsupported_register(address, "read", 0, size);
             return 0;
         }
-        if (offset == 0xe4 || offset == 0xe8) {
+        if (offset >= 0x54 && offset <= 0x74 && !rf_init_bank_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF/baseband init register range 0x40030054..0x40030074 is used by the external-ROM TS0001 path; retaining values without modeling its effect\n");
+            rf_init_bank_warning_logged_ = true;
+        }
+        if (offset == 0xa4 && !rf_a4_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF register 0x400300a4 is used by the external-ROM TS0001 init; retaining writes without modeling its effect\n");
+            rf_a4_warning_logged_ = true;
+        }
+        if (offset == 0x8c && !rf_8c_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF register 0x4003008c is read-modify-written by the external ROM setup; retaining its value without modeling its effect\n");
+            rf_8c_warning_logged_ = true;
+        }
+        if (offset == 0xa0 && !rf_a0_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF register 0x400300a0 (PLL auto override) is used by the external-ROM TS0001 path; retaining its value without modeling its effect\n");
+            rf_a0_warning_logged_ = true;
+        }
+        if (offset == 0x124 && !rf_124_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF register 0x40030124 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            rf_124_warning_logged_ = true;
+        }
+        if (offset == 0x50 && !rf_50_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF register 0x40030050 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            rf_50_warning_logged_ = true;
+        }
+        if ((offset == 0x78 || offset == 0xa8 || offset == 0xac ||
+             offset == 0xc4 || offset == 0xc8) && !rf_rx_calibration_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF RX DCOC setup registers are retained without analog modeling; RF+0xec reports calibration not ready, matching the captured default g_rfPhyRxDcIQ state\n");
+            rf_rx_calibration_warning_logged_ = true;
+        }
+        if (offset == 0xec) {
+            if (!rf_rx_calibration_warning_logged_) {
+                std::fprintf(stderr,
+                             "PHY6252: RF+0xec reports RX DCOC calibration not ready; captured g_rfPhyRxDcIQ remains at SDK default 0x20200000\n");
+                rf_rx_calibration_warning_logged_ = true;
+            }
+            // The related SDK leaves g_rfPhyRxDcIQ at 0x20200000 when bit 31:30
+            // never reaches 3; the module RAM snapshot contains that default.
+            value = 0;
+        } else if (offset == 0xe4 || offset == 0xe8) {
             if (offset == 0xe8 && !rf_sample_e8_warning_logged_) {
                 std::fprintf(stderr,
-                             "PHY6252: RF register 0x400300e8 is read by TS0001 calibration code; returning the virtual-air RSSI sample (inferred)\n");
+                             "PHY6252: RF register 0x400300e8 is read by TS0001 calibration code; returning positive RSSI magnitude from virtual air (inferred)\n");
                 rf_sample_e8_warning_logged_ = true;
             }
             const std::int8_t rssi = radio_rx_rssi_ > -100 ? radio_rx_rssi_ :
                                      radio_energy_dbm(core_.cycles_to_ns(core_.cycles()));
             value = rf_registers_[aligned] & 0x00ffffffu;
-            value |= static_cast<std::uint32_t>(static_cast<std::uint8_t>(rssi)) << 24;
+            const std::uint8_t high = offset == 0xe8 ?
+                static_cast<std::uint8_t>(std::clamp(-static_cast<int>(rssi), 0, 127)) :
+                static_cast<std::uint8_t>(rssi);
+            value |= static_cast<std::uint32_t>(high) << 24;
         } else if (offset == 0x94 && rf_registers_.find(aligned) == rf_registers_.end()) {
             value = 0x20; // calibration capacitor value used by the Zephyr driver's fallback range
         } else {
@@ -1666,6 +2096,36 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
         if (!phy_ll_register(offset)) {
             unsupported_register(address, "read", 0, size);
             return 0;
+        }
+        if (offset == 0x24 && !ll_24_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL register 0x40031024 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            ll_24_warning_logged_ = true;
+        }
+        if (offset == 0x20 && !ll_20_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL register 0x40031020 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            ll_20_warning_logged_ = true;
+        }
+        if (offset == 0x2c && !ll_2c_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL register 0x4003102c is used by the external ROM setup; retaining writes without modeling its effect\n");
+            ll_2c_warning_logged_ = true;
+        }
+        if (offset == 0x58 && !ll_58_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL FIFO depth config 0x40031058 is retained; the current FIFO model keeps its 2 KiB TX / 2 KiB RX split (inferred from the related SDK)\n");
+            ll_58_warning_logged_ = true;
+        }
+        if (offset == 0x60 && !ll_60_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL register 0x40031060 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            ll_60_warning_logged_ = true;
+        }
+        if (offset == 0x68 && !ll_68_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL register 0x40031068 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            ll_68_warning_logged_ = true;
         }
         if (offset == 0x00)
             value = (radio_tx_active_ || radio_rx_active_) ? 1u : 0u;
@@ -1685,6 +2145,9 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
     case SpifRemap: value = control_registers_[aligned]; break;
     case SpifModeBit: value = control_registers_[aligned]; break;
     case SpifWriteCompletionControl: value = control_registers_[aligned]; break;
+    case SpifLowWriteProtection:
+    case SpifUpWriteProtection:
+    case SpifWriteProtection: value = control_registers_[aligned]; break;
     case SpifCommand: value = spif_command_ & ~2u; break; // commands complete immediately
     case SpifCommandAddress: value = control_registers_[aligned]; break;
     case SpifReadData: value = spif_read_data_; break;
@@ -1709,14 +2172,19 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
     case RadioClockControl:
     case RadioClockConfig:
     case AonRtcClock:
+    case AonPmctl1:
     case AonPmctl2_0:
     case AonRtcControl:
     case AonEfuseConfig:
+    case AonChipState:
+    case AonCalReadWrite:
     case AonEfuseProgram0:
     case AonEfuseProgram1:
     case AonXtal16Control:
     case AonWakeMask0:
     case AonWakeMask1:
+    case AonSleepFlag:
+    case AonPowerSleep:
     case AonWakeSource0:
     case AonWakeSource1:
     case AonRtcCompare0:
@@ -1731,6 +2199,16 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
         break;
     case AonRtcCount:
         value = rtc_count(core_.cycles_to_ns(core_.cycles()));
+        break;
+    case AonEfuseSecurityState:
+        // The supplied PHY62x2 register snapshot reads 0x0f here and uses
+        // those four bits to allow the ROM's block 0..3 read paths.
+        value = 0x0f;
+        break;
+    case AonCalReadOnly0:
+    case AonCalReadOnly1:
+    case AonCalReadOnly2:
+        value = control_registers_[aligned];
         break;
     default:
         if (mux_select_register(aligned))
@@ -1815,6 +2293,14 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             update_gpio_irq();
             break;
         }
+        case 0x08:
+            gpio_control_ = lane_write(gpio_control_, value, address, size);
+            if (!gpio_control_warning_logged_) {
+                std::fprintf(stderr,
+                             "PHY6252: GPIO SWPORTA_CTL is retained; its pad-control effects are not modeled\n");
+                gpio_control_warning_logged_ = true;
+            }
+            break;
         case 0x30:
             gpio_interrupt_enable_ = lane_write(gpio_interrupt_enable_, value, address, size) & GpioMask;
             update_gpio_irq();
@@ -1848,7 +2334,7 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             unsupported_register(address, "write to read-only GPIO register");
             return;
         default:
-            unsupported_register(address, "write");
+            unsupported_register(address, "write", value, size);
             return;
         }
         return;
@@ -1860,14 +2346,33 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
         } else if (aligned == DmaClearTransfer) {
             dma_raw_transfer_status_ &= ~written;
         } else if (aligned == DmaChannelEnable) {
-            dma_channel_enable_ = written;
-            control_registers_[aligned] = written;
-            if (written & DmaChannel3Mask) {
-                dma_copy_channel3();
-                dma_channel_enable_ &= ~DmaChannel3Mask;
-                control_registers_[aligned] = dma_channel_enable_;
+            const std::uint32_t write_enable = (written >> 8) & 0xffu;
+            constexpr std::uint32_t SupportedChannels = DmaChannel0Mask | DmaChannel3Mask;
+            if ((write_enable & ~SupportedChannels) != 0) {
+                unsupported_register(address, "DMA enable for unmodeled channel", written, size);
+                return;
             }
+            for (const std::uint32_t channel : {DmaChannel0Mask, DmaChannel3Mask}) {
+                if ((write_enable & channel) == 0)
+                    continue;
+                if ((written & channel) == 0) {
+                    dma_channel_enable_ &= ~channel;
+                    continue;
+                }
+                dma_channel_enable_ |= channel;
+                if ((control_registers_[DmaConfig] & 1u) == 0) {
+                    unsupported_register(address, "DMA channel start while controller is disabled",
+                                         written, size);
+                } else if (channel == DmaChannel0Mask) {
+                    dma_copy_channel0();
+                } else {
+                    dma_copy_channel3();
+                }
+                dma_channel_enable_ &= ~channel;
+            }
+            control_registers_[aligned] = dma_channel_enable_;
         } else if (aligned == DmaConfig ||
+                   (aligned >= DmaBase && aligned <= DmaChannel0ConfigHigh) ||
                    (aligned >= DmaChannel3Sar && aligned <= DmaChannel3Config + 4)) {
             control_registers_[aligned] = written;
         } else {
@@ -1920,10 +2425,53 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
     if (aligned >= RadioRfBase && aligned < RadioRfBase + 0x1000) {
         const std::uint32_t offset = aligned - RadioRfBase;
         if (!phy_rf_register(offset)) {
-            unsupported_register(address, "write");
+            unsupported_register(address, "write", value, size);
             return;
         }
-        rf_registers_[aligned] = lane_write(rf_registers_[aligned], value, address, size);
+        if (offset >= 0x54 && offset <= 0x74 && !rf_init_bank_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF/baseband init register range 0x40030054..0x40030074 is used by the external-ROM TS0001 path; retaining values without modeling its effect\n");
+            rf_init_bank_warning_logged_ = true;
+        }
+        if (offset == 0xa4 && !rf_a4_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF register 0x400300a4 is used by the external-ROM TS0001 init; retaining writes without modeling its effect\n");
+            rf_a4_warning_logged_ = true;
+        }
+        if (offset == 0x8c && !rf_8c_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF register 0x4003008c is read-modify-written by the external ROM setup; retaining its value without modeling its effect\n");
+            rf_8c_warning_logged_ = true;
+        }
+        if (offset == 0xa0 && !rf_a0_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF register 0x400300a0 (PLL auto override) is used by the external-ROM TS0001 path; retaining its value without modeling its effect\n");
+            rf_a0_warning_logged_ = true;
+        }
+        if (offset == 0x124 && !rf_124_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF register 0x40030124 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            rf_124_warning_logged_ = true;
+        }
+        if (offset == 0x50 && !rf_50_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF register 0x40030050 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            rf_50_warning_logged_ = true;
+        }
+        if ((offset == 0x78 || offset == 0xa8 || offset == 0xac ||
+             offset == 0xc4 || offset == 0xc8) && !rf_rx_calibration_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: RF RX DCOC setup registers are retained without analog modeling; RF+0xec reports calibration not ready, matching the captured default g_rfPhyRxDcIQ state\n");
+            rf_rx_calibration_warning_logged_ = true;
+        }
+        const std::uint32_t written = lane_write(rf_registers_[aligned], value, address, size);
+        rf_registers_[aligned] = written;
+        if (offset == 0xa4) {
+            if (written == 0x114)
+                rf_tp_calibration_pending_ = true;
+            else if (written == 0)
+                rf_tp_calibration_pending_ = false;
+        }
         return;
     }
     if (aligned >= RadioLlBase && aligned < RadioLlBase + 0x1000) {
@@ -1931,6 +2479,36 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
         if (!phy_ll_register(offset)) {
             unsupported_register(address, "write", value, size);
             return;
+        }
+        if (offset == 0x24 && !ll_24_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL register 0x40031024 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            ll_24_warning_logged_ = true;
+        }
+        if (offset == 0x20 && !ll_20_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL register 0x40031020 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            ll_20_warning_logged_ = true;
+        }
+        if (offset == 0x2c && !ll_2c_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL register 0x4003102c is used by the external ROM setup; retaining writes without modeling its effect\n");
+            ll_2c_warning_logged_ = true;
+        }
+        if (offset == 0x58 && !ll_58_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL FIFO depth config 0x40031058 is retained; the current FIFO model keeps its 2 KiB TX / 2 KiB RX split (inferred from the related SDK)\n");
+            ll_58_warning_logged_ = true;
+        }
+        if (offset == 0x60 && !ll_60_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL register 0x40031060 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            ll_60_warning_logged_ = true;
+        }
+        if (offset == 0x68 && !ll_68_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: LL register 0x40031068 is used by the external ROM setup; retaining writes without modeling its effect\n");
+            ll_68_warning_logged_ = true;
         }
         const std::uint32_t written = lane_write(ll_registers_[aligned], value, address, size);
         switch (offset) {
@@ -1950,6 +2528,13 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
                 if (air_)
                     core_.request_service(core_.cycles() + 1);
             }
+            break;
+        case 0x28:
+            // The external PHY6222 ROM's ll_hw_set_rx_timeout stores a
+            // microsecond count here.
+            ll_registers_[aligned] = written & 0xffffu;
+            if (radio_rx_active_)
+                schedule_radio_rx_timeout();
             break;
         case 0x10:
             // Interrupt status is hardware-owned and write-one-to-clear at +0x14.
@@ -1985,7 +2570,18 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
     case SpifRemap:
     case SpifModeBit:
     case SpifWriteCompletionControl:
+    case SpifLowWriteProtection:
+    case SpifUpWriteProtection:
+    case SpifWriteProtection:
     case SpifCommandAddress:
+        if (aligned >= SpifLowWriteProtection && aligned <= SpifWriteProtection &&
+            !spif_protection_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: AP_SPIF write-protection registers are retained; CPU XIP stores program flash only while WR_PROTECTION is zero (inferred from the related SDK ROM)\n");
+            spif_protection_warning_logged_ = true;
+        }
+        control_registers_[aligned] = lane_write(control_registers_[aligned], value, address, size);
+        break;
     case SpifWriteData:
     case SpifWriteDataHigh:
     case SpifPollStatus:
@@ -2005,13 +2601,23 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
     case MuxPadEnable:
     case RadioClockControl:
     case RadioClockConfig:
+    case AonPmctl1:
+        if (!aon_pmctl1_warning_logged_) {
+            std::fprintf(stderr,
+                         "PHY6252: AON PMCTL1 RC32K cap-bank control is retained; oscillator calibration effects are not modeled\n");
+            aon_pmctl1_warning_logged_ = true;
+        }
+        control_registers_[aligned] = lane_write(control_registers_[aligned], value, address, size);
+        break;
     case AonPmctl2_0:
-    case AonEfuseConfig:
+    case AonChipState:
+    case AonCalReadWrite:
     case AonEfuseProgram0:
     case AonEfuseProgram1:
     case AonXtal16Control:
     case AonWakeMask0:
     case AonWakeMask1:
+    case AonSleepFlag:
     case AonSleepR0:
     case AonSleepR0 + 4:
     case AonSleepR0 + 8:
@@ -2021,6 +2627,30 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             mux_select_register(aligned))
             notify_gpio(GpioMask);
         break;
+    case AonPowerSleep: {
+        const std::uint32_t command = lane_write(control_registers_[aligned], value, address, size);
+        if (command != 0xa5a55a5au || rom_dump_.empty()) {
+            unsupported_register(address, "unsupported AON power command", command, size);
+            return;
+        }
+        control_registers_[aligned] = command;
+        system_sleep_request_ = true;
+        core_.request_reset();
+        break;
+    }
+    case AonEfuseConfig: {
+        const std::uint32_t previous = control_registers_[aligned];
+        const std::uint32_t updated = lane_write(previous, value, address, size);
+        control_registers_[aligned] = updated;
+        for (unsigned block = 0; block < efuse_read_ready_.size(); ++block) {
+            const std::uint32_t read_strobe = 1u << (16 + block);
+            if (!(previous & read_strobe) && (updated & read_strobe))
+                efuse_read_ready_[block] = true;
+            else if ((previous & read_strobe) && !(updated & read_strobe))
+                efuse_read_ready_[block] = false;
+        }
+        break;
+    }
     case AonRtcControl: {
         const std::uint64_t now_ns = core_.cycles_to_ns(core_.cycles());
         const std::uint32_t old_control = control_registers_[AonRtcControl];
@@ -2049,12 +2679,48 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
         break;
     case SpifCommand: {
         const std::uint32_t command = lane_write(spif_command_, value, address, size);
-        if (command != SpifReadStatus) {
-            unsupported_register(address, "unsupported SPIF command write");
+        if (command == SpifWriteEnable) {
+            spif_write_enabled_ = true;
+            spif_read_data_ = 0;
+        } else if (command == SpifWriteDisable) {
+            spif_write_enabled_ = false;
+            spif_read_data_ = 0;
+        } else if (command == SpifReadStatus) {
+            spif_read_data_ = spif_write_enabled_ ? 2u : 0u;
+        } else if (command == SpifReadId) {
+            spif_read_data_ = CapturedFlashJedecId;
+        } else if (command == SpifSectorErase || command == SpifBlockErase64) {
+            if (!spif_write_enabled_) {
+                unsupported_register(address, "SPIF erase without write-enable", command, size);
+                return;
+            }
+            const std::uint32_t command_address = control_registers_[SpifCommandAddress];
+            const std::uint64_t flash_end =
+                static_cast<std::uint64_t>(BootImage::FlashBase) + BootImage::FlashSize;
+            const std::uint32_t offset = command_address >= BootImage::FlashBase &&
+                command_address < flash_end ? command_address - BootImage::FlashBase : command_address;
+            const std::uint32_t erase_size = command == SpifSectorErase ?
+                FlashSectorSize : FlashBlock64Size;
+            if (static_cast<std::uint64_t>(offset) + erase_size > BootImage::FlashSize ||
+                (offset % erase_size) != 0) {
+                unsupported_register(SpifCommandAddress, "invalid SPIF erase address",
+                                     command_address, 4);
+                return;
+            }
+            const bool changed = std::any_of(flash_ + offset, flash_ + offset + erase_size,
+                                             [](std::uint8_t byte) { return byte != 0xff; });
+            std::fill_n(flash_ + offset, erase_size, 0xff);
+            spif_write_enabled_ = false;
+            spif_read_data_ = 0;
+            if (changed)
+                core_.request_code_invalidation();
+        } else {
+            unsupported_register(address, "unsupported SPIF command write", command, size);
             return;
         }
         spif_command_ = command;
-        spif_read_data_ = 0; // status register has WIP clear in this non-busy model
+        // Commands complete synchronously. RDID is in JEDEC wire order in the
+        // data register; status exposes WEL while the write-enable latch is set.
         break;
     }
     case SpifReadData:
@@ -2185,12 +2851,27 @@ void Phy6252::receive_radio_frame(const mcuemu::RadioFrame &frame) {
          frame.end_ns > core_.cycles_to_ns(radio_rx_deadline_cycle_)))
         return;
     rx_fifo_.fill(0);
-    rx_fifo_[0] = static_cast<std::uint8_t>(frame.payload.size() + 2);
+    const std::size_t packet_length = frame.payload.size() + 2;
+    rx_fifo_[0] = static_cast<std::uint8_t>(packet_length);
     std::copy(frame.payload.begin(), frame.payload.end(), rx_fifo_.begin() + 1);
     const std::uint16_t fcs = ieee802154_fcs(frame.payload);
-    rx_fifo_[frame.payload.size() + 1] = static_cast<std::uint8_t>(fcs);
-    rx_fifo_[frame.payload.size() + 2] = static_cast<std::uint8_t>(fcs >> 8);
+    rx_fifo_[packet_length - 1] = static_cast<std::uint8_t>(fcs);
+    rx_fifo_[packet_length] = static_cast<std::uint8_t>(fcs >> 8);
+    const std::size_t packet_words = 1 + (packet_length >> 2);
+    const std::size_t packet_bytes = packet_words * sizeof(std::uint32_t);
+    constexpr std::uint32_t foot0 = 2; // inferred small carrier-frequency offset
+    const std::uint32_t rssi_magnitude = static_cast<std::uint32_t>(
+        std::clamp(-static_cast<int>(frame.rssi_dbm), 0, 127));
+    const std::uint32_t foot1 = rssi_magnitude << 24;
+    for (unsigned byte = 0; byte < 4; ++byte) {
+        rx_fifo_[packet_bytes + byte] = static_cast<std::uint8_t>(foot0 >> (8 * byte));
+        rx_fifo_[packet_bytes + 4 + byte] = static_cast<std::uint8_t>(foot1 >> (8 * byte));
+    }
     rx_fifo_read_ = 0;
+    rx_fifo_stream_read_ = 0;
+    rx_fifo_stream_size_ = packet_bytes + 2 * sizeof(std::uint32_t);
+    ll_registers_[RadioRxFifoStatus] =
+        static_cast<std::uint32_t>(rx_fifo_stream_size_ & RadioFifoPointerMask) << 16;
     radio_rx_rssi_ = static_cast<std::int8_t>(std::clamp(frame.rssi_dbm, -127, 0));
     radio_rx_active_ = false;
     radio_rx_deadline_cycle_ = 0;
@@ -2200,10 +2881,11 @@ void Phy6252::receive_radio_frame(const mcuemu::RadioFrame &frame) {
 
 void Phy6252::schedule_radio_rx_timeout() {
     radio_rx_deadline_cycle_ = 0;
-    if (radio_rx_timeout_us_ == 0)
+    const std::uint32_t timeout_us = ll_registers_[RadioRxTimeout] & 0xffffu;
+    if (timeout_us == 0)
         return;
     const std::uint64_t duration_cycles = std::max<std::uint64_t>(1,
-        static_cast<std::uint64_t>(radio_rx_timeout_us_) * core_.clock_hz() / 1'000'000);
+        static_cast<std::uint64_t>(timeout_us) * core_.clock_hz() / 1'000'000);
     radio_rx_deadline_cycle_ = core_.cycles() + duration_cycles;
     core_.request_service(radio_rx_deadline_cycle_);
 }
@@ -2278,7 +2960,8 @@ std::uint64_t Phy6252::service_peripherals(std::uint64_t now) {
         const TimerState &state = timers_[timer];
         if (state.control & TimerEnable) {
             const std::uint64_t ticks = state.current == 0 ? 1 : state.current;
-            const std::uint64_t cycles = ticks * TimerCyclesPerTick - state.cycle_remainder;
+            const std::uint64_t cycles = ticks * timer_cycles_per_tick(core_.clock_hz()) -
+                state.cycle_remainder;
             next = std::min(next, now + std::max<std::uint64_t>(1, cycles));
         }
     }
@@ -2315,8 +2998,9 @@ void Phy6252::sync_timer(unsigned timer, std::uint64_t now) {
     if ((state.control & TimerEnable) == 0)
         return;
     const std::uint64_t accumulated = elapsed + state.cycle_remainder;
-    const std::uint64_t ticks = accumulated / TimerCyclesPerTick;
-    state.cycle_remainder = accumulated % TimerCyclesPerTick;
+    const std::uint64_t cycles_per_tick = timer_cycles_per_tick(core_.clock_hz());
+    const std::uint64_t ticks = accumulated / cycles_per_tick;
+    state.cycle_remainder = accumulated % cycles_per_tick;
     if (ticks == 0)
         return;
 
@@ -2379,7 +3063,9 @@ std::uint64_t Phy6252::service_radio(std::uint64_t now) {
         if (now >= radio_rx_deadline_cycle_) {
             radio_rx_active_ = false;
             radio_rx_deadline_cycle_ = 0;
-            ll_registers_[RadioLlBase + 0x10] |= RadioIrqRto | RadioIrqRtoZephyr;
+            // RTO identifies the cause; MD signals that the radio operation completed.
+            ll_registers_[RadioLlBase + 0x10] |=
+                RadioIrqMd | RadioIrqRto | RadioIrqRtoZephyr;
             update_radio_irq();
         } else {
             next = std::min(next, radio_rx_deadline_cycle_);

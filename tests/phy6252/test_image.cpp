@@ -16,6 +16,20 @@ void put(std::vector<std::uint8_t> &data, std::size_t offset, std::uint32_t valu
     for (unsigned i = 0; i < 4; ++i)
         data[offset + i] = static_cast<std::uint8_t>(value >> (8 * i));
 }
+
+class InvalidateOnWrite final : public cortexm::Bus {
+public:
+    explicit InvalidateOnWrite(cortexm::Core &core) : core_(core) {}
+    std::uint32_t read(std::uint32_t, unsigned) override { return 0; }
+    void write(std::uint32_t, std::uint32_t, unsigned) override {
+        ++writes;
+        core_.request_code_invalidation();
+    }
+    unsigned writes{0};
+
+private:
+    cortexm::Core &core_;
+};
 }
 
 int main() {
@@ -52,6 +66,70 @@ int main() {
     CHECK(core.last_instruction_pc() != 0);
     CHECK(core.reg(13) == 0x1fff2000);
 
+    std::vector<std::uint8_t> rom_image(0x18000, 0xff);
+    put(rom_image, 0x50, 0x12345679); // external ROM vectors are preserved
+    put(rom_image, 0, 0x1fff1800);
+    put(rom_image, 4, 0x00000201);
+    rom_image[0x200] = 0x34;
+    rom_image[0x201] = 0x12;
+    Phy6252 dump_rom_chip;
+    dump_rom_chip.load_rom_dump(rom_image);
+    dump_rom_chip.load_firmware(image);
+    dump_rom_chip.reset();
+    std::uint32_t dumped_vector = 0;
+    CHECK(dump_rom_chip.core().read_memory(0x50, &dumped_vector, sizeof dumped_vector));
+    CHECK(dumped_vector == 0x12345679);
+    std::array<std::uint8_t, 2> rom_code{};
+    CHECK(dump_rom_chip.core().read_memory(0x200, rom_code.data(), rom_code.size()));
+    CHECK((rom_code == std::array<std::uint8_t, 2>{0x34, 0x12}));
+    CHECK(dump_rom_chip.core().read_memory(0x10000200, rom_code.data(), rom_code.size()));
+    CHECK((rom_code == std::array<std::uint8_t, 2>{0x34, 0x12}));
+    std::array<std::uint8_t, 2> aliased_flash_code{};
+    CHECK(dump_rom_chip.core().read_memory(0x22010108, aliased_flash_code.data(),
+                                           aliased_flash_code.size()));
+    CHECK((aliased_flash_code == std::array<std::uint8_t, 2>{0xfe, 0xe7}));
+
+    Phy6252 cold_boot_chip;
+    cold_boot_chip.load_rom_dump(rom_image);
+    cold_boot_chip.load_firmware(image);
+    cold_boot_chip.set_boot_from_rom(true);
+    cold_boot_chip.reset();
+    CHECK(cold_boot_chip.core().reg(13) == 0x1fff1800);
+    CHECK(cold_boot_chip.core().pc() == 0x200);
+    CHECK(cold_boot_chip.core().read_memory(BootImage::RamBase + 0x1838,
+                                           rom_code.data(), rom_code.size()));
+    CHECK((rom_code == std::array<std::uint8_t, 2>{0, 0}));
+    bool missing_rom_rejected = false;
+    try {
+        Phy6252 missing_rom_chip;
+        missing_rom_chip.set_boot_from_rom(true);
+    } catch (const std::invalid_argument &) {
+        missing_rom_rejected = true;
+    }
+    CHECK(missing_rom_rejected);
+
+    std::vector<std::uint8_t> padded_rom(0x20000, 0xff);
+    std::copy(rom_image.begin(), rom_image.end(), padded_rom.begin());
+    Phy6252 padded_rom_chip;
+    padded_rom_chip.load_rom_dump(padded_rom);
+    bool bad_rom_rejected = false;
+    try {
+        Phy6252 invalid_rom_chip;
+        invalid_rom_chip.load_rom_dump(std::vector<std::uint8_t>(0x100, 0));
+    } catch (const std::invalid_argument &) {
+        bad_rom_rejected = true;
+    }
+    CHECK(bad_rom_rejected);
+    padded_rom.back() = 0;
+    bad_rom_rejected = false;
+    try {
+        Phy6252 invalid_rom_chip;
+        invalid_rom_chip.load_rom_dump(padded_rom);
+    } catch (const std::invalid_argument &) {
+        bad_rom_rejected = true;
+    }
+    CHECK(bad_rom_rejected);
+
     cortexm::Core::Config m0_config;
     m0_config.model = cortexm::Model::M0;
     m0_config.irq_count = 32;
@@ -83,9 +161,83 @@ int main() {
     CHECK(m0_psp_after == 0x1fffe250);
     CHECK(m0_ipsr_after == 14);
 
+    cortexm::Core invalidation_core(m0_config);
+    InvalidateOnWrite invalidation_bus(invalidation_core);
+    auto *invalidation_memory = invalidation_core.map_memory(0x1000, 0x1000, true);
+    invalidation_core.map_mmio(0x40000000, 0x1000, invalidation_bus);
+    const std::uint32_t initial_sp = 0x3000, initial_pc = 0x1021;
+    std::memcpy(invalidation_memory, &initial_sp, sizeof initial_sp);
+    std::memcpy(invalidation_memory + 4, &initial_pc, sizeof initial_pc);
+    const std::uint8_t invalidation_code[] = {0x01, 0x60, 0x01, 0x22, 0xfe, 0xe7};
+    std::memcpy(invalidation_memory + 0x20, invalidation_code, sizeof invalidation_code);
+    invalidation_core.reset(0x1000);
+    invalidation_core.set_reg(0, 0x40000000);
+    invalidation_core.set_reg(1, 0x12345678);
+    CHECK(invalidation_core.run(invalidation_core.cycles() + 100).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(invalidation_bus.writes == 1);
+    CHECK(invalidation_core.reg(2) == 1); // execution resumed after the MMIO callback flush.
+
     Phy6252 chip;
     chip.load_firmware(image);
     chip.reset();
+    CHECK(chip.read(0x4000c858, 4) == 2); // SDK cache init locks the XIP write aperture
+    constexpr std::uint32_t flash_store_code = BootImage::RamBase + 0x2f00;
+    constexpr std::uint32_t flash_store_target = BootImage::FlashBase + 0x3dff0;
+    const std::array<std::uint8_t, 4> flash_store_instructions{0x08, 0x70, 0xfe, 0xe7};
+    CHECK(chip.core().write_memory(flash_store_code, flash_store_instructions.data(),
+                                   flash_store_instructions.size()));
+    auto *flash_store_byte = chip.core().host_pointer(flash_store_target, 1);
+    CHECK(flash_store_byte != nullptr);
+    *flash_store_byte = 0xff;
+    chip.write(0x4000c858, 0, 4); // the ROM temporarily clears WR_PROTECTION
+    chip.core().set_reg(0, 0x35);
+    chip.core().set_reg(1, flash_store_target);
+    chip.core().set_reg(15, flash_store_code);
+    CHECK(chip.run(chip.core().cycles() + 8).reason == cortexm::StopReason::Deadline);
+    CHECK(*flash_store_byte == 0x35);
+    chip.core().set_reg(0, 0x0f);
+    chip.core().set_reg(15, flash_store_code);
+    CHECK(chip.run(chip.core().cycles() + 8).reason == cortexm::StopReason::Deadline);
+    CHECK(*flash_store_byte == 0x05); // a second program can only clear more bits
+    chip.write(0x4000c858, 2, 4);
+    chip.core().set_reg(0, 0x00);
+    chip.core().set_reg(15, flash_store_code);
+    CHECK(chip.run(chip.core().cycles() + 8).reason == cortexm::StopReason::Deadline);
+    CHECK(*flash_store_byte == 0x05); // a locked AHB store is acknowledged but ignored
+    chip.reset(); // restore the timer epoch after exercising the flash programming loop
+    CHECK(chip.read(0x4000102c, 4) == 0xffffffffu); // AP_TIM3 free-running CurrentCount
+    const std::uint64_t wait_timer_start = chip.core().cycles();
+    CHECK(chip.run(wait_timer_start + 16).reason == cortexm::StopReason::Deadline);
+    CHECK(chip.read(0x4000102c, 4) == 0xfffffffbu); // one tick per four core cycles
+    chip.reset();
+    chip.core().set_clock_hz(32000000);
+    const std::uint64_t fast_clock_start = chip.core().cycles();
+    chip.core().advance_to(fast_clock_start + 32);
+    CHECK(chip.read(0x4000102c, 4) == 0xfffffffbu); // still four AP_TIM ticks at 32 MHz HCLK
+    chip.write(0x40001064, 3, 4); // Timer5 load count
+    chip.write(0x4000106c, 3, 4); // enable one-shot
+    const std::uint64_t fast_timer_start = chip.core().cycles();
+    chip.core().advance_to(fast_timer_start + 24);
+    CHECK(chip.read(0x40001068, 4) == 0);
+    CHECK(chip.read(0x40001074, 4) == 1); // three 4 MHz ticks took 24 HCLK cycles
+    chip.reset();
+    CHECK(chip.read(0x4000f018, 4) == 0x01064040); // captured AON PMCTL1
+    CHECK(chip.read(0x4000f054, 4) == 0x8000); // captured efuse_cfg
+    CHECK(chip.read(0x4000f058, 4) == 0); // captured chip_state
+    CHECK(chip.read(0x4000f05c, 4) == 0x1f2); // captured cal_rw
+    CHECK(chip.read(0x4000f060, 4) == 0x10c0); // captured cal_ro0
+    CHECK(chip.read(0x4000f064, 4) == 0); // captured cal_ro1
+    CHECK(chip.read(0x4000f068, 4) == 0x100); // captured cal_ro2
+    chip.write(0x4000f05c, 0x1234, 4);
+    CHECK(chip.read(0x4000f05c, 4) == 0x1234);
+    chip.write(0x4000f018, 0x010640c0, 4); // SDK RC32K cap-bank ownership strobe
+    CHECK(chip.read(0x4000f018, 4) == 0x010640c0);
+    chip.reset(); // reload the captured startup calibration values
+    std::array<std::uint8_t, 2> rf_tp_cal{};
+    CHECK(chip.core().read_memory(0x1fff0a44, rf_tp_cal.data(), rf_tp_cal.size()));
+    CHECK(rf_tp_cal[0] == 0x2b); // ROM-owned g_rfPhyTpCal0
+    CHECK(rf_tp_cal[1] == 0x23); // ROM-owned g_rfPhyTpCal1
     std::uint32_t vtor_value = 0x1fff8b00, handler_vector = 0;
     CHECK(chip.core().write_memory(0xe000ed08, &vtor_value, sizeof vtor_value));
     CHECK(chip.core().read_memory(0xe000ed08, &vtor_value, sizeof vtor_value));
@@ -110,6 +262,9 @@ int main() {
     Phy6252 rom_test_chip;
     rom_test_chip.load_firmware(image);
     rom_test_chip.reset();
+    CHECK(rom_test_chip.read(0x40031058, 4) == 0x0200);
+    rom_test_chip.write(0x40031058, 0x0100, 4); // SDK setting: 1 KiB TX / 3 KiB RX.
+    CHECK(rom_test_chip.read(0x40031058, 4) == 0x0100);
     CHECK(rom_test_chip.run(100).reason == cortexm::StopReason::Deadline);
     constexpr std::uint32_t random_buffer = 0x1fff2100;
     rom_test_chip.core().set_reg(0, random_buffer);
@@ -148,6 +303,16 @@ int main() {
     CHECK(rom_test_chip.read(0x40001010, 4) == 1);
     CHECK(rom_test_chip.read(0x4000100c, 4) == 1); // EOI clears Timer1 pending
     CHECK(rom_test_chip.read(0x40001010, 4) == 0);
+    rom_test_chip.write(0x40001000, 44, 4);
+    rom_test_chip.write(0x40001008, 3, 4);
+    rom_test_chip.core().set_reg(0, 0x40001000); // clear_timer(AP_TIM1)
+    rom_test_chip.core().set_reg(14, 0x11010109);
+    rom_test_chip.core().set_reg(15, 0xa5c0);
+    CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 16).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(rom_test_chip.read(0x40001000, 4) == 0);
+    CHECK(rom_test_chip.read(0x40001004, 4) == 0);
+    CHECK(rom_test_chip.read(0x40001008, 4) == 0);
     auto invoke_radio_rom = [&](std::uint32_t address, std::uint32_t arg0 = 0) {
         rom_test_chip.core().set_reg(0, arg0);
         rom_test_chip.core().set_reg(14, 0x11010109);
@@ -155,16 +320,25 @@ int main() {
         CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 64).reason ==
               cortexm::StopReason::Deadline);
     };
+    rom_test_chip.core().set_reg(0, 88); // BB settle
+    rom_test_chip.core().set_reg(1, 8); // AFE settle
+    rom_test_chip.core().set_reg(2, 40); // PLL settle
+    rom_test_chip.core().set_reg(14, 0x11010109);
+    rom_test_chip.core().set_reg(15, 0x113dc); // ll_hw_set_trx_settle
+    CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 64).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(rom_test_chip.read(0x400300bc, 4) == 0x00580828);
     invoke_radio_rom(0x112a4); // ll_hw_set_srx
-    CHECK(rom_test_chip.read(0x40031004, 4) == 1);
+    CHECK(rom_test_chip.read(0x40031004, 4) == 0x010001);
+    CHECK(rom_test_chip.read(0x40031038, 4) == 7);
     invoke_radio_rom(0x10cdc); // ll_hw_get_tr_mode
     CHECK(rom_test_chip.core().reg(0) == 1);
     invoke_radio_rom(0x112b8); // ll_hw_set_stx
-    CHECK(rom_test_chip.read(0x40031004, 4) == 0);
+    CHECK(rom_test_chip.read(0x40031004, 4) == 0x000100);
     invoke_radio_rom(0x113c8); // ll_hw_set_trx
-    CHECK(rom_test_chip.read(0x40031004, 4) == 0x10);
+    CHECK(rom_test_chip.read(0x40031004, 4) == 0x010102);
     invoke_radio_rom(0x11264); // ll_hw_set_rtx
-    CHECK(rom_test_chip.read(0x40031004, 4) == 0x12);
+    CHECK(rom_test_chip.read(0x40031004, 4) == 0x010103);
     invoke_radio_rom(0x11174, 1); // ll_hw_set_irq
     CHECK(rom_test_chip.read(0x4003100c, 4) == 1);
     rom_test_chip.write(0x40031400, 0x78563412, 4);
@@ -182,6 +356,8 @@ int main() {
     rom_test_chip.write(0x40031403, 0x5a, 1);
     invoke_radio_rom(0x112b8); // ll_hw_set_stx
     invoke_radio_rom(0x10cf8); // ll_hw_go
+    CHECK(rom_test_chip.read(0x4003100c, 4) == 1); // ll_hw_go uses MD-only IRQs
+    CHECK((rom_test_chip.read(0x40030094, 4) & 0xffu) == 0x2b); // clamped channel 2 TP cap
     CHECK(phy_air.frames().size() == 1);
     if (!phy_air.frames().empty()) {
         CHECK(phy_air.frames()[0].payload == std::vector<std::uint8_t>({0x01, 0x00, 0x5a}));
@@ -211,6 +387,9 @@ int main() {
     CHECK((radio_irq_status & 1u) != 0); // LIRQ_MD
     CHECK((radio_irq_status & (1u << 10)) != 0); // LIRQ_COK
     CHECK((radio_irq_status & (1u << 1)) != 0); // PB-03F Zephyr COK alias
+    CHECK(static_cast<std::int8_t>(rom_test_chip.read(0x400300e4, 4) >> 24) == -50);
+    CHECK((rom_test_chip.read(0x400300e8, 4) >> 24) == 50); // SDK RF RSSI is positive -dBm
+    CHECK(rom_test_chip.read(0x40031054, 4) == (16u << 16)); // eight packet bytes plus two footers
     invoke_radio_rom(0x10bbc); // ll_hw_get_irq_status
     CHECK(rom_test_chip.core().reg(0) == radio_irq_status);
     constexpr std::uint32_t radio_packet = 0x1fff2300;
@@ -221,8 +400,8 @@ int main() {
     rom_test_chip.core().set_reg(2, radio_foot0);
     rom_test_chip.core().set_reg(3, radio_foot1);
     invoke_radio_rom(0x10f50, radio_packet); // ll_hw_read_rfifo_zb
-    CHECK(rom_test_chip.core().reg(0) == 0);
-    std::array<std::uint8_t, 6> received_packet{};
+    CHECK(rom_test_chip.core().reg(0) == 2); // two FIFO words copied by ll_hw_read_rfifo_zb
+    std::array<std::uint8_t, 8> received_packet{};
     std::uint16_t received_length = 0;
     std::uint32_t received_foot0 = 0, received_foot1 = 0;
     CHECK(rom_test_chip.core().read_memory(radio_packet, received_packet.data(),
@@ -233,30 +412,111 @@ int main() {
                                            sizeof received_foot0));
     CHECK(rom_test_chip.core().read_memory(radio_foot1, &received_foot1,
                                            sizeof received_foot1));
-    CHECK(received_length == 5); // PHR length includes the two-byte FCS
+    CHECK(received_length == 6); // blen + 1 includes the leading length byte
     CHECK(received_packet[0] == 5 && received_packet[1] == 0x01 &&
           received_packet[2] == 0x00 && received_packet[3] == 0xa5);
+    CHECK(received_packet[6] == 0 && received_packet[7] == 0);
     CHECK((received_foot0 & 0x00ffffffu) == 2);
-    CHECK(received_foot1 == 0);
+    CHECK((received_foot0 >> 24) == 0);
+    CHECK((received_foot1 >> 24) == 50);
+    CHECK(rom_test_chip.read(0x40031054, 4) == ((16u << 16) | 16u));
     rom_test_chip.write(0x40031014, 1u << 1, 4); // Zephyr W1C clears the SDK COK alias too
     CHECK(rom_test_chip.read(0x40031010, 4) == 1u); // LIRQ_MD remains pending
     invoke_radio_rom(0x110b0); // ll_hw_rst_rfifo
     CHECK(rom_test_chip.read(0x40031c00, 1) == 0);
+    invoke_radio_rom(0x10f50, radio_packet); // empty FIFO returns zero and clears outputs
+    CHECK(rom_test_chip.core().reg(0) == 0);
+    CHECK(rom_test_chip.core().read_memory(radio_packet, received_packet.data(),
+                                           received_packet.size()));
+    CHECK(rom_test_chip.core().read_memory(radio_length, &received_length,
+                                           sizeof received_length));
+    CHECK(rom_test_chip.core().read_memory(radio_foot0, &received_foot0,
+                                           sizeof received_foot0));
+    CHECK(rom_test_chip.core().read_memory(radio_foot1, &received_foot1,
+                                           sizeof received_foot1));
+    CHECK(received_packet[0] == 0 && received_length == 0 &&
+          received_foot0 == 0 && received_foot1 == 0);
+    CHECK(rom_test_chip.read(0x40031054, 4) == 0);
+
+    invoke_radio_rom(0x10adc);
+    invoke_radio_rom(0x112a4);
+    invoke_radio_rom(0x11420);
+    const std::uint64_t phy_rx_stream_start = rom_test_chip.core().cycles_to_ns(
+        rom_test_chip.core().cycles()) + 1000;
+    const std::uint64_t phy_rx_stream_id = phy_air.transmit(
+        "coordinator", {}, mcuemu::RadioProtocol::Zigbee802154, 11, phy_rx_stream_start,
+        {0x01, 0x00, 0xa5});
+    const auto phy_rx_stream_frame = std::find_if(phy_air.frames().begin(), phy_air.frames().end(),
+        [phy_rx_stream_id](const mcuemu::RadioFrame &frame) { return frame.id == phy_rx_stream_id; });
+    CHECK(phy_rx_stream_frame != phy_air.frames().end());
+    if (phy_rx_stream_frame != phy_air.frames().end()) {
+        const std::uint64_t rx_done = rom_test_chip.core().ns_to_cycles(
+            phy_rx_stream_frame->end_ns + 20000);
+        CHECK(rom_test_chip.run(rx_done + 64).reason == cortexm::StopReason::Deadline);
+    }
+    CHECK(rom_test_chip.read(0x40031054, 4) == (16u << 16));
+    const std::uint32_t rx_word0 = rom_test_chip.read(0x40031c00, 4);
+    const std::uint32_t rx_word1 = rom_test_chip.read(0x40031c00, 4);
+    const std::uint32_t rx_foot0 = rom_test_chip.read(0x40031c00, 4);
+    const std::uint32_t rx_foot1 = rom_test_chip.read(0x40031c00, 4);
+    CHECK(rx_word0 == 0xa5000105u);
+    CHECK(rx_word1 == (static_cast<std::uint32_t>(received_packet[4]) |
+                       (static_cast<std::uint32_t>(received_packet[5]) << 8)));
+    CHECK(rx_foot0 == 2);
+    CHECK(rx_foot1 == (50u << 24));
+    CHECK(rom_test_chip.read(0x40031054, 4) == ((16u << 16) | 16u));
     rom_test_chip.write(0x40031000, 0, 4); // PHY_ABORT stops the receive operation
     CHECK(!rom_test_chip.radio_receiving());
     invoke_radio_rom(0x10adc); // ll_hw_clr_irq
-    invoke_radio_rom(0x11174, 1u << 2); // enable LIRQ_RTO for the timeout check
+    const std::uint32_t enable_radio_irq = 1u << 4;
+    CHECK(rom_test_chip.core().write_memory(0xe000e280, &enable_radio_irq,
+                                             sizeof enable_radio_irq)); // clear stale pending IRQ
+    CHECK(rom_test_chip.core().write_memory(0xe000e100, &enable_radio_irq,
+                                             sizeof enable_radio_irq));
+    invoke_radio_rom(0x11174, 1u); // firmware waits for LIRQ_MD on receive completion
     invoke_radio_rom(0x11278, 33); // ll_hw_set_rx_timeout(33 us)
+    CHECK(rom_test_chip.read(0x40031028, 4) == 33);
     invoke_radio_rom(0x112a4); // ll_hw_set_srx
     invoke_radio_rom(0x11420); // ll_hw_trigger
     CHECK(rom_test_chip.radio_receiving());
+    rom_test_chip.core().set_interrupts_masked(true); // inspect NVIC pending without a test vector
     const std::uint64_t rx_timeout = rom_test_chip.core().cycles() + 33 * 16 + 128;
     CHECK(rom_test_chip.run(rx_timeout).reason == cortexm::StopReason::Deadline);
     CHECK(!rom_test_chip.radio_receiving());
-    CHECK(rom_test_chip.read(0x40031010, 4) == ((1u << 2) | (1u << 3)));
+    CHECK(rom_test_chip.read(0x40031010, 4) ==
+          (1u | (1u << 2) | (1u << 3))); // MD completion plus SDK/Zephyr RTO aliases
+    CHECK(rom_test_chip.core().interrupt_pending()); // MD mask raises the radio IRQ
     // SDK and PB-03F Zephyr expose RTO at bits 2 and 3 respectively.
-    rom_test_chip.write(0x40031014, 1u << 3, 4);
+    rom_test_chip.write(0x40031014, (1u << 0) | (1u << 3), 4);
     CHECK(rom_test_chip.read(0x40031010, 4) == 0);
+
+    rom_test_chip.core().set_interrupts_masked(true);
+    rom_test_chip.write(0x40031028, 33, 4); // external ROM writes ll_hw_set_rx_timeout directly
+    invoke_radio_rom(0x112a4);
+    invoke_radio_rom(0x11420);
+    CHECK(rom_test_chip.radio_receiving());
+    const std::uint64_t direct_rx_timeout = rom_test_chip.core().cycles() + 33 * 16 + 128;
+    CHECK(rom_test_chip.run(direct_rx_timeout).reason == cortexm::StopReason::Deadline);
+    CHECK(!rom_test_chip.radio_receiving());
+    CHECK((rom_test_chip.read(0x40031010, 4) & ((1u << 0) | (1u << 2) | (1u << 3))) ==
+          ((1u << 0) | (1u << 2) | (1u << 3)));
+    rom_test_chip.write(0x40031014, (1u << 0) | (1u << 3), 4);
+    rom_test_chip.core().set_interrupts_masked(false);
+
+    Phy6252 cca_chip;
+    cca_chip.load_firmware(image);
+    cca_chip.reset();
+    CHECK(cca_chip.run(100).reason == cortexm::StopReason::Deadline);
+    mcuemu::VirtualAir cca_air;
+    cca_chip.connect_radio(cca_air, "cca-probe");
+    const std::uint64_t cca_sample_ns = cca_chip.core().cycles_to_ns(
+        cca_chip.core().cycles());
+    cca_air.transmit("cca-peer", {}, mcuemu::RadioProtocol::Zigbee802154, 11,
+                     cca_sample_ns - 1000, {0x01, 0x00, 0x33});
+    const std::int8_t cca_rssi = static_cast<std::int8_t>(
+        cca_chip.read(0x400300e4, 4) >> 24);
+    CHECK(cca_rssi == -50); // ideal shared-air propagation sample used by CCA
+
     Phy6252 irq_chip;
     irq_chip.load_firmware(image);
     irq_chip.reset();
@@ -442,6 +702,20 @@ int main() {
     chip.write(0x4000c890, 0x05900001, 4);
     CHECK((chip.read(0x4000c890, 4) & 2) == 0);
     CHECK(chip.read(0x4000c8a0, 4) == 0);
+    auto *spif_erase_bytes = chip.core().host_pointer(BootImage::FlashBase + 0x7f000, 4);
+    CHECK(spif_erase_bytes != nullptr);
+    spif_erase_bytes[0] = 0;
+    spif_erase_bytes[1] = 0x55;
+    spif_erase_bytes[2] = 0xaa;
+    chip.write(0x4000c890, 0x06000001, 4); // ROM spif_cmd(FLASH_WREN).
+    chip.write(0x4000c890, 0x05900001, 4);
+    CHECK(chip.read(0x4000c8a0, 4) == 2); // status register WEL bit.
+    chip.write(0x4000c894, 0x7f000, 4); // 4 KiB sector address is a flash offset.
+    chip.write(0x4000c890, 0x200a0001, 4); // ROM spif_cmd(FLASH_SE, 3-byte address).
+    CHECK(std::all_of(spif_erase_bytes, spif_erase_bytes + 4,
+                      [](std::uint8_t byte) { return byte == 0xff; }));
+    chip.write(0x4000c890, 0x05900001, 4);
+    CHECK(chip.read(0x4000c8a0, 4) == 0); // erase consumes the write-enable latch.
     CHECK(chip.read(0x40002000, 1) == 0); // watchdog is disabled after reset
     chip.write(0x40002004, 3, 4); // SDK WDG_16S timeout selection
     CHECK(chip.read(0x40002004, 4) == 3);
@@ -470,6 +744,41 @@ int main() {
     CHECK(chip.read(0x400102c0, 4) == 8);
     chip.write(0x40010338, 8, 4); // clear transfer-complete status
     CHECK(chip.read(0x400102c0, 4) == 0);
+    constexpr std::uint32_t dma0_source = BootImage::RamBase + 0x5200;
+    constexpr std::uint32_t dma0_destination = BootImage::RamBase + 0x5300;
+    const std::uint8_t dma0_bytes[] = {0x31, 0x42, 0x53, 0x64, 0x75, 0x86};
+    CHECK(chip.core().write_memory(dma0_source, dma0_bytes, sizeof dma0_bytes));
+    chip.write(0x40010000, dma0_source, 4); // DMA channel 0 SAR
+    chip.write(0x40010008, dma0_destination, 4); // DMA channel 0 DAR
+    chip.write(0x40010018, 1, 4); // byte-wide M2M, transfer-complete interrupt
+    chip.write(0x4001001c, sizeof dma0_bytes, 4); // byte count
+    chip.write(0x40010040, 0, 4); // CFG
+    chip.write(0x40010044, 4, 4); // CFG_H from the observed ROM helper
+    chip.write(0x40010398, 1, 4);
+    chip.write(0x400103a0, 0x101, 4); // channel 0 write-enable + start
+    std::uint8_t dma0_result[sizeof dma0_bytes]{};
+    CHECK(chip.core().read_memory(dma0_destination, dma0_result, sizeof dma0_result));
+    CHECK(std::equal(dma0_bytes, dma0_bytes + sizeof dma0_bytes, dma0_result));
+    CHECK(chip.read(0x400102c0, 4) == 1);
+    chip.write(0x40010338, 1, 4);
+    CHECK(chip.read(0x400102c0, 4) == 0);
+
+    constexpr std::uint32_t dma0_flash_destination = BootImage::FlashBase + 0x7fff0;
+    const std::array<std::uint8_t, 4> dma0_flash_first{0xf0, 0x0f, 0xaa, 0x55};
+    const std::array<std::uint8_t, 4> dma0_flash_second{0x0f, 0xf0, 0x55, 0xaa};
+    CHECK(chip.core().write_memory(dma0_source, dma0_flash_first.data(), dma0_flash_first.size()));
+    chip.write(0x40010008, dma0_flash_destination, 4);
+    chip.write(0x4001001c, dma0_flash_first.size(), 4);
+    chip.write(0x4000c858, 0, 4); // DMA flash writes use the unlocked SPIF aperture.
+    chip.write(0x400103a0, 0x101, 4);
+    auto *dma0_flash = chip.core().host_pointer(dma0_flash_destination, dma0_flash_first.size());
+    CHECK(dma0_flash != nullptr);
+    CHECK(std::equal(dma0_flash_first.begin(), dma0_flash_first.end(), dma0_flash));
+    CHECK(chip.core().write_memory(dma0_source, dma0_flash_second.data(), dma0_flash_second.size()));
+    chip.write(0x400103a0, 0x101, 4);
+    CHECK(std::all_of(dma0_flash, dma0_flash + dma0_flash_first.size(),
+                      [](std::uint8_t byte) { return byte == 0; })); // NOR cannot set bits.
+    chip.write(0x4000c858, 2, 4);
     chip.write(0x40000024, 2, 4);
     CHECK(chip.read(0x40000024, 4) == 2);
     chip.write(0x40000008, 0x180, 4);
@@ -504,12 +813,25 @@ int main() {
     chip.write(0x4000f0a4, 7, 4); // GPIO32..34 wakeup mask
     CHECK(chip.read(0x4000f0a0, 4) == 0x12345678);
     CHECK(chip.read(0x4000f0a4, 4) == 7);
+    CHECK(chip.read(0x4000f0a8, 4) == 0); // captured REG_S11 sleep flag
+    chip.write(0x4000f0a8, 1, 4);
+    CHECK(chip.read(0x4000f0a8, 4) == 1);
+    chip.write(0x4000f0a8, 0, 4);
+    CHECK(chip.read(0x4000f0a8, 4) == 0);
     CHECK(chip.read(0x4000f0b0, 4) == 0); // no modeled GPIO wake event
     CHECK(chip.read(0x4000f0b4, 4) == 0);
     chip.write(0x4000f140, 0x34, 4); // eFuse programming control, not OTP contents
     chip.write(0x4000f144, 0x56, 4);
     CHECK(chip.read(0x4000f140, 4) == 0x34);
     CHECK(chip.read(0x4000f144, 4) == 0x56);
+    chip.write(0x40008008, 0x12345678, 4); // observed SWPORTA_CTL, pad effect unknown
+    CHECK(chip.read(0x40008008, 4) == 0x12345678);
+    chip.write(0x4000c850, 0, 4); // SPIF lower write-protection register
+    chip.write(0x4000c854, 0x10, 4);
+    chip.write(0x4000c858, 2, 4);
+    CHECK(chip.read(0x4000c850, 4) == 0);
+    CHECK(chip.read(0x4000c854, 4) == 0x10);
+    CHECK(chip.read(0x4000c858, 4) == 2);
 
     auto invoke_rom = [&chip](std::uint32_t pc, std::uint32_t r0,
                               std::uint32_t r1, std::uint32_t r2,
@@ -549,23 +871,107 @@ int main() {
     invoke_rom(0x14c00, heap_first, 0, 0, 535);
     invoke_rom(0x14c00, heap_second, 0, 0, 536);
     const std::uint32_t efuse_buffer = BootImage::RamBase + 0x3020;
-    invoke_rom(0xace0, 1, efuse_buffer, 0, 540);
-    CHECK(chip.core().reg(0) == 0);
-    std::uint8_t efuse_data[8]{};
-    CHECK(chip.core().read_memory(efuse_buffer, efuse_data, sizeof efuse_data));
-    CHECK(efuse_data[0] == 0x2b && efuse_data[1] == 0x23);
-    CHECK(std::all_of(efuse_data + 2, efuse_data + sizeof efuse_data,
-                      [](std::uint8_t value) { return value == 0; }));
-    invoke_rom(0xace0, 2, efuse_buffer, 0, 545);
-    CHECK(chip.core().reg(0) == static_cast<std::uint32_t>(-22));
     const std::uint8_t untouched_efuse_data[] = {1, 2, 3, 4, 5, 6, 7, 8};
     CHECK(chip.core().write_memory(efuse_buffer, untouched_efuse_data,
                                   sizeof untouched_efuse_data));
-    invoke_rom(0xace0, 1, efuse_buffer, 0x60, 547, 0x1fff2b29);
-    CHECK(chip.core().reg(0) == 0);
+    invoke_rom(0xace0, 1, efuse_buffer, 0x60, 539, 0x1fff2b29);
+    CHECK(chip.core().reg(0) == 24); // no device dump: PPlus_ERR_UNINITIALIZED
+    std::uint8_t efuse_data[8]{};
     CHECK(chip.core().read_memory(efuse_buffer, efuse_data, sizeof efuse_data));
     CHECK(std::equal(std::begin(untouched_efuse_data), std::end(untouched_efuse_data),
                      std::begin(efuse_data)));
+    invoke_rom(0xace0, 4, efuse_buffer, 0, 540, 0x1fff2b29);
+    CHECK(chip.core().reg(0) == 6); // PPlus_ERR_INVALID_PARAM
+    std::vector<std::uint8_t> efuse_dump(32);
+    for (std::size_t i = 0; i < efuse_dump.size(); ++i)
+        efuse_dump[i] = static_cast<std::uint8_t>(0xa0 + i);
+    chip.load_efuse_dump(efuse_dump);
+    CHECK(chip.read(0x4000f180, 4) == 0x0f); // captured SECURTY_STATE
+    chip.write(0x4000f054, 1u << 18, 4); // select eFuse block 2
+    CHECK(chip.read(0x4000f170, 4) == 0xb3b2b1b0);
+    CHECK(chip.read(0x4000f174, 4) == 0xb7b6b5b4);
+    chip.write(0x4000f054, 0, 4); // clear the read strobe
+    bool short_efuse_rejected = false;
+    try {
+        chip.load_efuse_dump(std::vector<std::uint8_t>(31));
+    } catch (const std::invalid_argument &) {
+        short_efuse_rejected = true;
+    }
+    CHECK(short_efuse_rejected);
+    invoke_rom(0xace0, 2, efuse_buffer, 0xdeadbeef, 541, 0x1fff2b29);
+    CHECK(chip.core().reg(0) == 0);
+    CHECK(chip.core().read_memory(efuse_buffer, efuse_data, sizeof efuse_data));
+    CHECK(std::equal(efuse_dump.begin() + 16, efuse_dump.begin() + 24,
+                     std::begin(efuse_data)));
+    invoke_rom(0xace0, 2, 0x100, 0, 542, 0x1fff2b29);
+    CHECK(chip.core().reg(0) == 6); // invalid output pointer
+    invoke_rom(0xace0, 1, efuse_buffer, 0x60, 543, 0x1fff2b29);
+    CHECK(chip.core().reg(0) == 0);
+    CHECK(chip.core().read_memory(efuse_buffer, efuse_data, sizeof efuse_data));
+    CHECK(std::equal(efuse_dump.begin() + 8, efuse_dump.begin() + 16,
+                     std::begin(efuse_data)));
+    invoke_rom(0xace0, 3, efuse_buffer, 0x1fff0100, 544, 0x10);
+    CHECK(chip.core().reg(0) == 0);
+    CHECK(chip.core().read_memory(efuse_buffer, efuse_data, sizeof efuse_data));
+    CHECK(std::equal(efuse_dump.begin() + 24, efuse_dump.begin() + 32,
+                     std::begin(efuse_data)));
+    const std::vector<std::uint8_t> rf_calibration = {0x2b, 0x21, 0x45, 0x43};
+    chip.load_rf_calibration_dump(rf_calibration);
+    chip.write(0x400300b4, 2, 4);
+    chip.write(0x400300d8, 1u << 18, 4); // fDev 0
+    chip.write(0x400300a4, 0, 4);
+    chip.write(0x400300a4, 0x114, 4); // trigger rf_tp_cal
+    CHECK(chip.read(0x400300f4, 4) == (0x2bu << 16));
+    chip.write(0x400300b4, 66, 4);
+    chip.write(0x400300a4, 0x114, 4);
+    CHECK(chip.read(0x400300f4, 4) == (0x21u << 16));
+    chip.write(0x400300b4, 2, 4);
+    chip.write(0x400300d8, 2u << 18, 4); // fDev 1
+    chip.write(0x400300a4, 0x114, 4);
+    CHECK(chip.read(0x400300f4, 4) == (0x45u << 16));
+    chip.write(0x400300b4, 66, 4);
+    chip.write(0x400300a4, 0x114, 4);
+    CHECK(chip.read(0x400300f4, 4) == (0x43u << 16));
+    bool short_rf_calibration_rejected = false;
+    try {
+        chip.load_rf_calibration_dump(std::vector<std::uint8_t>(3));
+    } catch (const std::invalid_argument &) {
+        short_rf_calibration_rejected = true;
+    }
+    CHECK(short_rf_calibration_rejected);
+    chip.write(0x400300a4, 0x140, 4); // opaque external-ROM RF init register
+    CHECK(chip.read(0x400300a4, 4) == 0x140);
+    chip.write(0x4003008c, 0x00800000, 4); // opaque external-ROM RF init register
+    CHECK(chip.read(0x4003008c, 4) == 0x00800000);
+    chip.write(0x40030124, 0x1, 4); // opaque external-ROM RF init register
+    CHECK(chip.read(0x40030124, 4) == 0x1);
+    chip.write(0x40030050, 0x22085580, 4); // opaque external-ROM RF init register
+    CHECK(chip.read(0x40030050, 4) == 0x22085580);
+    chip.write(0x40030054, 0x545c9ca4, 4); // opaque external-ROM PHY init table
+    CHECK(chip.read(0x40030054, 4) == 0x545c9ca4);
+    chip.write(0x40030074, 0x1c222e28, 4); // end of observed PHY init table
+    CHECK(chip.read(0x40030074, 4) == 0x1c222e28);
+    chip.write(0x400300a0, 0x0e, 4); // opaque PLL auto override
+    CHECK(chip.read(0x400300a0, 4) == 0x0e);
+    chip.write(0x400300a8, 0x40, 4); // SDK RX DCOC LO override
+    chip.write(0x400300ac, 0x50, 4); // SDK RX LO and PLL buffer
+    chip.write(0x40030078, 0x0d3564, 4); // SDK RX DCOC phase-search setup
+    CHECK(chip.read(0x400300ec, 4) == 0); // captured calibration uses SDK default result
+    CHECK(chip.read(0x400300a8, 4) == 0x40);
+    chip.write(0x400300a8, 0, 4);
+    CHECK(chip.read(0x400300a8, 4) == 0);
+    chip.write(0x4003102c, 0x00010000, 4); // opaque external-ROM LL setup register
+    CHECK(chip.read(0x4003102c, 4) == 0x00010000);
+    chip.write(0x40031024, 0x1f4, 4); // opaque external-ROM LL timing register
+    CHECK(chip.read(0x40031024, 4) == 0x1f4);
+    chip.write(0x40031060, 0x000ea600, 4); // opaque external-ROM LL setup register
+    CHECK(chip.read(0x40031060, 4) == 0x000ea600);
+    chip.write(0x40031020, 0x01400020, 4); // opaque external-ROM LL setup register
+    CHECK(chip.read(0x40031020, 4) == 0x01400020);
+    chip.write(0x40031068, 7, 4); // opaque external-ROM LL setup register
+    CHECK(chip.read(0x40031068, 4) == 7);
+    CHECK(chip.core().write_memory(efuse_buffer, untouched_efuse_data,
+                                  sizeof untouched_efuse_data));
     const crypto::Block aes_key = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
                                    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f};
     const crypto::Block aes_input = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
@@ -587,7 +993,8 @@ int main() {
     invoke_rom(0x14ce8, copy_address, efuse_buffer, sizeof efuse_data, 560);
     std::uint8_t copied_data[8]{};
     CHECK(chip.core().read_memory(copy_address, copied_data, sizeof copied_data));
-    CHECK(std::equal(std::begin(efuse_data), std::end(efuse_data), std::begin(copied_data)));
+    CHECK(std::equal(std::begin(untouched_efuse_data), std::end(untouched_efuse_data),
+                     std::begin(copied_data)));
     copied_data[0] ^= 1;
     CHECK(chip.core().write_memory(copy_address, copied_data, sizeof copied_data));
     invoke_rom(0x14ccc, efuse_buffer, copy_address, sizeof copied_data, 565);
@@ -649,6 +1056,9 @@ int main() {
     CHECK(chip.core().write_memory(rom_stack, &zero, sizeof zero));
     chip.core().set_reg(13, rom_stack);
     chip.core().set_reg(3, 0);
+    chip.write(0x4000c890, 0x9fa00001, 4); // RDID, three-byte response
+    CHECK(chip.read(0x4000c890, 4) == 0x9fa00001);
+    CHECK(chip.read(0x4000c8a0, 4) == 0x001364c8); // captured FlashID 0x1364c8
     invoke_rom(0x16dc4, 0, 1, 0x0801003b, 1001);
     CHECK(chip.core().reg(0) == 0);
     CHECK(chip.read(0x4000c804, 4) == 0x0801003b);
@@ -671,6 +1081,14 @@ int main() {
     CHECK(chip.core().reg(0) == 0);
     CHECK(chip.core().read_memory(status_destination, &status_byte, 1));
     CHECK(status_byte == 0);
+    CHECK(chip.core().write_memory(rom_stack, spif_command_args, sizeof spif_command_args));
+    invoke_rom(0x16d48, 0x9f, 0, 3, 1004);
+    CHECK(chip.core().reg(0) == 0);
+    const std::uint32_t jedec_destination = BootImage::RamBase + 0x3210;
+    std::array<std::uint8_t, 3> jedec_bytes{};
+    invoke_rom(0x1713c, jedec_destination, jedec_bytes.size(), 0, 1005);
+    CHECK(chip.core().read_memory(jedec_destination, jedec_bytes.data(), jedec_bytes.size()));
+    CHECK((jedec_bytes == std::array<std::uint8_t, 3>{0xc8, 0x64, 0x13}));
     chip.write(0x4000f024, 2, 4); // RTC clear strobe
     CHECK(chip.read(0x4000f028, 4) == 0);
     chip.write(0x4000f02c, 100, 4);
