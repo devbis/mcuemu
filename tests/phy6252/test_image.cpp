@@ -572,12 +572,12 @@ int main() {
     const std::uint32_t radio_irq_status = rom_test_chip.read(0x40031010, 4);
     CHECK((radio_irq_status & 1u) != 0); // LIRQ_MD
     CHECK((radio_irq_status & (1u << 10)) != 0); // LIRQ_COK
-    CHECK((radio_irq_status & (1u << 1)) != 0); // PB-03F Zephyr COK alias
+    CHECK((radio_irq_status & (1u << 1)) == 0); // no compact Zephyr alias
     CHECK(static_cast<std::int8_t>(rom_test_chip.read(0x400300e4, 4) >> 24) == -50);
     CHECK((rom_test_chip.read(0x400300e8, 4) >> 24) == 50); // SDK RF RSSI is positive -dBm
     CHECK(rom_test_chip.read(0x40031054, 4) == (16u << 16)); // eight packet bytes plus two footers
     invoke_radio_rom(0x10bbc); // ll_hw_get_irq_status
-    CHECK(rom_test_chip.core().reg(0) == (radio_irq_status & ~((1u << 1) | (1u << 3))));
+    CHECK(rom_test_chip.core().reg(0) == radio_irq_status);
     constexpr std::uint32_t radio_packet = 0x1fff2300;
     constexpr std::uint32_t radio_length = 0x1fff2320;
     constexpr std::uint32_t radio_foot0 = 0x1fff2324;
@@ -606,7 +606,7 @@ int main() {
     CHECK((received_foot0 >> 24) == 0);
     CHECK((received_foot1 >> 24) == 50);
     CHECK(rom_test_chip.read(0x40031054, 4) == ((16u << 16) | 16u));
-    rom_test_chip.write(0x40031014, 1u << 1, 4); // Zephyr W1C clears the SDK COK alias too
+    rom_test_chip.write(0x40031014, 1u << 10, 4); // W1C clears COK
     CHECK(rom_test_chip.read(0x40031010, 4) == 1u); // LIRQ_MD remains pending
     invoke_radio_rom(0x110b0); // ll_hw_rst_rfifo
     CHECK(rom_test_chip.read(0x40031c00, 1) == 0);
@@ -670,10 +670,9 @@ int main() {
     CHECK(rom_test_chip.run(rx_timeout).reason == cortexm::StopReason::Deadline);
     CHECK(!rom_test_chip.radio_receiving());
     CHECK(rom_test_chip.read(0x40031010, 4) ==
-          (1u | (1u << 2) | (1u << 3))); // MD completion plus SDK/Zephyr RTO aliases
+          (1u | (1u << 2))); // MD completion plus the RTO cause
     CHECK(rom_test_chip.core().interrupt_pending()); // MD mask raises the radio IRQ
-    // SDK and PB-03F Zephyr expose RTO at bits 2 and 3 respectively.
-    rom_test_chip.write(0x40031014, (1u << 0) | (1u << 3), 4);
+    rom_test_chip.write(0x40031014, (1u << 0) | (1u << 2), 4);
     CHECK(rom_test_chip.read(0x40031010, 4) == 0);
 
     rom_test_chip.core().set_interrupts_masked(true);
@@ -684,9 +683,9 @@ int main() {
     const std::uint64_t direct_rx_timeout = rom_test_chip.core().cycles() + 33 * 16 + 128;
     CHECK(rom_test_chip.run(direct_rx_timeout).reason == cortexm::StopReason::Deadline);
     CHECK(!rom_test_chip.radio_receiving());
-    CHECK((rom_test_chip.read(0x40031010, 4) & ((1u << 0) | (1u << 2) | (1u << 3))) ==
-          ((1u << 0) | (1u << 2) | (1u << 3)));
-    rom_test_chip.write(0x40031014, (1u << 0) | (1u << 3), 4);
+    CHECK((rom_test_chip.read(0x40031010, 4) & ((1u << 0) | (1u << 2))) ==
+          ((1u << 0) | (1u << 2)));
+    rom_test_chip.write(0x40031014, (1u << 0) | (1u << 2), 4);
     rom_test_chip.core().set_interrupts_masked(false);
 
     Phy6252 cca_chip;

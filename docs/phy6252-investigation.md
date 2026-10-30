@@ -479,11 +479,11 @@ it returns the copied word count (`1 + (blen >> 2)`) and writes `blen + 1` to
 `pktFoot1` and RF+`0xe8` as a positive RSSI magnitude; the model keeps RF+`0xe4`
 in the signed form used by the observed Zephyr CCA path. Carrier sensitivity
 and frequency offset are not modeled beyond the inferred footer defaults. The
-status register exposes the SDK ROM
-layout (`MD` bit 0, `RTO` bit 2, `COK` bit 10) and the PB-03F Zephyr driver's compact layout
-(`COK` bit 1, `RTO` bit 3) for the same completion; clearing either alias
-clears the shared event. This reconciles the two checked firmware contracts,
-whose observed bit definitions differ. Fine time uses the 16 MHz core cycle
+status register exposes only the SDK ROM
+layout (`MD` bit 0, `RTO` bit 2, `COK` bit 10). The PB-03F Zephyr driver used
+a compact layout (`COK` bit 1, `RTO` bit 3) taken from the unverified zigbee-rs
+backend; it now reads the SDK layout too, so the model carries no alias for it.
+Fine time uses the 16 MHz core cycle
 count with the SDK's `BASE_TIME_UNITS` wrap. In the supplied ROM,
 `ll_hw_set_rx_timeout()` at `0x11278` writes its microsecond argument to
 LL+`0x28`; the related first-timeout helper at `0x11284` writes LL+`0x24`.
@@ -1259,11 +1259,13 @@ cleared the received packet length before the MAC parser. The RX FIFO and radio
 delivery were working; the Zephyr compatibility alias leaked across the ROM
 API boundary and made the closed stack discard otherwise valid frames.
 
-The ROM getter now removes only the Zephyr COK/RTO aliases, while direct LL
-MMIO still exposes them for Zephyr. TS0001 sees `0x401` for a good frame. A
-replay confirmed the packet length stays 29 bytes and the Beacon proceeds past
-the MAC parser. The unit test checks that direct register reads retain the
-Zephyr alias and the ROM getter returns the SDK bit layout.
+The ROM getter stripped the Zephyr COK/RTO aliases while direct LL MMIO still
+exposed them. TS0001 sees `0x401` for a good frame. A replay confirmed the
+packet length stays 29 bytes and the Beacon proceeds past the MAC parser.
+The Zephyr driver was then changed to the SDK bit layout (and to clear the
+`0x3fff` status range, enabling only `MD`), and the model dropped the aliases;
+the unit test checks that the status carries no bit 1 or 3 for a received
+frame.
 
 With the fix, a first-boot TS0001 image joins in the local network scenario.
 The test erases NVM at `0x11079000..0x1107efff` only in a temporary copy, then

@@ -154,11 +154,7 @@ constexpr std::uint32_t RadioBasebandMemoryEnd = RadioRxFifo + RadioRxFifoSize;
 constexpr unsigned RadioIrq = 4;
 constexpr std::uint32_t RadioIrqMd = 1u << 0;
 constexpr std::uint32_t RadioIrqCok = 1u << 10;
-// The PB-03F Zephyr driver reads the LL status register directly and uses a
-// compact five-bit IRQ layout, while the SDK ROM API exposes the BLE LL bits.
-constexpr std::uint32_t RadioIrqCokZephyr = 1u << 1;
 constexpr std::uint32_t RadioIrqRto = 1u << 2;
-constexpr std::uint32_t RadioIrqRtoZephyr = 1u << 3;
 constexpr std::uint32_t RadioIrqMask = 0x3fffu;
 constexpr std::uint32_t RadioModeStx = 0x000100;
 constexpr std::uint32_t RadioModeSrx = 0x010001;
@@ -925,12 +921,10 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
         } else if (address == 0x10bbc) {
             // ll_hw_get_irq_status() returns LL_HW+0x10, whose bit layout is
             // listed in ll_hw_drv.h (MD=0, COK=10, RTO=2, and so on). The
-            // compact status aliases belong to the PB-03F Zephyr MMIO driver;
-            // exposing them through this ROM API makes the TS0001 ROM treat a
-            // good RX status as an error because it interprets bits 0..1 as a
-            // two-bit result code.
-            core_.set_reg(0, ll_registers_[RadioLlBase + 0x10] &
-                             ~(RadioIrqCokZephyr | RadioIrqRtoZephyr));
+            // PB-03F Zephyr driver reads the same layout; a status bit set
+            // in another position would make the TS0001 ROM treat a good RX
+            // status as an error (it reads bits 0..1 as a two-bit result code).
+            core_.set_reg(0, ll_registers_[RadioLlBase + 0x10]);
         } else if (address == 0x11264 || address == 0x112a4 ||
                    address == 0x112b8 || address == 0x113c8) {
             // These generic PHY helpers select the modes declared in
@@ -2812,13 +2806,9 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             break;
         case 0x14:
             ll_registers_[RadioLlBase + 0x10] &= ~written;
-            if ((written & (RadioIrqCok | RadioIrqCokZephyr)) != 0)
-                ll_registers_[RadioLlBase + 0x10] &= ~(RadioIrqCok | RadioIrqCokZephyr);
-            if ((written & (RadioIrqRto | RadioIrqRtoZephyr)) != 0)
-                ll_registers_[RadioLlBase + 0x10] &= ~(RadioIrqRto | RadioIrqRtoZephyr);
             ll_registers_[aligned] = written;
             if ((ll_registers_[RadioLlBase + 0x10] &
-                 (RadioIrqMd | RadioIrqCok | RadioIrqCokZephyr)) == 0)
+                 (RadioIrqMd | RadioIrqCok)) == 0)
                 radio_rx_rssi_ = -100;
             update_radio_irq();
             break;
@@ -3161,7 +3151,7 @@ void Phy6252::receive_radio_frame(const mcuemu::RadioFrame &frame) {
     radio_rx_rssi_ = static_cast<std::int8_t>(std::clamp(frame.rssi_dbm, -127, 0));
     radio_rx_active_ = false;
     radio_rx_deadline_cycle_ = 0;
-    ll_registers_[RadioLlBase + 0x10] |= RadioIrqMd | RadioIrqCok | RadioIrqCokZephyr;
+    ll_registers_[RadioLlBase + 0x10] |= RadioIrqMd | RadioIrqCok;
     update_radio_irq();
 }
 
@@ -3367,8 +3357,7 @@ std::uint64_t Phy6252::service_radio(std::uint64_t now) {
             radio_rx_active_ = false;
             radio_rx_deadline_cycle_ = 0;
             // RTO identifies the cause; MD signals that the radio operation completed.
-            ll_registers_[RadioLlBase + 0x10] |=
-                RadioIrqMd | RadioIrqRto | RadioIrqRtoZephyr;
+            ll_registers_[RadioLlBase + 0x10] |= RadioIrqMd | RadioIrqRto;
             update_radio_irq();
         } else {
             next = std::min(next, radio_rx_deadline_cycle_);
