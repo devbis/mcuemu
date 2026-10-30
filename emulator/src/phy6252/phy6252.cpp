@@ -167,6 +167,7 @@ constexpr std::uint32_t RadioModeRtx = 0x010103;
 constexpr std::uint32_t RomLlIrqHandler = 0x4e25;
 constexpr std::uint32_t RomGpioIrqHandler = 0x112d;
 constexpr std::uint32_t RomTimerIrqDispatch = 0x17ff1; // Private host trap; no exported ROM symbol.
+constexpr std::uint32_t RomLlIrqReturn = 0x17fe1; // Private direct-boot BLX return trampoline.
 constexpr std::uint32_t JumpTableBase = BootImage::RamBase;
 constexpr std::uint32_t BasebandIrqJumpSlot = 228;
 constexpr std::uint32_t GpioIrqJumpSlot = 240;
@@ -475,6 +476,12 @@ void Phy6252::reset() {
             const unsigned vector = 16 + 20 + timer;
             std::memcpy(vector_alias_ + vector * sizeof handler, &handler, sizeof handler);
         }
+        // The external ROM's IRQ4 wrapper returns from its callback by popping
+        // the saved r4 and EXC_RETURN. Keep the synthetic direct-boot wrapper's
+        // epilogue executable so callbacks see the same call-frame lifetime.
+        constexpr std::uint16_t pop_r4_pc = 0xbd10;
+        std::memcpy(vector_alias_ + (RomLlIrqReturn & ~1u), &pop_r4_pc,
+                    sizeof pop_r4_pc);
     }
     if (boot_from_rom_) {
         // The ROM must populate the image's RAM segments during cold boot.
@@ -1194,7 +1201,30 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                              gpio_irq ? "GPIO" : "baseband", slot, handler);
                 logged = true;
             }
-            core_.set_reg(15, handler & ~1u);
+            // The captured ROM wrappers load the callback pointer into r0
+            // before dispatch. GPIO tail-branches to it; IRQ4 calls it and
+            // returns through a two-word wrapper frame.
+            core_.set_reg(0, handler);
+            if (gpio_irq) {
+                core_.set_reg(15, handler_address);
+            } else {
+                const std::uint32_t stack = core_.reg(13);
+                if (stack < BootImage::RamBase + 8 ||
+                    stack > BootImage::RamBase + BootImage::RamSize) {
+                    return {cortexm::StopReason::Fault,
+                            "PHY6252 baseband IRQ callback has no valid wrapper stack"};
+                }
+                const std::array<std::uint32_t, 2> wrapper_frame = {
+                    core_.reg(4), core_.reg(14)};
+                if (!core_.write_memory(stack - sizeof wrapper_frame,
+                                        wrapper_frame.data(), sizeof wrapper_frame)) {
+                    return {cortexm::StopReason::Fault,
+                            "PHY6252 baseband IRQ callback wrapper stack is unreadable"};
+                }
+                core_.set_reg(13, stack - sizeof wrapper_frame);
+                core_.set_reg(14, RomLlIrqReturn);
+                core_.set_reg(15, handler_address);
+            }
             rom_branch = true;
         } else if (address == (RomTimerIrqDispatch & ~1u)) {
             std::uint32_t ipsr = 0;

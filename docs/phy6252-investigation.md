@@ -215,13 +215,15 @@ non-null entry with `BLX`, and returns; when the slot is null it calls the
 stateful ROM handler at `0x4e24`. That fallback checks LL state and dispatches
 different ROM routines, so it is not a no-op. In direct-image mode without an
 external ROM, the model instead places a host trap at `0x4e25` in IRQ4's vector
-slot and branches directly to the registered callback. The host trap currently
-does not reproduce the ROM wrapper's call frame, its `r0` value, or its `0x4e24`
-fallback. The saved-state TS0001 baseband slot points to `0x1fff2985`, an
-interior Thumb entry within a larger RAM routine starting at `0x1fff28f1`, so
-this ABI difference needs a targeted runtime comparison before treating the
-synthetic dispatch as equivalent. No evidence yet connects it to the missing
-TS0001 TX. The dump remains an external analysis input; no ROM bytes or Ghidra
+slot and emulates the non-null callback path: it supplies the callback pointer
+in `r0`, saves `r4` and `lr`, and returns through a small synthetic
+`pop {r4,pc}` trampoline. A null slot still stops with an explicit error rather
+than inventing the ROM's `0x4e24` fallback. The saved-state TS0001 baseband slot
+points to `0x1fff2985`, an interior Thumb entry within a larger RAM routine
+starting at `0x1fff28f1`. With the wrapper ABI modeled, the 15-second network
+run still contains only 16 coordinator Beacon Requests and 3 coordinator Data
+frames; TS0001 sends none. The ABI mismatch was real but did not explain the
+missing TX. The dump remains an external analysis input; no ROM bytes or Ghidra
 project files are stored in the repository.
 
 The supplied `SoC_info.txt` reports the attached flash ID as `0x1364c8` and a

@@ -120,6 +120,53 @@ void test_random_seed(const std::vector<std::uint8_t> &image) {
     CHECK(random_bytes_for_seed(image, 0) ==
           random_bytes_for_seed(image, 0x6d2b79f5));
 }
+
+void test_direct_rom_baseband_wrapper(const std::vector<std::uint8_t> &image) {
+    using namespace phy6252emu;
+    Phy6252 chip;
+    chip.load_firmware(image);
+    chip.reset();
+    CHECK(chip.run(100).reason == cortexm::StopReason::Deadline);
+
+    constexpr std::uint32_t callback_address = BootImage::RamBase + 0x2200;
+    constexpr std::uint32_t callback = callback_address | 1u;
+    constexpr std::uint32_t marker_address = BootImage::RamBase + 0x2300;
+    const std::array<std::uint8_t, 24> callback_code = {
+        0x03, 0x49, // ldr r1, [pc, #12] ; marker address
+        0x08, 0x60, // str r0, [r1]
+        0x01, 0x22, // movs r2, #1
+        0x03, 0x49, // ldr r1, [pc, #12] ; LL IRQ clear register
+        0x0a, 0x60, // str r2, [r1]
+        0x70, 0x47, // bx lr
+        0x00, 0x00, 0x00, 0x00,
+        0x00, 0x23, 0xff, 0x1f, // marker address
+        0x14, 0x10, 0x03, 0x40, // 0x40031014 LL IRQ clear
+    };
+    const std::uint32_t zero = 0;
+    const std::uint32_t enable_radio_irq = 1u << 4;
+    const std::uint32_t initial_r0 = 0x13579bdf;
+    const std::uint32_t initial_r4 = 0x2468ace0;
+    CHECK(chip.core().write_memory(0x1fff0390, &callback, sizeof callback));
+    CHECK(chip.core().write_memory(callback_address, callback_code.data(),
+                                   callback_code.size()));
+    CHECK(chip.core().write_memory(marker_address, &zero, sizeof zero));
+    CHECK(chip.core().write_memory(0xe000e100, &enable_radio_irq,
+                                   sizeof enable_radio_irq));
+    chip.core().set_reg(0, initial_r0);
+    chip.core().set_reg(4, initial_r4);
+    const std::uint32_t initial_sp = chip.core().reg(13);
+    chip.core().set_irq_line(4, true);
+    chip.core().set_interrupts_masked(false);
+    CHECK(chip.run(chip.core().cycles() + 128).reason ==
+          cortexm::StopReason::Deadline);
+
+    std::uint32_t marker = 0;
+    CHECK(chip.core().read_memory(marker_address, &marker, sizeof marker));
+    CHECK(marker == callback); // ROM's BLX wrapper leaves the callback pointer in r0.
+    CHECK(chip.core().reg(0) == initial_r0); // exception return restores interrupted state
+    CHECK(chip.core().reg(4) == initial_r4);
+    CHECK(chip.core().reg(13) == initial_sp);
+}
 }
 
 int main() {
@@ -132,6 +179,7 @@ int main() {
     put(image, 0xe100, 0x1fff2000); put(image, 0xe104, 0x11010109);
     image[0xe108] = 0xfe; image[0xe109] = 0xe7; // b .
     put(image, 0xe110, 0x1fff2000); put(image, 0xe114, 0x11010109);
+    test_direct_rom_baseband_wrapper(image);
     test_random_seed(image);
     BootImage boot = load_boot_image(image);
     CHECK(boot.flash[0x10108] == 0xfe);
