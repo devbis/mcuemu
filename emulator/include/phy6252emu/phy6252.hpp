@@ -155,6 +155,7 @@ private:
         std::uint64_t last_cycle{0}, cycle_remainder{0};
     };
     std::array<TimerState, 6> timers_{};
+    std::map<std::uint32_t, std::uint32_t> aes_registers_;
     std::uint32_t gpio_data_{0}, gpio_direction_{0}, gpio_control_{0};
     std::uint32_t gpio_interrupt_enable_{0}, gpio_interrupt_mask_{0x007fffff};
     std::uint32_t gpio_interrupt_type_{0}, gpio_interrupt_polarity_{0};
@@ -163,6 +164,7 @@ private:
 
     std::ostream *mmio_trace_{nullptr};
     std::uint32_t mmio_trace_first_{0}, mmio_trace_last_{0};
+    void set_system_clock(std::uint32_t hz);
     std::uint32_t read_register(std::uint32_t address, unsigned size);
     std::uint32_t read_register_impl(std::uint32_t address, unsigned size);
     void write_register(std::uint32_t address, std::uint32_t value, unsigned size);

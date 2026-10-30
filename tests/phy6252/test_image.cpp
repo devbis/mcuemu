@@ -714,6 +714,73 @@ int main() {
     rom_test_chip.write(0x40031014, (1u << 0) | (1u << 2), 4);
     rom_test_chip.core().set_interrupts_masked(false);
 
+    // Registers the dumped ROM drives directly (the host stand-ins are not in the way).
+    {
+        Phy6252 native;
+        native.load_firmware(image);
+        native.reset();
+        const crypto::Block aes_key = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+                                       0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f};
+        const crypto::Block aes_input = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+                                         0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff};
+        const crypto::Block aes_expected = {0x69, 0xc4, 0xe0, 0xd8, 0x6a, 0x7b, 0x04, 0x30,
+                                            0xd8, 0xcd, 0xb7, 0x80, 0x70, 0xb4, 0xc5, 0x5a};
+        // AES block: key words at +0x20..+0x2c and data words at +0x30..+0x3c, first four bytes
+        // in the highest register; a write of 1 to +0x00 encrypts into +0x50..+0x5c.
+        for (unsigned i = 0; i < 4; ++i) {
+            auto word = [](const crypto::Block &block, unsigned index) {
+                return static_cast<std::uint32_t>(block[4 * index]) << 24 |
+                       static_cast<std::uint32_t>(block[4 * index + 1]) << 16 |
+                       static_cast<std::uint32_t>(block[4 * index + 2]) << 8 | block[4 * index + 3];
+            };
+            native.write(0x4004002c - 4 * i, word(aes_key, i), 4);
+            native.write(0x4004003c - 4 * i, word(aes_input, i), 4);
+        }
+        native.write(0x40040000, 1, 4);
+        for (unsigned i = 0; i < 4; ++i) {
+            const std::uint32_t word = native.read(0x4004005c - 4 * i, 4);
+            for (unsigned byte = 0; byte < 4; ++byte)
+                CHECK(((word >> (24 - 8 * byte)) & 0xffu) == aes_expected[4 * i + byte]);
+        }
+        CHECK(native.read(0x40040000, 4) == 0); // the start bit clears
+
+        // The system clock follows a change of the selection in AON 0x4000f03c bits 2:0.
+        CHECK(native.core().clock_hz() == 16000000);
+        native.write(0x4000f03c, 0x18, 4); // clock enables only: no change
+        CHECK(native.core().clock_hz() == 16000000);
+        native.write(0x4000f03c, 0x19, 4);
+        CHECK(native.core().clock_hz() == 32000000);
+        native.write(0x4000f03c, 0x1c, 4);
+        CHECK(native.core().clock_hz() == 64000000);
+
+        // RC32K calibration: cal_ro1 is the 32 MHz / RC32K count only while cal_rw bit 3 is set.
+        CHECK(native.read(0x4000f064, 4) == 0);
+        native.write(0x4000f05c, native.read(0x4000f05c, 4) | 8u, 4);
+        CHECK(native.read(0x4000f064, 4) == 977);
+
+        // TX data port: word stores to 0x40031400 append at the write pointer (LL+0x50 bits
+        // 26:16), LL+0x18 = 1 resets the FIFO, and the read pointer catches up after the frame.
+        mcuemu::VirtualAir native_air;
+        native.connect_radio(native_air, "native");
+        native.write(0x40031018, 1, 4);
+        CHECK(native.read(0x40031050, 4) == 0);
+        native.write(0x40031400, 0x11111111u, 4);
+        native.write(0x40031400, 0x22222222u, 4);
+        CHECK(native.read(0x40031050, 4) == (2u << 16));
+        native.write(0x40031018, 1, 4);
+        CHECK(native.read(0x40031050, 4) == 0);
+        native.write(0x40031400, 0x5a000105u, 4); // PHR 5, payload 01 00 5a, FCS follows
+        native.write(0x40031400, 0x00000000u, 4);
+        native.write(0x40031004, 0x000100, 4); // STX
+        native.write(0x40031000, 1, 4);
+        const std::uint64_t native_end = native.core().cycles() + 40000;
+        CHECK(native.run(native_end).reason == cortexm::StopReason::Deadline);
+        CHECK(native_air.frames().size() == 1);
+        if (!native_air.frames().empty())
+            CHECK(native_air.frames()[0].payload == std::vector<std::uint8_t>({0x01, 0x00, 0x5a}));
+        CHECK(native.read(0x40031050, 4) == (2u << 16 | 2u)); // read pointer caught up
+    }
+
     Phy6252 cca_chip;
     cca_chip.load_firmware(image);
     cca_chip.reset();

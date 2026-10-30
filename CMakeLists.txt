@@ -465,6 +465,10 @@ if(MCUEMU_BUILD_TESTS)
        EXISTS "${MCUEMU_PHY6252_JOIN_COORDINATOR}")
         find_package(Python3 COMPONENTS Interpreter QUIET)
         if(Python3_Interpreter_FOUND)
+            set(MCUEMU_PHY6252_JOIN_ROM_ARGS)
+            if(EXISTS "${MCUEMU_PHY6252_ROM}")
+                list(APPEND MCUEMU_PHY6252_JOIN_ROM_ARGS "${MCUEMU_PHY6252_ROM}")
+            endif()
             add_test(
                 NAME firmware_phy6252_ts0001_join
                 COMMAND "${Python3_EXECUTABLE}"
@@ -473,7 +477,8 @@ if(MCUEMU_BUILD_TESTS)
                         "${MCUEMU_PHY6252_JOIN_COORDINATOR}"
                         "${MCUEMU_PHY6252_TS0001_FIRMWARE}"
                         "${MCUEMU_PHY6252_EFUSE}"
-                        "${MCUEMU_PHY6252_RF_CALIBRATION}")
+                        "${MCUEMU_PHY6252_RF_CALIBRATION}"
+                        ${MCUEMU_PHY6252_JOIN_ROM_ARGS})
             set_tests_properties(firmware_phy6252_ts0001_join PROPERTIES
                 TIMEOUT 900
                 LABELS "firmware;zigbee;phy6252;tuya"

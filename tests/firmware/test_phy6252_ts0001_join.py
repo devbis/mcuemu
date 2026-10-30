@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Verify the closed TS0001 image joins a coordinator's network on its own.
 
+The optional ROM is the dumped PHY6222 ROM (without it the host stand-ins run).
 COORDINATOR is the Telink sampleGW (it forms its network on channel 15; the relay
 scans channels 11..26). Frames are attributed to a device by the air sink's
 transmitter label, never by the EUI inside the frame: another node can carry the

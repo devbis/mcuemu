@@ -28,6 +28,15 @@ cortexm::Core::Config config() {
     return c;
 }
 constexpr std::uint32_t RomSize = 0x18000, UartBase = 0x40004000;
+// AES block of the baseband (0x40040000). Only what the dumped ROM's LL_ENC_AES128_Encrypt0 uses is
+// modelled: key words at +0x20..+0x2c and data words at +0x30..+0x3c (the first four bytes in the
+// highest register, big-endian), a write of 1 to +0x00 encrypts and the result is read from
+// +0x50..+0x5c in the same order. The register layout is inferred from that routine.
+constexpr std::uint32_t AesBase = 0x40040000;
+// System clock selection (AON 0x4000f03c bits 2:0, and the ROM's clk_set argument) to Hz, the
+// table the dumped ROM keeps at 0x17be0.
+constexpr std::array<std::uint32_t, 8> SystemClockHz = {
+    32000000, 32000000, 16000000, 48000000, 64000000, 96000000, 8000000, 4000000};
 constexpr std::uint32_t FlashReadAliasBase = 0x22000000;
 constexpr std::uint32_t RomNmiHandler = 0x8481;
 constexpr std::uint32_t RomHardFaultHandler = 0x28f1;
@@ -387,6 +396,7 @@ Phy6252::Phy6252() : core_(config()) {
     core_.map_mmio(GpioBase, 0x1000, *this);
     core_.map_mmio(DmaBase, 0x1000, *this);
     core_.map_mmio(0x4000f000, 0x1000, *this);
+    core_.map_mmio(AesBase, 0x1000, *this);
     core_.map_mmio(RadioRfBase, 0x1000, *this);
     core_.map_mmio(RadioLlBase, 0x1000, *this);
     // PHY62xx has a 4 KiB baseband SRAM shared by the 2 KiB TX/RX FIFOs.
@@ -697,20 +707,9 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
         const std::uint32_t address = pc >= 0x10000000 ? pc - 0x10000000 : pc;
         bool rom_branch = false;
         if (address == 0xa5ec) {
-            constexpr std::array<std::uint32_t, 8> SystemClockHz = {
-                32000000, 32000000, 16000000, 48000000,
-                64000000, 96000000, 8000000, 4000000};
             const std::uint32_t selection = core_.reg(0);
             if (selection < SystemClockHz.size()) {
-                const std::uint64_t old_cycles_per_tick = timer_cycles_per_tick(core_.clock_hz());
-                const std::uint64_t new_cycles_per_tick = timer_cycles_per_tick(SystemClockHz[selection]);
-                for (unsigned timer = 0; timer < timers_.size(); ++timer) {
-                    sync_timer(timer, core_.cycles());
-                    TimerState &state = timers_[timer];
-                    state.cycle_remainder = state.cycle_remainder * new_cycles_per_tick /
-                        old_cycles_per_tick;
-                }
-                core_.set_clock_hz(SystemClockHz[selection]);
+                set_system_clock(SystemClockHz[selection]);
                 core_.set_reg(0, 0);
             } else {
                 core_.set_reg(0, static_cast<std::uint32_t>(-22));
@@ -1978,6 +1977,12 @@ void Phy6252::dma_copy_channel0() {
 }
 
 std::uint32_t Phy6252::read(std::uint32_t address, unsigned size) {
+    if (address >= AesBase && address < AesBase + 0x1000) {
+        const std::uint32_t offset = address - AesBase;
+        const auto it = aes_registers_.find(offset & ~3u);
+        const std::uint32_t word = it == aes_registers_.end() ? 0 : it->second;
+        return size == 4 ? word : (word >> (8 * (offset & 3u))) & (size == 2 ? 0xffffu : 0xffu);
+    }
     if (address >= FlashReadAliasBase &&
         static_cast<std::uint64_t>(address) + size <=
             static_cast<std::uint64_t>(FlashReadAliasBase) + BootImage::FlashSize) {
@@ -2070,6 +2075,32 @@ std::uint32_t Phy6252::read(std::uint32_t address, unsigned size) {
 }
 
 void Phy6252::write(std::uint32_t address, std::uint32_t value, unsigned size) {
+    if (address >= AesBase && address < AesBase + 0x1000) {
+        const std::uint32_t offset = address - AesBase;
+        std::uint32_t &word = aes_registers_[offset & ~3u];
+        if (size == 4) {
+            word = value;
+        } else {
+            const unsigned shift = 8 * (offset & 3u);
+            const std::uint32_t mask = (size == 2 ? 0xffffu : 0xffu) << shift;
+            word = (word & ~mask) | ((value << shift) & mask);
+        }
+        if ((offset & ~3u) == 0 && (word & 1u) != 0) {
+            crypto::Block key{}, data{};
+            for (unsigned i = 0; i < 4; ++i)
+                for (unsigned byte = 0; byte < 4; ++byte) {
+                    key[4 * i + byte] = static_cast<std::uint8_t>(aes_registers_[0x2c - 4 * i] >> (24 - 8 * byte));
+                    data[4 * i + byte] = static_cast<std::uint8_t>(aes_registers_[0x3c - 4 * i] >> (24 - 8 * byte));
+                }
+            const crypto::Block out = crypto::aes128_encrypt(key, data);
+            for (unsigned i = 0; i < 4; ++i)
+                aes_registers_[0x5c - 4 * i] = static_cast<std::uint32_t>(out[4 * i]) << 24 |
+                    static_cast<std::uint32_t>(out[4 * i + 1]) << 16 |
+                    static_cast<std::uint32_t>(out[4 * i + 2]) << 8 | out[4 * i + 3];
+            word &= ~1u; // the start bit clears when the block is done
+        }
+        return;
+    }
     if (address >= UartBase && address < UartBase + 0x1000) {
         const auto byte = static_cast<std::uint8_t>(value);
         switch ((address - UartBase) / 4) {
@@ -2091,6 +2122,22 @@ void Phy6252::write(std::uint32_t address, std::uint32_t value, unsigned size) {
         if (offset + size > RadioTxFifoSize) {
             unsupported_register(address, "write outside TX FIFO");
             return;
+        }
+        if (offset == 0 && size == 4) {
+            // The dumped ROM's ll_hw_write_tfifo stores every word to this one address and the
+            // baseband advances its write pointer (LL+0x50 bits 26:16), as the RX data port does
+            // for reads. Byte and offset accesses, as the Zephyr driver makes, stay plain RAM.
+            const std::uint32_t pointers = ll_registers_[RadioLlBase + 0x50];
+            const std::size_t position = (pointers >> 16 & RadioFifoPointerMask) * sizeof(std::uint32_t);
+            if (position + sizeof(std::uint32_t) <= RadioTxFifoSize) {
+                if (tx_fifo_.size() < position + sizeof(std::uint32_t))
+                    tx_fifo_.resize(position + sizeof(std::uint32_t));
+                for (unsigned i = 0; i < 4; ++i)
+                    tx_fifo_[position + i] = static_cast<std::uint8_t>(value >> (8 * i));
+                ll_registers_[RadioLlBase + 0x50] = (pointers & 0x7ffu) |
+                    (((pointers >> 16) + 1u) & RadioFifoPointerMask) << 16;
+                return;
+            }
         }
         if (tx_fifo_.size() < offset + size)
             tx_fifo_.resize(offset + size);
@@ -2473,8 +2520,17 @@ std::uint32_t Phy6252::read_register_impl(std::uint32_t address, unsigned size) 
         // those four bits to allow the ROM's block 0..3 read paths.
         value = 0x0f;
         break;
-    case AonCalReadOnly0:
     case AonCalReadOnly1:
+        // While bit 3 of cal_rw is set the always-on block measures the RC32K clock against
+        // the 32 MHz reference and cal_ro1 holds the count of reference cycles per RC cycle
+        // (17 bits). The ROM's RC32K calibration accepts three stable reads between 0x36f and
+        // 0x432 (a 32 MHz / 32.768 kHz ratio of 977 sits in the middle) and otherwise tunes the
+        // cap bank and retries after a 2 s sleep, which is where the dumped ROM stalled. The
+        // model's RC32K is ideal, so the count does not depend on the cap bank; inferred from
+        // that routine, not measured.
+        value = (control_registers_[AonCalReadWrite] & 8u) != 0 ? 977u : control_registers_[aligned];
+        break;
+    case AonCalReadOnly0:
     case AonCalReadOnly2:
         value = control_registers_[aligned];
         break;
@@ -2815,6 +2871,15 @@ void Phy6252::write_register_impl(std::uint32_t address, std::uint32_t value, un
                 radio_rtx_warning_logged_ = true;
             }
             break;
+        case 0x18:
+            // ll_hw_rst_tfifo() of the dumped ROM stores 1 here; the Zephyr driver stores
+            // timing values (192 us) instead.
+            ll_registers_[aligned] = written;
+            if (written == 1u) {
+                tx_fifo_.clear();
+                ll_registers_[RadioLlBase + 0x50] = 0;
+            }
+            break;
         case 0x28:
             // The external PHY6222 ROM's ll_hw_set_rx_timeout stores a
             // microsecond count here.
@@ -2948,9 +3013,19 @@ void Phy6252::write_register_impl(std::uint32_t address, std::uint32_t value, un
     case AonRtcCompare0:
     case AonRtcCompare1:
     case AonRtcCompare2:
-    case AonRtcClock:
         control_registers_[aligned] = lane_write(control_registers_[aligned], value, address, size);
         break;
+    case AonRtcClock: {
+        // Bits 2:0 select the system clock (the dumped ROM's clk_set writes them); the model only
+        // follows a change of the selection, since the reset value does not say which clock the
+        // boot ROM left running.
+        const std::uint32_t old_selection = control_registers_[aligned] & 7u;
+        control_registers_[aligned] = lane_write(control_registers_[aligned], value, address, size);
+        const std::uint32_t selection = control_registers_[aligned] & 7u;
+        if (selection != old_selection)
+            set_system_clock(SystemClockHz[selection]);
+        break;
+    }
     case AonRtcFlag:
         control_registers_[AonRtcFlag] &= ~lane_write(0, value, address, size);
         break;
@@ -3295,6 +3370,17 @@ std::uint64_t Phy6252::service_peripherals(std::uint64_t now) {
     return next;
 }
 
+void Phy6252::set_system_clock(std::uint32_t hz) {
+    const std::uint64_t old_cycles_per_tick = timer_cycles_per_tick(core_.clock_hz());
+    const std::uint64_t new_cycles_per_tick = timer_cycles_per_tick(hz);
+    for (unsigned timer = 0; timer < timers_.size(); ++timer) {
+        sync_timer(timer, core_.cycles());
+        TimerState &state = timers_[timer];
+        state.cycle_remainder = state.cycle_remainder * new_cycles_per_tick / old_cycles_per_tick;
+    }
+    core_.set_clock_hz(hz);
+}
+
 void Phy6252::watchdog_restart() {
     constexpr std::uint64_t NanosPerSecond = 1000000000ull;
     const std::uint32_t range = control_registers_[WatchdogTimeout] & 7u;
@@ -3374,6 +3460,10 @@ std::uint64_t Phy6252::service_radio(std::uint64_t now) {
     }
     if (radio_tx_active_ && now >= radio_tx_end_cycle_) {
         radio_tx_active_ = false;
+        // The baseband consumed the frame: its read pointer (LL+0x50 bits 10:0) catches up with
+        // the write pointer, so the next frame written through the data port starts there.
+        ll_registers_[RadioLlBase + 0x50] = (ll_registers_[RadioLlBase + 0x50] & 0x7ff0000u) |
+            ((ll_registers_[RadioLlBase + 0x50] >> 16) & RadioFifoPointerMask);
         if (radio_tx_wait_for_rx_) {
             radio_tx_wait_for_rx_ = false;
             radio_rx_active_ = true;

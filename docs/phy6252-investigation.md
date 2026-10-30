@@ -1313,9 +1313,40 @@ this alone with the coordinator (frames attributed by transmitter, the
 Association Request from the relay itself, a successful response and
 bidirectional NWK data) and runs in CI as `zigbee-phy6252-ts0001`.
 
-The external PHY6222 ROM does not reach that point with this image: the
-relay stays silent in 20 s on it (no UART output, no frame), unlike the Zephyr
-image. The host ROM stand-ins are used by the test.
+The same join passes on the dumped PHY6222 ROM (`rom:`), which is what the
+test and CI use. With the ROM the relay first stayed silent for these reasons,
+all found by following the closed image into the ROM code:
+
+1. **RC32K calibration never converged.** The image runs the ROM's RC32K
+   calibration: it sets bit 3 of AON `cal_rw` (0x4000f05c), reads the
+   measured count from `cal_ro1` (0x4000f064) three times and accepts three
+   reads within 19 of each other that lie between `0x36f` and `0x432` (a
+   32 MHz / 32.768 kHz ratio of 977 is the middle); otherwise it tunes the cap
+   bank and retries after a 2 s system sleep, from which the chip resets
+   into the ROM again. The model read 0, so the relay slept for ever.
+   `cal_ro1` now returns 977 while the bit is set (inferred from that routine,
+   not measured).
+2. **The system clock stayed at 16 MHz.** The host stand-in for `clk_set`
+   switched the core clock; the ROM writes the selection to AON `0x4000f03c`
+   bits 2:0 (table `32, 32, 16, 48, 64, 96, 8, 4` MHz at ROM `0x17be0`) and the
+   model ignored it. The RTOS tick and every stack timer then ran at half
+   speed, so the 5 s long press never arrived before the 8 s release. A change of
+   the selection now changes the core clock.
+3. **The TX data port.** `ll_hw_write_tfifo` stores every word to
+   `0x40031400` and the baseband advances its write pointer (LL+0x50 bits
+   26:16), like the RX port on reads; `ll_hw_rst_tfifo` writes 1 to LL+0x18; and
+   the read pointer catches up when the frame has been sent. Word stores to
+   the port offset 0 are now appended at the write pointer, LL+0x18 = 1 resets
+   the FIFO, and the pointers follow the frame. Byte and offset stores (the
+   Zephyr driver) stay plain RAM writes. Before this the ROM's writes
+   overwrote one word and every later frame repeated the first one.
+4. **The AES block.** The ROM's `LL_ENC_AES128_Encrypt0` drives the hardware
+   block at `0x40040000`: key words at +0x20..+0x2c, data words at
+   +0x30..+0x3c (the first four bytes in the highest register), a store of 1
+   to +0x00 encrypts and the result is read from +0x50..+0x5c. The model had no
+   block there (a write fault at the Transport Key); it now has one with that
+   layout, inferred from the routine. The host stand-in's argument order
+   (key, plaintext) is the one this routine implies.
 
 Debug aids in the sim adapter (environment variables, `mcuemu sim`):
 `MCUEMU_PHY6252_TRACE_PC="FROM_NS:TO_NS"` prints every executed instruction

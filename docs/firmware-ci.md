@@ -43,7 +43,7 @@ locally too when you put the images there.
 | `zigbee-esp32h2` | the sensor joins the sampleGW coordinator through the real ESP-IDF bootloader on ROM stand-ins (it scans all channels, backs off and reboots once); the console shows the AES self-test, `JoinedOrResumed`, Confirm-Key SUCCESS and `CommissioningComplete` |
 | `zigbee-esp32c6` | the same for the C6 sensor image, which also scans every channel (the log must show channel 26) |
 | `zigbee-efr32-zephyr-router`, `zigbee-efr32-zephyr-ed` | the Zephyr zigbee_shell sample on the EFR32MG21 (RAIL radio driver, no console) gets an Association Response with status 0 from the sampleGW coordinator, judged from the pcap |
-| `zigbee-phy6252-ts0001` | the Tuya TS0001 relay (PHY6222 on the host ROM stand-ins, NVM erased) scans, associates with the sampleGW (channel 15), gets the Transport Key and exchanges unicast NWK data, judged by `test_phy6252_ts0001_join.py` from the air sink, per transmitter |
+| `zigbee-phy6252-ts0001` | the Tuya TS0001 relay (PHY6222 running the dumped ROM, NVM erased) scans, associates with the sampleGW (channel 15), gets the Transport Key and exchanges unicast NWK data, judged by `test_phy6252_ts0001_join.py` from the air sink, per transmitter |
 | `tlsr8258 + ca51 thermostat r02` | the ZT3L joins the coordinator and both UARTs of the two-chip board carry framed traffic |
 | `nrf52840-boot`, `zephyr-pm-wake`, `vendor-sleep-1s` | the existing scripts in `tests/firmware/` |
 
