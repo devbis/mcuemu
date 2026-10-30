@@ -1,0 +1,30 @@
+# TS0001 local relay-button probe without a coordinator or radio medium.
+# Keep the user-supplied full-flash image at firmware/phy6252-ts0001.bin.
+version: 1
+
+world:
+  seed: 1
+  duration: 15s
+
+devices:
+  - id: ts0001
+    mcus:
+      - id: mcu
+        model: phy6252
+        firmware: ../firmware/phy6252-ts0001.bin
+    nets:
+      - { id: key1_line, pull: up, pins: [mcu.GPIO8] }
+      - { id: key2_line, pull: up, pins: [mcu.GPIO3] }
+      - { id: relay_line, pins: [mcu.GPIO2] }
+    parts:
+      - { id: key1, type: button, pins: { out: key1_line } }
+
+attach:
+  - { endpoint: ts0001.relay_line, sink: "vcd:relay.vcd" }
+
+scenario:
+  events:
+    - { at: 6s, endpoint: ts0001.key1.pressed, set: true }
+    - { at: 6500ms, endpoint: ts0001.key1.pressed, set: false }
+    - { at: 7s, endpoint: ts0001.key1.pressed, set: true }
+    - { at: 7500ms, endpoint: ts0001.key1.pressed, set: false }

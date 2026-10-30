@@ -191,6 +191,10 @@ constexpr std::array<std::uint8_t, 23> GpioPullRegister = {
     0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3};
 constexpr std::array<std::uint8_t, 23> GpioPullShift = {
     1, 4, 7, 10, 22, 28, 1, 4, 13, 16, 19, 22, 25, 1, 10, 13, 16, 19, 22, 4, 7, 10, 13};
+// The related SDK's c_gpio_index[] addresses AON wake bits by pad number,
+// which differs from the AP_GPIO's dense logical pin numbering.
+constexpr std::array<std::uint8_t, 23> GpioWakeIndex = {
+    0, 1, 2, 3, 7, 9, 10, 11, 14, 15, 16, 17, 18, 20, 23, 24, 25, 26, 27, 31, 32, 33, 34};
 
 bool phy_rf_register(std::uint32_t offset) {
     switch (offset) {
@@ -875,8 +879,52 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                                            efuse_blocks_[block].size())) {
                 core_.set_reg(0, 6); // PPlus_ERR_INVALID_PARAM
             } else {
-                core_.set_reg(0, 0); // PPlus_SUCCESS
+                // The supplied ROM copies both words before checking whether
+                // the block contains any programmed bits. The captured module
+                // has all-zero blocks, which return PPlus_ERR_UNINITIALIZED.
+                const bool uninitialized = std::all_of(
+                    efuse_blocks_[block].begin(), efuse_blocks_[block].end(),
+                    [](std::uint8_t byte) { return byte == 0; });
+                core_.set_reg(0, uninitialized ? 24u : 0u);
             }
+        } else if (address == 0x3fc4) {
+            // The supplied PHY6222 ROM implements this entry as an indirect
+            // callback wrapper, with the AES routine at 0x3fdc as its fallback.
+            // Keep the wrapper ABI visible instead of copying ROM bytes into
+            // the host-trap image.
+            std::uint32_t dispatch = 0;
+            if (!core_.read_memory(0x1fff0118, &dispatch, sizeof dispatch))
+                return {cortexm::StopReason::Fault,
+                        "invalid PHY6252 ROM dispatch slot at 0x1fff0118"};
+            const std::uint32_t old_sp = core_.reg(13);
+            if (old_sp < 8)
+                return {cortexm::StopReason::Fault,
+                        "invalid stack for PHY6252 ROM dispatch wrapper at 0x3fc4"};
+            const std::array<std::uint32_t, 2> saved = {core_.reg(4), core_.reg(14)};
+            const std::uint32_t new_sp = old_sp - 8;
+            if (!core_.write_memory(new_sp, saved.data(), sizeof saved))
+                return {cortexm::StopReason::Fault,
+                        "unwritable stack for PHY6252 ROM dispatch wrapper at 0x3fc4"};
+            core_.set_reg(13, new_sp);
+            if (dispatch != 0) {
+                core_.set_reg(14, 0x3fd1); // BLX r3 returns to POP at 0x3fd0.
+                core_.set_reg(15, dispatch & ~1u);
+            } else {
+                core_.set_reg(14, 0x3fd7); // BL returns to POP at 0x3fd6.
+                core_.set_reg(15, 0x3fdc);
+            }
+            rom_branch = true;
+        } else if (address == 0x3fd0 || address == 0x3fd6) {
+            // These are the two epilogues of the dumped 0x3fc4 wrapper.
+            std::array<std::uint32_t, 2> saved{};
+            const std::uint32_t stack = core_.reg(13);
+            if (!core_.read_memory(stack, saved.data(), sizeof saved))
+                return {cortexm::StopReason::Fault,
+                        "unreadable stack for PHY6252 ROM dispatch wrapper return"};
+            core_.set_reg(4, saved[0]);
+            core_.set_reg(13, stack + sizeof saved);
+            core_.set_reg(15, saved[1] & ~1u);
+            rom_branch = true;
         } else if (address == 0x3fdc) {
             // SDK ROM symbol LL_ENC_AES128_Encrypt0(input, key, output).
             crypto::Block input{}, key{};
@@ -1035,21 +1083,7 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                 }
             }
         } else if (address == 0x5044) {
-            // SDK LL_InitConnectContext is a BLE connection initializer. The
-            // TS0001 app calls it before using its separate Zigbee MAC path;
-            // the supplied model does not implement BLE connection state.
-            std::uint8_t byte = 0;
-            if (!core_.read_memory(core_.reg(0), &byte, 1) ||
-                !core_.read_memory(core_.reg(1), &byte, 1)) {
-                core_.set_reg(0, static_cast<std::uint32_t>(-22));
-            } else {
-                if (!ll_context_warning_logged_) {
-                    std::fprintf(stderr,
-                                 "PHY6252: LL_InitConnectContext reached; BLE connection state is not modeled\n");
-                    ll_context_warning_logged_ = true;
-                }
-                core_.set_reg(0, 0); // LL_STATUS_SUCCESS for unused BLE context setup.
-            }
+            rom_ll_init_connect_context();
         } else if (address == 0x5e04) {
             // SDK LL_Rand(buffer, length) accepts lengths from 1 to 255 and
             // returns an LL status. Use a deterministic PRNG for repeatable
@@ -1627,6 +1661,97 @@ void Phy6252::heap_release(std::uint32_t address) {
         free_heap_blocks_.erase(next);
     }
     free_heap_blocks_.emplace(begin, size);
+}
+
+void Phy6252::rom_ll_init_connect_context() {
+    constexpr std::uint32_t ContextSize = 0x284;
+    constexpr std::uint32_t ContextSlots = 8;
+    constexpr std::uint32_t ContextState = 0x1fff0914;
+
+    const std::uint32_t context_buffer = core_.reg(0);
+    const std::uint32_t table_base = core_.reg(1);
+    const std::uint32_t context_count = core_.reg(2);
+    const std::uint32_t slot_count = core_.reg(3);
+    std::uint32_t extra_count = 0;
+    std::uint32_t stride_mode = 0;
+    const std::uint32_t stack = core_.reg(13);
+    const bool have_stack_args = stack <= std::numeric_limits<std::uint32_t>::max() - 4 &&
+        core_.read_memory(stack, &extra_count, sizeof extra_count) &&
+        core_.read_memory(stack + 4, &stride_mode, sizeof stride_mode);
+    const std::uint64_t context_bytes = static_cast<std::uint64_t>(context_count) * ContextSize;
+    const std::uint64_t ram_end = static_cast<std::uint64_t>(BootImage::RamBase) +
+        BootImage::RamSize;
+    const auto in_ram = [](std::uint32_t address, std::uint64_t size) {
+        return address >= BootImage::RamBase &&
+            static_cast<std::uint64_t>(address) + size <= ram_end;
+    };
+
+    if (!have_stack_args || context_count > ContextSlots || slot_count > ContextSlots ||
+        extra_count > ContextSlots || context_buffer == 0 || table_base == 0 ||
+        !in_ram(context_buffer, context_bytes) || !in_ram(ContextState, 0x24)) {
+        core_.set_reg(0, 0x12); // LL_STATUS_ERROR_BAD_PARAMETER
+        return;
+    }
+
+    std::uint32_t stride = stride_mode == 0 ? 0x2a :
+        stride_mode == 1 ? 0x106 : core_.reg(5);
+    stride += 6;
+
+    const std::array<std::uint8_t, 4> state = {
+        static_cast<std::uint8_t>(context_count),
+        static_cast<std::uint8_t>(slot_count),
+        static_cast<std::uint8_t>(extra_count),
+        static_cast<std::uint8_t>(stride_mode)};
+    const bool state_written = core_.write_memory(ContextState, state.data(), state.size()) &&
+        core_.write_memory(ContextState + 0x20, &context_buffer, sizeof context_buffer);
+    std::vector<std::uint8_t> zero_contexts(static_cast<std::size_t>(context_bytes), 0);
+    const bool contexts_cleared = context_bytes == 0 ||
+        core_.write_memory(context_buffer, zero_contexts.data(), zero_contexts.size());
+    if (!state_written || !contexts_cleared) {
+        core_.set_reg(0, 0x12);
+        return;
+    }
+
+    std::uint32_t pointer = table_base;
+    const auto write_pointer = [this](std::uint32_t address, std::uint32_t value) {
+        return core_.write_memory(address, &value, sizeof value);
+    };
+    for (std::uint32_t context = 0; context < context_count; ++context) {
+        const std::uint32_t object = context_buffer + context * ContextSize;
+        for (std::uint32_t slot = 0; slot < slot_count; ++slot) {
+            if (!write_pointer(object + 0x16c + slot * 4, pointer)) {
+                core_.set_reg(0, 0x12);
+                return;
+            }
+            pointer += stride;
+        }
+        for (std::uint32_t slot = 0; slot < extra_count; ++slot) {
+            if (!write_pointer(object + 0x18c + slot * 4, pointer)) {
+                core_.set_reg(0, 0x12);
+                return;
+            }
+            pointer += stride;
+        }
+        if (!write_pointer(object + 0x1ac, pointer)) {
+            core_.set_reg(0, 0x12);
+            return;
+        }
+        pointer += stride;
+        for (std::uint32_t slot = 0; slot < slot_count; ++slot) {
+            if (!write_pointer(object + 0x1b0 + slot * 4, pointer)) {
+                core_.set_reg(0, 0x12);
+                return;
+            }
+            pointer += stride;
+        }
+    }
+
+    if (!ll_context_warning_logged_) {
+        std::fprintf(stderr,
+                     "PHY6252: LL_InitConnectContext uses the observed PHY6222 context layout; BLE over-air state is not modeled\n");
+        ll_context_warning_logged_ = true;
+    }
+    core_.set_reg(0, 0); // LL_STATUS_SUCCESS
 }
 
 void Phy6252::dma_copy_channel3() {
@@ -2787,6 +2912,19 @@ void Phy6252::set_gpio_input(unsigned pin, bool high) {
         gpio_input_ |= bit;
     else
         gpio_input_ &= ~bit;
+    if (previous != high && system_sleeping_ && (gpio_interrupt_type_ & bit) != 0) {
+        const unsigned wake_index = GpioWakeIndex[pin];
+        const std::uint32_t wake_mask_address = wake_index < 32 ? AonWakeMask0 : AonWakeMask1;
+        const std::uint32_t wake_source_address = wake_index < 32 ? AonWakeSource0 : AonWakeSource1;
+        const std::uint32_t wake_bit = 1u << (wake_index & 31u);
+        const std::uint32_t wake_mask = control_registers_[wake_mask_address];
+        const std::uint32_t ioctl = control_registers_[AonPullBase + GpioPullRegister[pin] * 4];
+        const bool falling_edge = (ioctl & (1u << (GpioPullShift[pin] - 1))) != 0;
+        if ((wake_mask & wake_bit) != 0 && high == !falling_edge) {
+            control_registers_[wake_source_address] |= wake_bit;
+            system_sleep_wake_cycle_ = core_.cycles();
+        }
+    }
     if (previous != high && (gpio_interrupt_type_ & bit) != 0 &&
         high == ((gpio_interrupt_polarity_ & bit) != 0))
         gpio_interrupt_status_ |= bit;
@@ -2805,6 +2943,8 @@ GpioDrive Phy6252::gpio_drive(unsigned pin) const noexcept {
     const auto it = control_registers_.find(pull_address);
     const std::uint32_t pull_value = it == control_registers_.end() ? 0 : it->second;
     const std::uint32_t pull = (pull_value >> GpioPullShift[pin]) & 3u;
+    if (pull == 1)
+        return GpioDrive::PullUpStrong;
     if (pull == 2)
         return GpioDrive::PullUp;
     if (pull == 3)
