@@ -1333,7 +1333,21 @@ remains unreproduced.
 When the TS0001 image and local eFuse/RF-calibration dumps are present, CMake
 also registers `firmware_phy6252_ts0001_boot`. Run it with
 `ctest --test-dir build -R firmware_phy6252_ts0001_boot --output-on-failure`.
-It checks the ordered startup, Tuya and GPIO key UART messages and a GPIO2
-transition after the button press. It does not assert the uncertain `On/Off`
-trigger or Zigbee network support; the captured-network criterion remains
-separate.
+It checks the ordered startup, the reference `power report time = 3288`,
+`set read local time: 44` and `fix Report time = 330785` values, Tuya and GPIO
+key UART messages, and a GPIO2 transition after the button press. The test's
+seed reproduces the captured `LL_Rand` bytes; it does not calibrate hardware
+timer rates. It does not assert the uncertain `On/Off` trigger or Zigbee
+network support; the captured-network criterion remains separate.
+
+For a 65-second no-coordinator replay of the supplied log context, run
+`examples/phy6252-ts0001-log-replay.yaml` from a scratch directory. With
+`world.seed: 57013`, its startup timer values match the reference. The GPIO8
+press at 27.95 s prints the key-down/key-up lines before the first stack report;
+`key timer stop!` follows that report, matching the captured line order (the
+capture spells it `ky timer stop!`). At 30.454 s and 60.454 s, the stack report
+is `MiF=0x1918`, `Tim=131`, and `lMac=210`, compared with
+`MiF=0x18A0`, `Tim=122`, and `lMac=154` in the supplied capture. The local time
+remains zero, and no `On/Off` line appears. This offline replay checks the UART
+and local GPIO path; `firmware_phy6252_ts0001_join` separately verifies radio
+association and bidirectional NWK traffic with the sample gateway.

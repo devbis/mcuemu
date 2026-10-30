@@ -13,7 +13,8 @@ from pathlib import Path
 
 SYSTEM = """version: 1
 world:
-  seed: 1
+  # Reproduce the LL_Rand bytes captured in the supplied UART log.
+  seed: 627949
   duration: 10s
 devices:
   - id: relay
@@ -62,11 +63,11 @@ EXPECTED = [
     r"get\[0\] value\s*=\s*2",
     r"Restored nwk success on reboot,1,0,87DB",
     r"network state=12",
-    r"power report time\s*=\s*\d+",
-    r"set read local time:\s*\d+",
+    r"power report time\s*=\s*3288",
+    r"set read local time:\s*44",
     r"Tuya 10,D0,30,2",
     r"Tuya 30,D0,30,0",
-    r"fix\s*Report time\s*=\s*\d+",
+    r"fix\s*Report time\s*=\s*330785",
     r"key 1 Down",
     r"keyid = 1, 1, 0",
     r"key 1 up",

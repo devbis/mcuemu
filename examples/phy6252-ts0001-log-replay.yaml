@@ -1,0 +1,32 @@
+# Reproduce the supplied TS0001 UART capture without a coordinator.
+# The world seed selects the captured LL_Rand-derived reporting intervals.
+# Keep the full-flash image and module calibration inputs under firmware/.
+version: 1
+
+world:
+  seed: 57013
+  duration: 65s
+
+devices:
+  - id: ts0001
+    mcus:
+      - id: mcu
+        model: phy6252
+        firmware: ../firmware/phy6252-ts0001.bin
+        efuse: ../firmware/phy6222-efuse.bin
+        rf_calibration: ../firmware/phy6222-rfcal.bin
+    nets:
+      - { id: key1_line, pull: up, pins: [mcu.GPIO8] }
+      - { id: key2_line, pull: up, pins: [mcu.GPIO3] }
+      - { id: relay_line, pins: [mcu.GPIO2] }
+    parts:
+      - { id: key1, type: button, pins: { out: key1_line } }
+      - { id: key2, type: button, pins: { out: key2_line } }
+
+attach:
+  - { endpoint: ts0001.relay_line, sink: "vcd:relay.vcd" }
+
+scenario:
+  events:
+    - { at: 27.95s, endpoint: ts0001.key1.pressed, set: true }
+    - { at: 28.45s, endpoint: ts0001.key1.pressed, set: false }

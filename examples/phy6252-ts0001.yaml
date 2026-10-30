@@ -1,7 +1,7 @@
-# TS0001 Zigbee relay dump with the TLSR8258 sample gateway.
+# Saved-state TS0001 UART and GPIO probe with the TLSR8258 sample gateway.
 # Keep the user-supplied application package or 512 KiB full-flash image outside
-# git at firmware/phy6252-ts0001.bin. A boot or UART log does not establish
-# Zigbee relay support.
+# git at firmware/phy6252-ts0001.bin. The reproducible first-boot network check
+# clears NVM in a temporary copy and runs as firmware_phy6252_ts0001_join.
 version: 1
 
 world:
