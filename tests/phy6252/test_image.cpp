@@ -662,16 +662,20 @@ int main() {
     irq_chip.reset();
     CHECK(irq_chip.run(100).reason == cortexm::StopReason::Deadline);
     constexpr std::uint32_t irq_callback = 0x1fff2201;
+    constexpr std::uint32_t gpio_callback_argument = 0x1fff2310;
     CHECK(irq_chip.core().write_memory(0x1fff03c0, &irq_callback, sizeof irq_callback));
-    const std::array<std::uint8_t, 24> gpio_irq_callback = {
+    const std::array<std::uint8_t, 36> gpio_irq_callback = {
+        0x05, 0x49, // ldr r1, [pc, #20] ; incoming r0 marker
+        0x08, 0x60, // str r0, [r1]
         0x07, 0x20, // movs r0, #7
-        0x03, 0x49, // ldr r1, [pc, #12] ; marker address
+        0x05, 0x49, // ldr r1, [pc, #20] ; marker address
         0x08, 0x60, // str r0, [r1]
         0x01, 0x20, // movs r0, #1
-        0x02, 0x49, // ldr r1, [pc, #8] ; GPIO interrupt status
+        0x04, 0x49, // ldr r1, [pc, #16] ; GPIO interrupt status
         0x08, 0x60, // str r0, [r1] ; clear edge status
         0x70, 0x47, // bx lr
-        0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x10, 0x23, 0xff, 0x1f, // 0x1fff2310 incoming r0 marker
         0x00, 0x23, 0xff, 0x1f, // 0x1fff2300 marker
         0x4c, 0x80, 0x00, 0x40, // 0x4000804c GPIO interrupt status
     };
@@ -689,11 +693,17 @@ int main() {
     std::uint32_t irq_marker = 0;
     CHECK(irq_chip.core().read_memory(0x1fff2300, &irq_marker, sizeof irq_marker));
     CHECK(irq_marker == 0); // changing level mode to edge is not itself an edge
+    CHECK(irq_chip.core().read_memory(gpio_callback_argument, &irq_marker,
+                                       sizeof irq_marker));
+    CHECK(irq_marker == 0);
     irq_chip.set_gpio_input(0, true);
     CHECK(irq_chip.run(irq_chip.core().cycles() + 100).reason ==
           cortexm::StopReason::Deadline);
     CHECK(irq_chip.core().read_memory(0x1fff2300, &irq_marker, sizeof irq_marker));
     CHECK(irq_marker == 7);
+    CHECK(irq_chip.core().read_memory(gpio_callback_argument, &irq_marker,
+                                       sizeof irq_marker));
+    CHECK(irq_marker == irq_callback); // ROM's GPIO wrapper tail-branches with its pointer in r0.
 
     Phy6252 timer_irq_chip;
     timer_irq_chip.load_firmware(image);
