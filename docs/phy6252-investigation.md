@@ -209,14 +209,20 @@ AES fallback and a RAM callback. In the saved-state TS0001 run the slot contains
 `0x3fc4`.
 
 The dump confirms the model's NMI (`0x8481`), HardFault (`0x28f1`), and PendSV
-(`0x84cd`) vector targets. It also has a full interrupt vector table: IRQ4
-points to `0x8871`, whose code dispatches through a callback pointer and falls
-back to `0x4e24`. The current direct-boot model instead places a host trap at
-`0x4e25` in the IRQ4 vector slot and dispatches `JUMP_FUNCTION(228)` there.
-This keeps the observed Zephyr and TS0001 paths running, but the relationship
-between the dump's full vector wrappers and the direct-boot callback table has
-not been resolved. The dump remains an external analysis input; no ROM bytes
-or Ghidra project files are stored in the repository.
+(`0x84cd`) vector targets. Headless Ghidra analysis confirms IRQ4 points to
+`0x8871`: the wrapper reads `JUMP_FUNCTION(228)` from `0x1fff0390`, calls a
+non-null entry with `BLX`, and returns; when the slot is null it calls the
+stateful ROM handler at `0x4e24`. That fallback checks LL state and dispatches
+different ROM routines, so it is not a no-op. In direct-image mode without an
+external ROM, the model instead places a host trap at `0x4e25` in IRQ4's vector
+slot and branches directly to the registered callback. The host trap currently
+does not reproduce the ROM wrapper's call frame, its `r0` value, or its `0x4e24`
+fallback. The saved-state TS0001 baseband slot points to `0x1fff2985`, an
+interior Thumb entry within a larger RAM routine starting at `0x1fff28f1`, so
+this ABI difference needs a targeted runtime comparison before treating the
+synthetic dispatch as equivalent. No evidence yet connects it to the missing
+TS0001 TX. The dump remains an external analysis input; no ROM bytes or Ghidra
+project files are stored in the repository.
 
 The supplied `SoC_info.txt` reports the attached flash ID as `0x1364c8` and a
 512 KiB capacity. The external-ROM path accepts the SDK's three-byte `RDID`
