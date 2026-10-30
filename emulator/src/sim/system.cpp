@@ -7,6 +7,7 @@
 #include "sim/nrf52840_mcu.hpp"
 #include "sim/tlsr8258_mcu.hpp"
 
+#include <functional>
 #include <tuple>
 #include <algorithm>
 #include <deque>
@@ -51,6 +52,11 @@ const McuRegistry &McuRegistry::builtin() {
             if (config.supply_mv)
                 mcu->device().set_supply_mv(*config.supply_mv);
             mcu->cpu().set_flash_timing(config.flash_timing.value_or(true));
+            if (config.tick_start_settle_ns)
+                mcu->device().set_system_timer_start_window(
+                    *config.tick_start_settle_ns, config.tick_start_jitter_ns.value_or(0),
+                    // Each device draws its own sequence.
+                    config.tick_start_seed.value_or(1) ^ std::hash<std::string>{}(name));
             return mcu;
         });
         r.add("ca51f253l3", [](const McuConfig &config, const std::string &name) {
@@ -355,6 +361,10 @@ std::unique_ptr<System> build_system(const SystemConfig &config,
                                              mcu_config.model + "' (known: " +
                                              models.str() + ")");
             }
+            if (mcu_config.model != "tlsr8258" &&
+                (mcu_config.tick_start_settle_ns || mcu_config.tick_start_jitter_ns ||
+                 mcu_config.tick_start_seed))
+                fail_at(mcu_config.line, "tick_start_* is only modelled for tlsr8258");
             const std::string name = device.id + "." + mcu_config.id;
             std::unique_ptr<Mcu> mcu;
             try {

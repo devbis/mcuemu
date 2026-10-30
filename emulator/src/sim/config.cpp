@@ -355,7 +355,8 @@ McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
     require_map(node, "mcu");
     check_keys(node, "mcu",
                {"id", "model", "variant", "firmware", "clock_hz", "supply_mv",
-                "start_at", "radio", "rtt", "flash_timing"});
+                "start_at", "radio", "rtt", "flash_timing",
+                "tick_start_settle", "tick_start_jitter", "tick_start_seed"});
     McuConfig mcu;
     mcu.line = node.Mark().line + 1;
     mcu.id = required_string(node, "id", "mcu");
@@ -416,6 +417,16 @@ McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
             fail(timing, "flash_timing must be true or false");
         mcu.flash_timing = text == "true";
     }
+    if (const YAML::Node settle = node["tick_start_settle"])
+        mcu.tick_start_settle_ns = config_duration(settle, "tick_start_settle");
+    if (const YAML::Node jitter = node["tick_start_jitter"])
+        mcu.tick_start_jitter_ns = config_duration(jitter, "tick_start_jitter");
+    if (const YAML::Node seed = node["tick_start_seed"])
+        mcu.tick_start_seed = config_uint(seed, "tick_start_seed");
+    if (mcu.tick_start_jitter_ns &&
+        (!mcu.tick_start_settle_ns || *mcu.tick_start_jitter_ns > *mcu.tick_start_settle_ns))
+        fail(node["tick_start_jitter"],
+             "tick_start_jitter needs tick_start_settle and may not exceed it");
     if (const YAML::Node start = node["start_at"])
         mcu.start_at_ns = config_duration(start, "start_at");
     if (const YAML::Node radio = node["radio"])

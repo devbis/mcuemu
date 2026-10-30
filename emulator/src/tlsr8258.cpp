@@ -514,6 +514,31 @@ void Tlsr8258::write8(std::uint32_t address, std::uint8_t value) {
     throw BusFault(address, "write");
 }
 
+void Tlsr8258::system_timer_stop_strobe() noexcept {
+    system_timer_started_ = false;
+    system_timer_stop_ns_ = time_ns_;
+    system_timer_stopped_once_ = true;
+    start_window_ns_ = start_settle_ns_;
+    if (start_settle_ns_ != 0 && start_jitter_ns_ != 0) {
+        // xorshift64*: deterministic for a seed, no dependence on the host.
+        start_rng_ ^= start_rng_ >> 12;
+        start_rng_ ^= start_rng_ << 25;
+        start_rng_ ^= start_rng_ >> 27;
+        const std::uint64_t draw = start_rng_ * 0x2545f4914f6cdd1dull;
+        const std::uint64_t span = 2 * start_jitter_ns_ + 1;
+        start_window_ns_ = start_settle_ns_ - start_jitter_ns_ + draw % span;
+    }
+}
+
+void Tlsr8258::system_timer_start_strobe() noexcept {
+    if (start_settle_ns_ != 0 && system_timer_stopped_once_ &&
+        time_ns_ - system_timer_stop_ns_ < start_window_ns_) {
+        ++start_ignored_; // too soon after the STOP: the counter does not start
+        return;
+    }
+    system_timer_started_ = true;
+}
+
 void Tlsr8258::tick(std::uint32_t cycles) {
     constexpr std::uint64_t nanos_per_second = 1000000000u;
     const std::uint32_t previous_system_timer = system_timer_count_;
@@ -1351,9 +1376,9 @@ void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
         wake_timer_armed_ = (value & 0x08u) != 0;
         // Bit 1 STOP, bit 0 START (SDK: FLD_SYSTEM_TICK_STOP/START).
         if ((value & 0x02u) != 0)
-            system_timer_started_ = false;
+            system_timer_stop_strobe();
         if ((value & 0x01u) != 0)
-            system_timer_started_ = true;
+            system_timer_start_strobe();
         registers_[offset] = value &
             static_cast<std::uint8_t>(~SystemTimerControlStrobeMask);
         if ((value & 0x01u) != 0 &&

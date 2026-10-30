@@ -18,6 +18,7 @@ void test_tlsr_analog_registers_and_32k_tick();
 void test_tlsr_rc32k_calibration_ready_after_virtual_time();
 void test_tlsr_deep_sleep_sram_retention();
 void test_tlsr_system_timer();
+void test_tlsr_system_timer_start_window();
 void test_tlsr_system_timer_start_stop_and_clock_select();
 void test_tlsr_deep_sleep_wake_gate();
 void test_tlsr_mspi_jedec_id();
@@ -59,6 +60,7 @@ int main() {
     RUN(test_tlsr_rc32k_calibration_ready_after_virtual_time);
     RUN(test_tlsr_deep_sleep_sram_retention);
     RUN(test_tlsr_system_timer);
+    RUN(test_tlsr_system_timer_start_window);
     RUN(test_tlsr_system_timer_start_stop_and_clock_select);
     RUN(test_tlsr_deep_sleep_wake_gate);
     RUN(test_tlsr_mspi_jedec_id);

@@ -260,6 +260,83 @@ void test_tlsr_system_timer_start_stop_and_clock_select() {
     CHECK((device.read8(mcuemu::Tlsr8258::SystemTimerControl) & 2) != 0);
 }
 
+// A START strobe that comes too soon after a STOP is ignored and the counter
+// stays where it was, as on a TB03F running the Zephyr stimer driver.
+void test_tlsr_system_timer_start_window() {
+    constexpr std::uint32_t CyclesPerUs = 48; // 48 MHz default clock
+    const auto stop = [](mcuemu::Tlsr8258 &d) {
+        d.write8(mcuemu::Tlsr8258::SystemTimerControl, 2);
+    };
+    const auto start = [](mcuemu::Tlsr8258 &d) {
+        d.write8(mcuemu::Tlsr8258::SystemTimerControl, 1);
+    };
+    const auto running = [](mcuemu::Tlsr8258 &d) {
+        return (d.read8(mcuemu::Tlsr8258::SystemTimerControl) & 2) != 0;
+    };
+    // Whole microseconds from the STOP until a START is accepted.
+    const auto window_us = [&](mcuemu::Tlsr8258 &d) {
+        stop(d);
+        for (std::uint32_t us = 0; us < 100; ++us) {
+            start(d);
+            if (running(d))
+                return us;
+            d.tick(CyclesPerUs);
+        }
+        return std::uint32_t{1000};
+    };
+
+    { // off by default: START right after STOP works
+        mcuemu::Tlsr8258 device;
+        CHECK(window_us(device) == 0);
+        CHECK(device.system_timer_ignored_starts() == 0);
+    }
+    { // fixed window of 10 us
+        mcuemu::Tlsr8258 device;
+        device.set_system_timer_start_window(10000, 0, 1);
+        device.tick(CyclesPerUs);
+        stop(device);
+        start(device);
+        CHECK(!running(device));
+        const std::uint32_t frozen = device.read32(mcuemu::Tlsr8258::SystemTimer);
+        device.tick(CyclesPerUs * 5);
+        start(device);
+        CHECK(!running(device));
+        CHECK(device.read32(mcuemu::Tlsr8258::SystemTimer) == frozen);
+        CHECK(device.system_timer_ignored_starts() == 2);
+        device.tick(CyclesPerUs * 6); // 11 us after the STOP
+        start(device);
+        CHECK(running(device));
+        device.tick(CyclesPerUs);
+        CHECK(device.read32(mcuemu::Tlsr8258::SystemTimer) > frozen);
+        // a START that is not preceded by a STOP is not delayed
+        mcuemu::Tlsr8258 fresh;
+        fresh.set_system_timer_start_window(10000, 0, 1);
+        start(fresh);
+        CHECK(running(fresh));
+    }
+    { // jitter: windows stay in settle +- jitter, repeat for a seed, differ between seeds
+        auto sequence = [&](std::uint64_t seed) {
+            mcuemu::Tlsr8258 device;
+            device.set_system_timer_start_window(20000, 8000, seed);
+            std::vector<std::uint32_t> windows;
+            for (int i = 0; i != 40; ++i) {
+                device.tick(CyclesPerUs * 50);
+                windows.push_back(window_us(device));
+            }
+            return windows;
+        };
+        const auto a = sequence(7);
+        CHECK(a == sequence(7));
+        CHECK(a != sequence(8));
+        bool varied = false;
+        for (const std::uint32_t us : a) {
+            CHECK(us >= 11 && us <= 29); // 12..28 us, one microsecond of sampling slack
+            varied = varied || us != a.front();
+        }
+        CHECK(varied);
+    }
+}
+
 void test_tlsr_system_timer() {
     mcuemu::Tlsr8258 device;
     CHECK(device.read32(mcuemu::Tlsr8258::SystemTimer) == 0);

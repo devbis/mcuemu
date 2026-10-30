@@ -70,6 +70,11 @@ struct McuConfig {
     std::optional<std::uint32_t> clock_hz;
     std::optional<std::uint32_t> supply_mv; // supply voltage (default 3300)
     std::optional<bool> flash_timing; // tlsr8258: flash and register-bus timing (default on)
+    // tlsr8258: the 16 MHz system timer ignores a START this soon after a STOP, plus or
+    // minus a random jitter (default off); see Tlsr8258::set_system_timer_start_window().
+    std::optional<std::uint64_t> tick_start_settle_ns;
+    std::optional<std::uint64_t> tick_start_jitter_ns;
+    std::optional<std::uint64_t> tick_start_seed;
     std::uint64_t start_at_ns{0};
     std::optional<RadioAttachConfig> radio;
     std::optional<RttConfig> rtt;

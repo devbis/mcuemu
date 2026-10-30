@@ -224,6 +224,21 @@ public:
     }
     // Supply voltage seen by the ADC's VBAT input (positive selector 0xf).
     void set_supply_mv(std::uint32_t millivolts) noexcept { supply_mv_ = millivolts; }
+    // The 16 MHz system timer ignores a START strobe (0x74f bit 0) that comes
+    // too soon after a STOP. The window is settle_ns plus or minus up to
+    // jitter_ns, drawn again at every STOP from a generator seeded with `seed`
+    // (the same seed gives the same run). settle_ns == 0 turns the model off:
+    // START is always accepted, as it was before the model existed. On a TB03F
+    // a START right after the Zephyr driver's STOP was ignored in one image,
+    // and the counter stayed at zero (docs/tlsr8258.md).
+    void set_system_timer_start_window(std::uint64_t settle_ns, std::uint64_t jitter_ns,
+                                       std::uint64_t seed) noexcept {
+        start_settle_ns_ = settle_ns;
+        start_jitter_ns_ = jitter_ns > settle_ns ? settle_ns : jitter_ns;
+        start_rng_ = seed == 0 ? 0x9e3779b97f4a7c15ull : seed;
+    }
+    // START strobes the counter has ignored so far.
+    std::uint64_t system_timer_ignored_starts() const noexcept { return start_ignored_; }
     std::uint32_t supply_mv() const noexcept { return supply_mv_; }
     void set_output_trace_enabled(bool enabled) noexcept {
         output_trace_enabled_ = enabled;
@@ -284,6 +299,13 @@ private:
     Tlsr8258PowerState pending_sleep_state_{Tlsr8258PowerState::Awake};
     std::uint32_t system_timer_count_{0};
     bool system_timer_started_{true};
+    std::uint64_t start_settle_ns_{0};
+    std::uint64_t start_jitter_ns_{0};
+    std::uint64_t start_rng_{0x9e3779b97f4a7c15ull};
+    std::uint64_t start_window_ns_{0};   // drawn at the last STOP
+    std::uint64_t system_timer_stop_ns_{0};
+    bool system_timer_stopped_once_{false};
+    std::uint64_t start_ignored_{0};
     std::uint64_t system_timer_fraction_{0};
     std::uint8_t mspi_command_{0};
     std::uint8_t mspi_response_index_{0};
@@ -390,6 +412,8 @@ private:
                (registers_[SystemTimerMode - RegisterBase] & SystemTimerEnable) != 0;
     }
     void update_system_timer_irq(std::uint32_t previous_count) noexcept;
+    void system_timer_stop_strobe() noexcept;
+    void system_timer_start_strobe() noexcept;
     void update_system_timer_calibration() noexcept;
     void update_analog_calibration() noexcept;
     std::uint8_t pwm_enable_mask() const noexcept;
