@@ -595,7 +595,7 @@ void test_cc2530_debugger_report() {
     const auto with_debugger = [&](const std::string &debugger) {
         return error_of_build(with_firmware("firmware: \"" + image + "\", debugger: " + debugger));
     };
-    const std::string out = (scratch() / "r.txt").string();
+    const std::string out = (scratch() / "r.txt").generic_string();
     CHECK(error_of_build(with_firmware("firmware: \"" + image +
                                        "\", debugger: {pc: 0x46, report: {file: \"" + out +
                                        "\"}}")).empty());
