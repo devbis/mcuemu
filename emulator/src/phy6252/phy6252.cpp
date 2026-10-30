@@ -215,7 +215,7 @@ bool phy_ll_register(std::uint32_t offset) {
     switch (offset) {
     case 0x00: case 0x04: case 0x08: case 0x0c: case 0x10: case 0x14:
     case 0x18: case 0x1c: case 0x20: case 0x24: case 0x28: case 0x2c: case 0x34: case 0x38: case 0x40:
-    case 0x54: case 0x58: case 0x60: case 0x68:
+    case 0x50: case 0x54: case 0x58: case 0x60: case 0x68: case 0x74:
         return true;
     default:
         return false;
@@ -515,6 +515,7 @@ void Phy6252::reset() {
     rf_registers_.clear();
     ll_registers_.clear();
     ll_registers_[RadioLlBase + 0x58] = 0x0200; // Related SDK's 2 KiB TX / 2 KiB RX split.
+    ll_registers_[RadioLlBase + 0x74] = RadioTxFifoSize / sizeof(std::uint32_t);
     tx_fifo_.clear();
     rx_fifo_.fill(0);
     rx_fifo_read_ = 0;
@@ -837,6 +838,43 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
         } else if (address == 0x11420) {
             // ll_hw_trigger() only starts the mode already configured by the caller.
             write_register(RadioLlBase, 1, 4);
+        } else if (address == 0x115c0) {
+            // The PHY6222 ROM's ll_hw_write_tfifo() copies a byte buffer to
+            // the TX FIFO data port. Its pointer is measured in 32-bit words;
+            // the ROM checks the configured depth with a 70-word safety gap
+            // before writing ceil(length / 4) words.
+            const std::uint32_t source = core_.reg(0);
+            const std::uint32_t length = core_.reg(1);
+            const std::uint32_t fifo_state = ll_registers_[RadioLlBase + 0x50];
+            const std::uint32_t read_pointer = fifo_state & RadioFifoPointerMask;
+            const std::uint32_t write_pointer = (fifo_state >> 16) & RadioFifoPointerMask;
+            const std::uint32_t fifo_depth =
+                ll_registers_[RadioLlBase + 0x74] & RadioFifoPointerMask;
+            const std::uint32_t rom_limit = fifo_depth - 70u;
+            if (length == 0 || write_pointer + (length >> 2) >= rom_limit ||
+                length > RadioTxFifoSize) {
+                core_.set_reg(0, 0);
+            } else {
+                std::vector<std::uint8_t> bytes(length);
+                if (!core_.read_memory(source, bytes.data(), bytes.size())) {
+                    char message[160];
+                    std::snprintf(message, sizeof message,
+                                  "invalid buffer passed to PHY6252 ll_hw_write_tfifo (source=0x%08x length=%u)",
+                                  source, length);
+                    return {cortexm::StopReason::Fault, message};
+                }
+                if (tx_fifo_.size() < RadioTxFifoSize)
+                    tx_fifo_.resize(RadioTxFifoSize);
+                const std::size_t offset =
+                    (static_cast<std::size_t>(write_pointer) * sizeof(std::uint32_t)) %
+                    RadioTxFifoSize;
+                for (std::size_t i = 0; i < bytes.size(); ++i)
+                    tx_fifo_[(offset + i) % RadioTxFifoSize] = bytes[i];
+                const std::uint32_t written_words = (length + 3u) / 4u;
+                ll_registers_[RadioLlBase + 0x50] =
+                    read_pointer | (((write_pointer + written_words) & RadioFifoPointerMask) << 16);
+                core_.set_reg(0, written_words);
+            }
         } else if (address == 0x11174) {
             // ll_hw_set_irq(mask) maps to LL_HW+0x0c, as the SDK's PHY+
             // implementation documents with its direct register setup.
@@ -905,6 +943,7 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             ll_registers_[RadioRxFifoStatus] = 0;
         } else if (address == 0x110e8) {
             tx_fifo_.clear();
+            ll_registers_[RadioLlBase + 0x50] = 0;
         } else if (address == 0x11278 || address == 0x11284) {
             // The dumped ROM implements these helpers as writes to LL+0x28
             // (timeout) and LL+0x24 (first timeout), respectively.
@@ -3153,8 +3192,14 @@ void Phy6252::start_radio_tx(bool wait_for_rx) {
     radio_rx_active_ = false;
     radio_rx_deadline_cycle_ = 0;
     radio_tx_wait_for_rx_ = wait_for_rx;
-    const std::uint32_t length = tx_fifo_.empty() ? 0 : tx_fifo_[0];
-    if (length < 5 || length > 127 || tx_fifo_.size() < length - 1) {
+    const std::uint32_t fifo_state = ll_registers_[RadioLlBase + 0x50];
+    const std::size_t fifo_offset =
+        (static_cast<std::size_t>(fifo_state & RadioFifoPointerMask) * sizeof(std::uint32_t)) %
+        RadioTxFifoSize;
+    const std::uint32_t length = fifo_offset < tx_fifo_.size() ? tx_fifo_[fifo_offset] : 0;
+    const bool wrapped_fifo = tx_fifo_.size() >= RadioTxFifoSize;
+    const bool linear_frame = length != 0 && fifo_offset + length - 1 <= tx_fifo_.size();
+    if (length < 5 || length > 127 || (!wrapped_fifo && !linear_frame)) {
         std::fprintf(stderr, "PHY6252: ignored radio TX command without a valid FIFO frame (length=%u, bytes=%zu)\n",
                      length, tx_fifo_.size());
         radio_tx_wait_for_rx_ = false;
@@ -3163,7 +3208,9 @@ void Phy6252::start_radio_tx(bool wait_for_rx) {
     radio_tx_active_ = true;
     const std::uint64_t start_ns = core_.cycles_to_ns(core_.cycles());
     std::vector<std::uint8_t> payload;
-    payload.assign(tx_fifo_.begin() + 1, tx_fifo_.begin() + (length - 1));
+    payload.reserve(length - 2);
+    for (std::uint32_t i = 1; i < length - 1; ++i)
+        payload.push_back(tx_fifo_[(fifo_offset + i) % RadioTxFifoSize]);
     std::uint64_t duration_ns = mcuemu::VirtualAir::airtime_ns(
         mcuemu::RadioProtocol::Zigbee802154, payload.size());
     if (air_ && !payload.empty()) {

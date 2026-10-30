@@ -514,6 +514,22 @@ int main() {
     rom_test_chip.write(0x40031400, 0x78563412, 4);
     invoke_radio_rom(0x110e8); // ll_hw_rst_tfifo
     CHECK(rom_test_chip.read(0x40031400, 4) == 0);
+    constexpr std::uint32_t tx_packet_source = 0x1fff2400;
+    const std::array<std::uint8_t, 11> tx_packet_bytes = {
+        10, 0x01, 0x00, 0x5a, 0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6, 0x07};
+    CHECK(rom_test_chip.core().write_memory(tx_packet_source, tx_packet_bytes.data(),
+                                           tx_packet_bytes.size()));
+    rom_test_chip.core().set_reg(0, tx_packet_source);
+    rom_test_chip.core().set_reg(1, tx_packet_bytes.size());
+    rom_test_chip.core().set_reg(14, 0x11010109);
+    rom_test_chip.core().set_reg(15, 0x115c0); // ll_hw_write_tfifo
+    CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 64).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(rom_test_chip.core().reg(0) == 3); // ceil(11 / 4) words
+    CHECK(rom_test_chip.read(0x40031050, 4) == 0x00030000);
+    for (std::size_t i = 0; i < tx_packet_bytes.size(); ++i)
+        CHECK(rom_test_chip.read(0x40031400 + i, 1) == tx_packet_bytes[i]);
+    invoke_radio_rom(0x110e8); // reset the FIFO pointers before the MMIO TX test
     rom_test_chip.write(0x40031c00, 0x78563412, 4);
     invoke_radio_rom(0x110b0); // ll_hw_rst_rfifo
     CHECK(rom_test_chip.read(0x40031c00, 4) == 0);

@@ -1213,6 +1213,19 @@ pcap again shows sampleLight associating at 9.045 s (`0x3acc`) and exchanging
 still contributes no transmission. The RTC wait was a separate ROM gap and is
 not the remaining commissioning-to-TX blocker.
 
+A later 8.1-second callback trace reached ROM entry `0x115c0` with a packet
+buffer at `0x1fffd140` and length 11, then called `ll_hw_set_stx` at
+`0x112b8`. Disassembly identifies `0x115c0` as the ROM TX-FIFO writer: it
+checks the LL FIFO write pointer against the configured depth, copies the
+buffer through the TX data port, and returns the number of words written.
+The emulator now models that contract, including the word pointer and
+byte-count tail; a unit test checks an 11-byte copy. The same trace no longer
+faults at the helper, but it does not reach the known `ll_hw_go` (`0x10cf8`)
+or `ll_hw_trigger` (`0x11420`) entries. Its air-source trace contains frames
+from the coordinator and sampleLight only, with no TS0001 transmission. The
+remaining observed stall is after STX selection and before the LL TX trigger;
+the closed image's transition through that path is still unresolved.
+
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
 instruction tracing for a PC interval and prints registers on a fault.
