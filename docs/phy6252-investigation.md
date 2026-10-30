@@ -1267,27 +1267,32 @@ The Zephyr driver was then changed to the SDK bit layout (and to clear the
 the unit test checks that the status carries no bit 1 or 3 for a received
 frame.
 
-With the fix, a first-boot TS0001 image joins in the local network scenario.
-The test erases NVM at `0x11079000..0x1107efff` only in a temporary copy, then
-uses sampleGW/sampleLight traffic to provide the channel-11 Beacon. The pcap
-contains an Association Request from the relay's stable fallback EUI
-`f6:89:7f:9b:74:38:c1:a4`, a successful response assigning short address
-`0x2554`, 9 uplink NWK data frames (5 unicast), and 6 downlink frames. The
-CTest case `firmware_phy6252_ts0001_join` performs these checks and uses the
-local external ROM dump when present. The image, eFuse and ROM remain external
-test inputs.
+After the status fix the first-boot TS0001 image receives the coordinator's
+Beacon, but it does not join. An earlier version of this section reported a
+successful join; that was wrong. The checks matched frames by the Association
+Request's source EUI `f6:89:7f:9b:74:38:c1:a4`, and the TLSR8258 sampleLight
+uses the same address, so the sampleLight's own association (and the NWK data
+that followed) was counted as the relay's. The air sink labels each frame with
+its transmitter, and it shows the relay sending nothing but one Beacon Request.
+The same applies to the saved-state "association" results recorded above
+(`0x3164`, `0x2554`): they are the sampleLight's.
 
-The saved-state image also associates when tested against a coordinator with
-the candidate saved PAN and parent state: its Association Request is accepted,
-it receives short address `0x3164`, then exchanges 9 uplink and 6 downlink NWK
-frames. Its UART still prints the same `Restored nwk success`, key, and Tuya
-data-point lines seen in the supplied log, but no `On/Off` diagnostic appears
-in this replay. Compared with `Downloads/TS0001_TZ3000_fdxihpp7_ff/log.txt`,
-the emulator prints `power report time = 3184` rather than `3288`, local time
-`42` rather than `44`, and `fix Report time = 356870` rather than `330785`;
-the key down/up and Tuya data-point reports appear. The relay can now join and
-exchange Zigbee traffic in the emulator; delivery of the specific Tuya relay
-command and the trigger for the reference `On/Off` lines remain unverified.
+What the radio trace shows without a sampleLight, with the SDK sampleGW built
+for channel 11 (`tests/ci/telink` with `-DDEFAULT_CHANNEL=11`; the stock sample
+forms its network on channel 15, which the relay never scans):
+
+- the relay sends one Beacon Request on channel 11 at 6.413 s, after the
+  GPIO8 release;
+- the coordinator answers with a Beacon (Association Permit set) at 6.433 s;
+- the relay transmits nothing more in 20 s. With the external ROM dump it
+  transmits nothing at all.
+
+`firmware_phy6252_ts0001_join` now checks this honestly (coordinator only,
+frames attributed by transmitter, Association Request from the relay itself,
+then a successful response and bidirectional NWK data). It fails today, so it
+is registered with `WILL_FAIL`; when the relay starts to associate it turns
+red, which is the cue to remove that property. The stack's reaction to the
+received Beacon is the next thing to trace.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
@@ -1351,5 +1356,5 @@ capture spells it `ky timer stop!`). At 30.454 s and 60.454 s, the stack report
 is `MiF=0x1918`, `Tim=131`, and `lMac=210`, compared with
 `MiF=0x18A0`, `Tim=122`, and `lMac=154` in the supplied capture. The local time
 remains zero, and no `On/Off` line appears. This offline replay checks the UART
-and local GPIO path; `firmware_phy6252_ts0001_join` separately verifies radio
-association and bidirectional NWK traffic with the sample gateway.
+and local GPIO path. `firmware_phy6252_ts0001_join` is the acceptance test for
+the radio path and currently fails (the relay does not associate).

@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
-"""Verify the closed TS0001 image joins a network and exchanges NWK data."""
+"""Verify the closed TS0001 image joins a coordinator's network on its own.
+
+The TS0001 scans channel 11 only, so COORDINATOR must form its network there
+(the Telink sampleGW built with DEFAULT_CHANNEL=11, see tests/ci/telink). Frames
+are attributed to a device by the air sink's transmitter label, never by the
+EUI inside the frame: another node can carry the same address.
+"""
 
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-from zigbee_air_check import nwk_data, read_pcap
+from zigbee_air_check import nwk_data, parse_mac
 
-TS0001_EUI = bytes.fromhex("f6897f9b7438c1a4")
+LINE = re.compile(
+    r"^(?P<ns>\d+) air0 = \S+ ch(?P<channel>\d+) (?P<node>\S+) -> \S+ \d+B (?P<hex>[0-9a-f]+)"
+)
 NVM_START = 0x79000
 NVM_SIZE = 0x6000
 
@@ -57,18 +66,18 @@ def fail(message: str, output: str = "") -> int:
 
 
 def main() -> int:
-    if len(sys.argv) not in (7, 8):
+    if len(sys.argv) not in (6, 7):
         print(
-            "usage: test_phy6252_ts0001_join.py EMULATOR COORDINATOR SAMPLE_LIGHT "
+            "usage: test_phy6252_ts0001_join.py EMULATOR COORDINATOR_CH11 "
             "FIRMWARE EFUSE RF_CALIBRATION [ROM]",
             file=sys.stderr,
         )
         return 2
 
-    emulator, coordinator, sample_light, firmware, efuse, rf_calibration = (
-        str(Path(path).resolve()) for path in sys.argv[1:7]
+    emulator, coordinator, firmware, efuse, rf_calibration = (
+        str(Path(path).resolve()) for path in sys.argv[1:6]
     )
-    rom = str(Path(sys.argv[7]).resolve()) if len(sys.argv) == 8 else None
+    rom = str(Path(sys.argv[6]).resolve()) if len(sys.argv) == 7 else None
 
     image = bytearray(Path(firmware).read_bytes())
     if len(image) != 0x80000:
@@ -99,14 +108,6 @@ devices:
         variant: F1K
         firmware: {json.dumps(coordinator)}
         radio: {{ air: air0, position: [0, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }}
-  - id: sampleLight
-    mcus:
-      - id: mcu
-        model: tlsr8258
-        variant: F1K
-        firmware: {json.dumps(sample_light)}
-        start_at: 5s
-        radio: {{ air: air0, position: [2, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }}
   - id: ts0001
     mcus:
       - id: mcu
@@ -120,7 +121,7 @@ devices:
     parts:
       - {{ id: key8, type: button, pins: {{ out: key8_line }} }}
 attach:
-  - {{ endpoint: air0, sink: "pcap:air.pcap" }}
+  - {{ endpoint: air0, sink: "stdout" }}
 scenario:
   events:
     - {{ at: 1s, endpoint: ts0001.key8.pressed, set: true }}
@@ -146,25 +147,38 @@ scenario:
         if "simulated 20000000000 ns" not in output:
             return fail("simulation did not reach its 20-second deadline", output)
 
-        pcap = workdir / "air.pcap"
-        if not pcap.exists():
-            return fail("radio pcap was not written", output)
-        frames = read_pcap(pcap)
-        association_requests = []
-        for frame in frames:
-            _dst_eui, src_eui, payload = mac_addresses(frame.raw)
-            if frame.kind == 3 and payload[:1] == b"\x01" and src_eui == TS0001_EUI:
-                association_requests.append(frame)
-        if not association_requests:
-            return fail("TS0001 did not send a MAC Association Request", output)
+        sent = []
+        for line in result.stdout.splitlines():
+            match = LINE.match(line)
+            if match:
+                frame = parse_mac(bytes.fromhex(match["hex"]), int(match["ns"]))
+                if frame is not None:
+                    sent.append((match["node"], int(match["channel"]), frame))
+        own = [(channel, frame) for node, channel, frame in sent if node == "ts0001.mcu"]
+        if not own:
+            return fail("TS0001 transmitted nothing", output)
+
+        requests = [
+            frame for _channel, frame in own
+            if frame.kind == 3 and frame.payload[:1] == b"\x01"
+        ]
+        if not requests:
+            channels = sorted({channel for channel, _frame in own})
+            return fail(
+                f"TS0001 did not send a MAC Association Request (it transmitted "
+                f"{len(own)} frame(s) on channel(s) {channels})",
+                output,
+            )
+        _dst_eui, own_eui, _payload = mac_addresses(requests[0].raw)
 
         association = None
         short_address = None
-        for frame in frames:
+        for node, _channel, frame in sent:
             dst_eui, _src_eui, payload = mac_addresses(frame.raw)
             if (
-                frame.kind == 3
-                and dst_eui == TS0001_EUI
+                node == "coordinator.mcu"
+                and frame.kind == 3
+                and dst_eui == own_eui
                 and payload[:1] == b"\x02"
                 and len(payload) >= 4
                 and payload[3] == 0
@@ -176,18 +190,18 @@ scenario:
             return fail("coordinator did not successfully associate TS0001", output)
 
         uplink = unicast_uplink = downlink = 0
-        for frame in frames:
+        for node, _channel, frame in sent:
             if frame.t_ns < association.t_ns:
                 continue
             addresses = nwk_data(frame)
             if addresses is None:
                 continue
             destination, source = addresses
-            if source == short_address:
+            if node == "ts0001.mcu" and source == short_address:
                 uplink += 1
                 if destination < 0xFFF8:
                     unicast_uplink += 1
-            if destination == short_address and source == 0:
+            if node == "coordinator.mcu" and destination == short_address and source == 0:
                 downlink += 1
         if not uplink or not unicast_uplink or not downlink:
             return fail(

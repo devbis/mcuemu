@@ -457,32 +457,32 @@ if(MCUEMU_BUILD_TESTS)
             "Skipping firmware_phy6252_ts0001_boot: local TS0001 image and PHY6222 calibration inputs not found in firmware/")
     endif()
 
+    # Acceptance test for the TS0001 joining a coordinator on channel 11 by itself
+    # (the Telink sampleGW built with DEFAULT_CHANNEL=11, tests/ci/telink). The relay
+    # sends its Beacon Request and receives the Beacon but does not associate yet, so
+    # the case is expected to fail: WILL_FAIL turns green when that changes, which is
+    # the signal to drop it.
+    set(MCUEMU_PHY6252_CH11_COORDINATOR
+        "${CMAKE_CURRENT_SOURCE_DIR}/firmware/telink-gw-ch11.bin")
     if(EXISTS "${MCUEMU_PHY6252_TS0001_FIRMWARE}" AND
        EXISTS "${MCUEMU_PHY6252_EFUSE}" AND
        EXISTS "${MCUEMU_PHY6252_RF_CALIBRATION}" AND
-       EXISTS "${MCUEMU_SAMPLE_GW_FIRMWARE}" AND
-       EXISTS "${MCUEMU_SAMPLE_LIGHT_FIRMWARE}")
+       EXISTS "${MCUEMU_PHY6252_CH11_COORDINATOR}")
         find_package(Python3 COMPONENTS Interpreter QUIET)
         if(Python3_Interpreter_FOUND)
-            set(MCUEMU_PHY6252_TS0001_ROM_ARGS)
-            if(EXISTS "${MCUEMU_PHY6252_ROM}")
-                list(APPEND MCUEMU_PHY6252_TS0001_ROM_ARGS
-                    "${MCUEMU_PHY6252_ROM}")
-            endif()
             add_test(
                 NAME firmware_phy6252_ts0001_join
                 COMMAND "${Python3_EXECUTABLE}"
                         "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_phy6252_ts0001_join.py"
                         "$<TARGET_FILE:mcuemu>"
-                        "${MCUEMU_SAMPLE_GW_FIRMWARE}"
-                        "${MCUEMU_SAMPLE_LIGHT_FIRMWARE}"
+                        "${MCUEMU_PHY6252_CH11_COORDINATOR}"
                         "${MCUEMU_PHY6252_TS0001_FIRMWARE}"
                         "${MCUEMU_PHY6252_EFUSE}"
-                        "${MCUEMU_PHY6252_RF_CALIBRATION}"
-                        ${MCUEMU_PHY6252_TS0001_ROM_ARGS})
+                        "${MCUEMU_PHY6252_RF_CALIBRATION}")
             set_tests_properties(firmware_phy6252_ts0001_join PROPERTIES
                 TIMEOUT 900
-                LABELS "firmware;zigbee;phy6252;tuya"
+                WILL_FAIL TRUE
+                LABELS "firmware;zigbee;phy6252;tuya;known-failing"
             )
         else()
             message(STATUS
@@ -490,7 +490,7 @@ if(MCUEMU_BUILD_TESTS)
         endif()
     else()
         message(STATUS
-            "Skipping firmware_phy6252_ts0001_join: local TS0001, PHY6222 calibration, sampleGW and sampleLight inputs not found in firmware/")
+            "Skipping firmware_phy6252_ts0001_join: local TS0001, PHY6222 inputs or the channel-11 sampleGW (firmware/telink-gw-ch11.bin) not found")
     endif()
 
     set(MCUEMU_ZEPHYR_PM_FIRMWARE

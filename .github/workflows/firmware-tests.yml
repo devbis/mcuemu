@@ -455,12 +455,6 @@ jobs:
               --no-uart-trace
               --expect 'thermostat\.main\.uart1 +[0-9]+ bytes: aa 55'
               --expect 'thermostat\.zb\.uart0 +[0-9]+ bytes: aa 55'
-          - name: zigbee-phy6252-ts0001
-            command: >-
-              python3 tests/firmware/test_phy6252_ts0001_join.py "$MCUEMU"
-              firmware/telink-gw.bin firmware/telink-light.bin
-              tests/firmware-images/phy6252-ts0001.bin
-              tests/firmware-images/phy6222-efuse.bin tests/firmware-images/phy6222-rfcal.bin
           - name: nrf52840-boot
             command: python3 tests/firmware/test_nrf52840_boot.py "$MCUEMU" firmware/nrf52840-sensor.bin
           - name: zephyr-pm-wake
