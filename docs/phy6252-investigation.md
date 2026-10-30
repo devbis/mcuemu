@@ -1160,10 +1160,12 @@ moves from state 0 to state 1. Later, Timer1 runs the image callback
 the deferred `0x1fff65d5(group, 0x20)` callback, and the callback runs. At that
 second event-group update, however, the only listed waiter has item value
 `0x2`; the set bit `0x20` does not match, so the task is not unblocked and the
-BDB dispatcher does not run again. The trace still shows no `STX`/`TRX` call.
-This shows where the current closed-stack run stops before radio TX, but not
-why the waiter item changes from its earlier `0x81ffffff` value to `0x2`. That
-change remains the next investigation target; it is not evidence of a PHY
+BDB dispatcher does not run again. The item is still linked into the event
+group's wait list even though its value has been reset to the task's normal
+priority key. The trace still shows no `STX`/`TRX` call. This shows where the
+current closed-stack run stops before radio TX, but not why the linked waiter
+loses its event mask. The event-list inconsistency could come from the image's
+task flow or from our RTOS/scheduling model; it is not evidence of a PHY
 transmitter defect.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
