@@ -88,6 +88,13 @@ void test_core_systick_interrupt() {
     CHECK(f.word(0x20000100) == 10); // every 1000 cycles from about cycle 10
 }
 
+void test_core_pendsv_preempts_after_yield_store() {
+    Fixture f(nrf52_programs::pendsv_yield);
+    CHECK(f.core.run(2000).reason == cortexm::StopReason::Deadline);
+    CHECK(f.word(0x20000104) == 1); // PendSV ran before the next thread instruction
+    CHECK(f.word(0x20000100) == 2); // the thread resumed after the exception return
+}
+
 // Zephyr runs threads on the process stack. Entering the handler must switch to
 // the main stack (the exception frame stays on PSP) and the return must pop that
 // frame; the NVIC's acknowledge once skipped the stack switch and popped zeros.

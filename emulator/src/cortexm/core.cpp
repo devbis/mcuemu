@@ -57,7 +57,7 @@ struct Core::Region {
     std::vector<std::uint8_t> storage;
 };
 
-enum class Cause { None, Deadline, StepLimit, Hint, Halted, Reset, CodeInvalidation };
+enum class Cause { None, Deadline, StepLimit, Hint, Halted, Reset, CodeInvalidation, ExceptionBoundary };
 
 struct Core::Impl final : Bus {
     Core &core;
@@ -81,6 +81,7 @@ struct Core::Impl final : Bus {
     bool reset_pending{false};
     bool running{false};
     bool code_invalidation_pending{false};
+    bool exception_boundary_pending{false};
 
     // SysTick.
     std::uint32_t st_ctrl{0}, st_reload{0}, st_value{0};
@@ -207,6 +208,12 @@ struct Core::Impl final : Bus {
 
     // ---- per-instruction hook ------------------------------------------
     void on_instruction(std::uint32_t address, unsigned size) {
+        if (exception_boundary_pending) {
+            exception_boundary_pending = false;
+            cause = Cause::ExceptionBoundary;
+            uc_emu_stop(core.uc_);
+            return;
+        }
         if (code_invalidation_pending) {
             code_invalidation_pending = false;
             cause = Cause::CodeInvalidation;
@@ -374,6 +381,15 @@ struct Core::Impl final : Bus {
                 systick_write(offset, value);
                 return;
             }
+            if ((offset & ~3u) == 0xd04) {
+                const unsigned shift = size < 4 ? (offset & 3u) * 8 : 0;
+                const std::uint32_t write_value = value << shift;
+                // FreeRTOS pends PendSV from its yield macro. End the current
+                // translated block before the thread can execute past that
+                // store, so the NVIC takes the exception at the next entry.
+                exception_boundary_pending = (write_value & (1u << 28)) != 0 &&
+                                             (write_value & (1u << 27)) == 0;
+            }
             uc_arm_nvic(core.uc_, UC_ARM_NVIC_SCS_WRITE, offset, &value, size);
             std::uint32_t reset = 0;
             uc_arm_nvic(core.uc_, UC_ARM_NVIC_TAKE_RESET, 0, &reset, 0);
@@ -495,6 +511,7 @@ void Core::reset(std::uint32_t vector_table) {
     impl_->build();
     impl_->event = false;
     impl_->deferred.clear();
+    impl_->exception_boundary_pending = false;
     impl_->st_ctrl = impl_->st_reload = impl_->st_value = 0;
     impl_->st_countflag = false;
     impl_->st_cycle = cycles_;
@@ -740,6 +757,8 @@ RunResult Core::run(std::uint64_t until_cycle) {
             return result;
         case Cause::CodeInvalidation:
             uc_ctl_flush_tb(uc_);
+            break;
+        case Cause::ExceptionBoundary:
             break;
         case Cause::None:
             if (error != UC_ERR_OK) {
