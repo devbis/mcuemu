@@ -1221,18 +1221,17 @@ buffer through the TX data port, and returns the number of words written.
 The emulator now models that contract, including the word pointer and
 byte-count tail; a unit test checks an 11-byte copy.
 
-The follow-up same-channel run proves the closed image's radio path does
-transmit and receive. The air-source trace records a TS0001 MAC Beacon Request
-on channel 11 at 6.411874 s. The RX helper then returns coordinator Beacon
-frames (sequence numbers `0x4f` and `0x50`) to the image. In a 20-second replay
-with the channel-11 network, sampleLight associates at 9.045 s as `0x28a3` and
-exchanges 9 uplink and 6 downlink NWK frames. TS0001 does not continue with an
-Association Request or NWK traffic in this capture. This corrects the earlier
-post-helper conclusion that the relay emitted no frame: the first Beacon
-Request was lost in truncated trace output. The remaining gap is Zigbee
-commissioning after the first scan request, not basic PHY6252 TX/RX.
+Before the ROM status alias fix below, the same-channel run showed that the
+closed image could transmit a MAC Beacon Request on channel 11 at 6.411874 s,
+and that the RX helper returned coordinator Beacon frames (sequence numbers
+`0x4f` and `0x50`). In a 20-second replay sampleLight associated at 9.045 s as
+`0x28a3` and exchanged 9 uplink and 6 downlink NWK frames, while TS0001 did not
+continue to an Association Request. This corrected the earlier post-helper
+conclusion that the relay emitted no frame: the first Beacon Request was lost
+in truncated trace output. The later status trace below explains why the
+received Beacon did not reach Zigbee commissioning.
 
-A separate 15-second replay used the supplied saved-state image with an active
+Before the IRQ status fix, a separate 15-second replay used the supplied saved-state image with an active
 channel-25 sampleGW network. The relay logs `Restored nwk success on reboot`
 and `network state=12`; a GPIO8 press is registered as key 1 down/up and the
 application prints its two Tuya data-point reports. The 75-frame pcap contains
@@ -1241,15 +1240,52 @@ the coordinator's frames use PAN ID `0xa6dc`, while the saved ZB-info record
 only suggests `0xa9d9` as the relay's PAN ID. A prior scratch network using
 candidate saved identity fields also got no relay frame, but the complete
 parent/security state is not decoded. The UART's restored-state message and
-application reports therefore do not establish an active Zigbee link. The
-remaining issue is above basic PHY TX/RX: either the saved network identity and
-parent state are still unmatched, or the closed stack is not reaching a valid
-MAC/NWK transmit request. The current evidence does not distinguish those
-causes. A targeted LL-entry trace through 4.5 s, including the key press and
+application reports therefore did not establish an active Zigbee link. Those
+pre-fix runs did not distinguish saved-network mismatch from the status alias
+bug. A targeted LL-entry trace through 4.5 s, including the key press and
 Tuya reports, records an RX FIFO helper call but no TX FIFO writer, STX, GO, or
-trigger call. This locates the observed stall before those radio TX requests;
-it does not show whether the stack rejected the saved network state or failed
-inside another closed-stack contract.
+trigger call. These observations predate the ROM status alias fix below and do
+not distinguish saved-parent validation from the status-layout bug.
+
+### ROM IRQ status alias and TS0001 network traffic
+
+The ROM RX handler explains why the earlier capture looked like a dead radio.
+`receive_radio_frame()` set the PHY6252 SDK bits `MD` (bit 0) and `COK` (bit 10),
+plus bit 1, a compact alias used by the PB-03F Zephyr driver when it reads the
+LL status register directly. TS0001 calls ROM `ll_hw_get_irq_status` at
+`0x10bbc`; the handler tested the low two status bits as a result code. With
+all three bits set it saw `0x403`, interpreted low bits `3` as an error, and
+cleared the received packet length before the MAC parser. The RX FIFO and radio
+delivery were working; the Zephyr compatibility alias leaked across the ROM
+API boundary and made the closed stack discard otherwise valid frames.
+
+The ROM getter now removes only the Zephyr COK/RTO aliases, while direct LL
+MMIO still exposes them for Zephyr. TS0001 sees `0x401` for a good frame. A
+replay confirmed the packet length stays 29 bytes and the Beacon proceeds past
+the MAC parser. The unit test checks that direct register reads retain the
+Zephyr alias and the ROM getter returns the SDK bit layout.
+
+With the fix, a first-boot TS0001 image joins in the local network scenario.
+The test erases NVM at `0x11079000..0x1107efff` only in a temporary copy, then
+uses sampleGW/sampleLight traffic to provide the channel-11 Beacon. The pcap
+contains an Association Request from the relay's stable fallback EUI
+`f6:89:7f:9b:74:38:c1:a4`, a successful response assigning short address
+`0x2554`, 9 uplink NWK data frames (5 unicast), and 6 downlink frames. The
+CTest case `firmware_phy6252_ts0001_join` performs these checks and uses the
+local external ROM dump when present. The image, eFuse and ROM remain external
+test inputs.
+
+The saved-state image also associates when tested against a coordinator with
+the candidate saved PAN and parent state: its Association Request is accepted,
+it receives short address `0x3164`, then exchanges 9 uplink and 6 downlink NWK
+frames. Its UART still prints the same `Restored nwk success`, key, and Tuya
+data-point lines seen in the supplied log, but no `On/Off` diagnostic appears
+in this replay. Compared with `Downloads/TS0001_TZ3000_fdxihpp7_ff/log.txt`,
+the emulator prints `power report time = 3184` rather than `3288`, local time
+`42` rather than `44`, and `fix Report time = 356870` rather than `330785`;
+the key down/up and Tuya data-point reports appear. The relay can now join and
+exchange Zigbee traffic in the emulator; delivery of the specific Tuya relay
+command and the trigger for the reference `On/Off` lines remain unverified.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables

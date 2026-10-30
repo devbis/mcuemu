@@ -406,6 +406,42 @@ if(MCUEMU_BUILD_TESTS)
             "Skipping firmware_phy6252_ts0001_boot: local TS0001 image and PHY6222 calibration inputs not found in firmware/")
     endif()
 
+    if(EXISTS "${MCUEMU_PHY6252_TS0001_FIRMWARE}" AND
+       EXISTS "${MCUEMU_PHY6252_EFUSE}" AND
+       EXISTS "${MCUEMU_PHY6252_RF_CALIBRATION}" AND
+       EXISTS "${MCUEMU_SAMPLE_GW_FIRMWARE}" AND
+       EXISTS "${MCUEMU_SAMPLE_LIGHT_FIRMWARE}")
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            set(MCUEMU_PHY6252_TS0001_ROM_ARGS)
+            if(EXISTS "${MCUEMU_PHY6252_ROM}")
+                list(APPEND MCUEMU_PHY6252_TS0001_ROM_ARGS
+                    "${MCUEMU_PHY6252_ROM}")
+            endif()
+            add_test(
+                NAME firmware_phy6252_ts0001_join
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_phy6252_ts0001_join.py"
+                        "$<TARGET_FILE:mcuemu>"
+                        "${MCUEMU_SAMPLE_GW_FIRMWARE}"
+                        "${MCUEMU_SAMPLE_LIGHT_FIRMWARE}"
+                        "${MCUEMU_PHY6252_TS0001_FIRMWARE}"
+                        "${MCUEMU_PHY6252_EFUSE}"
+                        "${MCUEMU_PHY6252_RF_CALIBRATION}"
+                        ${MCUEMU_PHY6252_TS0001_ROM_ARGS})
+            set_tests_properties(firmware_phy6252_ts0001_join PROPERTIES
+                TIMEOUT 900
+                LABELS "firmware;zigbee;phy6252;tuya"
+            )
+        else()
+            message(STATUS
+                "Skipping firmware_phy6252_ts0001_join: Python 3 interpreter not found")
+        endif()
+    else()
+        message(STATUS
+            "Skipping firmware_phy6252_ts0001_join: local TS0001, PHY6222 calibration, sampleGW and sampleLight inputs not found in firmware/")
+    endif()
+
     set(MCUEMU_ZEPHYR_PM_FIRMWARE
         "${CMAKE_CURRENT_SOURCE_DIR}/firmware/zephyr-pmtest.bin")
     if(EXISTS "${MCUEMU_ZEPHYR_PM_FIRMWARE}")
