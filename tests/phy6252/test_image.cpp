@@ -92,6 +92,34 @@ void test_aon_gpio_wakeup() {
                                                &marker, sizeof marker));
     CHECK(marker == 0x5a);
 }
+
+std::array<std::uint8_t, 8> random_bytes_for_seed(
+    const std::vector<std::uint8_t> &image, std::uint32_t seed) {
+    using namespace phy6252emu;
+    Phy6252 chip;
+    chip.load_firmware(image);
+    chip.set_random_seed(seed);
+    chip.reset();
+    constexpr std::uint32_t buffer = BootImage::RamBase + 0x100;
+    chip.core().set_reg(0, buffer);
+    chip.core().set_reg(1, 8);
+    chip.core().set_reg(14, 0x11010109);
+    chip.core().set_reg(15, 0x5e04);
+    CHECK(chip.run(chip.core().cycles() + 16).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(chip.core().reg(0) == 0);
+    std::array<std::uint8_t, 8> bytes{};
+    CHECK(chip.core().read_memory(buffer, bytes.data(), bytes.size()));
+    return bytes;
+}
+
+void test_random_seed(const std::vector<std::uint8_t> &image) {
+    const auto first = random_bytes_for_seed(image, 0x12345678);
+    CHECK(first == random_bytes_for_seed(image, 0x12345678));
+    CHECK(first != random_bytes_for_seed(image, 0x12345679));
+    CHECK(random_bytes_for_seed(image, 0) ==
+          random_bytes_for_seed(image, 0x6d2b79f5));
+}
 }
 
 int main() {
@@ -104,6 +132,7 @@ int main() {
     put(image, 0xe100, 0x1fff2000); put(image, 0xe104, 0x11010109);
     image[0xe108] = 0xfe; image[0xe109] = 0xe7; // b .
     put(image, 0xe110, 0x1fff2000); put(image, 0xe114, 0x11010109);
+    test_random_seed(image);
     BootImage boot = load_boot_image(image);
     CHECK(boot.flash[0x10108] == 0xfe);
     CHECK(boot.ram[0x1838 + 1] == 0x20);

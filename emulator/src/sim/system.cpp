@@ -10,6 +10,7 @@
 
 #include <tuple>
 #include <algorithm>
+#include <cstdint>
 #include <deque>
 #include <fstream>
 #include <iostream>
@@ -18,6 +19,17 @@
 #include <sstream>
 
 namespace sim {
+
+namespace {
+std::uint32_t phy6252_random_seed(std::uint64_t world_seed,
+                                 const std::string &instance_name) {
+    std::uint64_t hash = 1469598103934665603ull ^ world_seed;
+    for (unsigned char byte : instance_name)
+        hash = (hash ^ byte) * 1099511628211ull;
+    const std::uint32_t seed = static_cast<std::uint32_t>(hash ^ (hash >> 32));
+    return seed == 0 ? 0x6d2b79f5u : seed;
+}
+} // namespace
 
 void McuRegistry::add(std::string model, Factory factory) {
     factories_[std::move(model)] = std::move(factory);
@@ -393,6 +405,9 @@ std::unique_ptr<System> build_system(const SystemConfig &config,
             std::unique_ptr<Mcu> mcu;
             try {
                 mcu = (*factory)(mcu_config, name);
+                if (auto *phy6252 = dynamic_cast<Phy6252Mcu *>(mcu.get()))
+                    phy6252->chip().set_random_seed(
+                        phy6252_random_seed(config.seed, name));
                 mcu->load_images(mcu_config.images);
             } catch (const std::exception &error) {
                 fail_at(mcu_config.line, "mcu '" + name + "': " + error.what());

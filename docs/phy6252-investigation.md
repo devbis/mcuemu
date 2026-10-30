@@ -689,14 +689,30 @@ channel and complete security state are still unconfirmed.
 
 A PC trace shows that the image's helper at `0x1fff7b0c` calls the ROM
 `LL_Rand` entry (`0x5e04`) to fill a one-byte result. The first report computes
-`3 * 1000 + 4 * (5 - 3) * random_byte`; this run's `0xda` gives `4744`, while
-the reference's `3288` corresponds to byte `0x24`. The later fix-report
-calculation is `5 * 60000 + (6 - 5) * 235 * random_byte`; this run's `0x72`
-gives `326790`, while the reference's `330785` corresponds to `0x83`. The
+`3 * 1000 + 4 * (5 - 3) * random_byte`; with the original standalone default
+seed, byte `0xda` gives `4744`, while the reference's `3288` corresponds to
+byte `0x24`. The later fix-report calculation is
+`5 * 60000 + (6 - 5) * 235 * random_byte`; byte `0x72` gives `326790`, while
+the reference's `330785` corresponds to `0x83`. The
 emulator's LL_Rand is deterministic, while the board ROM supplies
-hardware-dependent values, so these two timing differences are expected and
-do not indicate an AP_TIM clock error. The separate `set read local time` value
-and stack counters still differ and have not been explained.
+hardware-dependent values, so these timing differences are expected and do not
+indicate an AP_TIM clock error. In `sim`, `world.seed` and the MCU instance name
+now seed this deterministic sequence; standalone runs keep the fixed default
+seed. This makes the generated UART values reproducible without treating the
+board's captured random sequence as a timing requirement. The stack counters
+still differ and have not been explained.
+
+The `set read local time` helper also consumes one `LL_Rand` byte and maps it
+to `35 + floor(10 * byte / 255)`: byte `0x72` gives 39, while the captured value
+44 corresponds to a byte from `0xe6` through `0xff`. Its difference is random
+input, not a timer discrepancy.
+
+After the `world.seed` integration, the checked-in 10-second TS0001 UART test
+with `seed: 1` and instance `relay.mcu` prints `power report time = 3040`,
+`set read local time: 44`, and `fix Report time = 301410`. The local-time value
+now matches the captured log; the two report intervals differ because they are
+also seeded random values. This does not change the offline-only status of the
+TS0001 radio path.
 
 The earlier sampleGW data frames carried MAC PAN ID `0xA75C` (wire bytes
 `5c a7`). A later scratch coordinator used the candidate PAN ID `0xA9D9`,

@@ -14,7 +14,7 @@ version: 1                 # required
 world:
   duration: 10ms           # run length unless --for is given
   quantum: 5us             # max skew between MCUs (default 5us)
-  seed: 1
+  seed: 1                  # deterministic radio propagation and PHY6252 LL_Rand
   radio:                   # radio media, see "Radio" below
     - { id: air0, model: log_distance, path_loss_exponent: 2.7 }
 devices:
@@ -255,6 +255,10 @@ frame (`zigbee-802.15.4 ch15 d.a -> * 3B 010203`) at its start time.
 `ideal` is the original behavior: everyone on the same protocol and channel
 hears every frame (RSSI reads -50 dBm) and any overlap on that channel is a
 collision. `log_distance` adds geometry:
+
+`world.seed` also selects a repeatable `LL_Rand` stream for each PHY6252 MCU,
+derived from the seed and its instance name. Other PHY6252 runs use the fixed
+standalone default seed.
 
 - received power = TX power - loss; a frame below the receiver's sensitivity
   is not heard;

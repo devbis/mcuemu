@@ -426,6 +426,11 @@ void Phy6252::set_boot_from_rom(bool enabled) {
     boot_from_rom_ = enabled;
 }
 
+void Phy6252::set_random_seed(std::uint32_t seed) noexcept {
+    random_seed_ = seed == 0 ? 0x6d2b79f5u : seed;
+    random_state_ = random_seed_;
+}
+
 void Phy6252::load_efuse_dump(const std::vector<std::uint8_t> &dump) {
     constexpr std::size_t BlockSize = 8;
     constexpr std::size_t BlockCount = 4;
@@ -550,7 +555,7 @@ void Phy6252::reset() {
     ll_context_warning_logged_ = false;
     rf_sample_e8_warning_logged_ = false;
     heap_start_ = heap_size_ = 0;
-    random_state_ = 0x6d2b79f5u;
+    random_state_ = random_seed_;
     free_heap_blocks_.clear();
     heap_allocations_.clear();
     pending_fault_.clear();
