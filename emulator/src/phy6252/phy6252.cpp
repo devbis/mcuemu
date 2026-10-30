@@ -549,6 +549,7 @@ void Phy6252::reset() {
     dma_raw_transfer_status_ = dma_channel_enable_ = 0;
     watchdog_deadline_ns_ = 0;
     watchdog_interrupt_pending_ = false;
+    rtc_wait_ = {};
     sleep_allowed_ = false;
     sleep_mode_ = 0;
     system_sleep_request_ = false;
@@ -589,6 +590,37 @@ void Phy6252::reset() {
 
 cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
     for (;;) {
+        if (rtc_wait_.active) {
+            for (;;) {
+                const std::uint64_t now = core_.cycles();
+                const std::uint64_t now_ns = core_.cycles_to_ns(now);
+                const std::uint32_t count = rtc_count(now_ns);
+                if (static_cast<std::uint32_t>(count - rtc_wait_.start_count) >=
+                    rtc_wait_.ticks) {
+                    const std::uint32_t return_pc = rtc_wait_.return_pc;
+                    rtc_wait_.active = false;
+                    core_.set_reg(0, count);
+                    core_.set_reg(15, return_pc);
+                    break;
+                }
+                if (now >= until_cycle)
+                    return {cortexm::StopReason::Deadline, {}};
+
+                // The ROM busy-polls the RTC. Service chip events at their
+                // normal deadlines while advancing that wait without running
+                // thousands of synthetic polling instructions.
+                const std::uint64_t peripheral_deadline = service_peripherals(now);
+                const std::uint64_t rtc_deadline = core_.ns_to_cycles(rtc_wait_.deadline_ns);
+                std::uint64_t next = std::min({until_cycle, peripheral_deadline, rtc_deadline});
+                if (next <= now)
+                    next = now + 1;
+                core_.advance_to(next);
+                service_peripherals(next);
+            }
+            if (core_.cycles() >= until_cycle)
+                return {cortexm::StopReason::Deadline, {}};
+            continue;
+        }
         if (system_sleeping_) {
             if (system_sleep_wake_cycle_ > until_cycle) {
                 core_.advance_to(until_cycle);
@@ -736,6 +768,29 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
         } else if (address == 0x16b14) {
             // SDK ROM rtc_get_counter() exposes the AON 32.768 kHz counter.
             core_.set_reg(0, rtc_count(core_.cycles_to_ns(core_.cycles())));
+        } else if (address == 0x8900) {
+            // The supplied ROM body enables the AON RTC, snapshots its
+            // counter, and polls until r0 ticks have elapsed. Keep the same
+            // counter return value while yielding time to the chip scheduler.
+            const std::uint32_t ticks = core_.reg(0);
+            write_register(AonRtcControl, control_registers_[AonRtcControl] | 1u, 4);
+            const std::uint64_t now_ns = core_.cycles_to_ns(core_.cycles());
+            const std::uint32_t start_count = rtc_count(now_ns);
+            const std::uint64_t wait_ns =
+                (static_cast<std::uint64_t>(ticks) * 1000000000ull + 32767u) / 32768u;
+            const std::uint64_t deadline_ns =
+                wait_ns > std::numeric_limits<std::uint64_t>::max() - rtc_epoch_ns_
+                    ? std::numeric_limits<std::uint64_t>::max()
+                    : rtc_epoch_ns_ + wait_ns;
+            const std::uint32_t return_pc = core_.reg(14) & ~1u;
+            if (ticks == 0) {
+                core_.set_reg(0, start_count);
+                core_.set_reg(15, return_pc);
+            } else {
+                rtc_wait_ = {true, start_count, ticks, return_pc, deadline_ns};
+                core_.set_reg(15, return_pc);
+            }
+            rom_branch = true;
         } else if (address == 0x16c2c) {
             // SDK declares set_timer(AP_TIM_TypeDef *, int). The exported body
             // is absent; match the load/control sequence in timer.c's

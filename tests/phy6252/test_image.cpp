@@ -167,6 +167,35 @@ void test_direct_rom_baseband_wrapper(const std::vector<std::uint8_t> &image) {
     CHECK(chip.core().reg(4) == initial_r4);
     CHECK(chip.core().reg(13) == initial_sp);
 }
+
+void test_rom_rtc_wait(const std::vector<std::uint8_t> &image) {
+    using namespace phy6252emu;
+    Phy6252 chip;
+    chip.load_firmware(image);
+    chip.reset();
+
+    constexpr std::uint32_t return_address = BootImage::RamBase + 0x3000;
+    constexpr std::array<std::uint8_t, 2> return_code = {0x00, 0xbe}; // bkpt #0
+    CHECK(chip.core().write_memory(return_address, return_code.data(), return_code.size()));
+    chip.write(0x40001064, 3, 4); // Timer6 expires while the ROM waits.
+    chip.write(0x4000106c, 7, 4); // enable, one-shot, interrupt masked
+    const std::uint64_t start_cycle = chip.core().cycles();
+    const std::uint32_t start_count = chip.read(0x4000f028, 4);
+    chip.core().set_reg(0, 8); // eight 32.768 kHz ticks
+    chip.core().set_reg(14, return_address | 1u);
+    chip.core().set_reg(15, 0x8900);
+
+    CHECK(chip.run(start_cycle + 1000).reason == cortexm::StopReason::Deadline);
+    CHECK(chip.core().cycles() == start_cycle + 1000);
+    CHECK(chip.core().pc() == return_address);
+    CHECK(static_cast<std::uint32_t>(chip.read(0x4000f028, 4) - start_count) < 8);
+    CHECK(chip.read(0x40001074, 4) == 1); // peripheral deadline serviced during the wait
+
+    CHECK(chip.run(start_cycle + 10000).reason == cortexm::StopReason::Halted);
+    const std::uint32_t end_count = chip.read(0x4000f028, 4);
+    CHECK(static_cast<std::uint32_t>(end_count - start_count) >= 8);
+    CHECK(chip.core().reg(0) == end_count);
+}
 }
 
 int main() {
@@ -180,6 +209,7 @@ int main() {
     image[0xe108] = 0xfe; image[0xe109] = 0xe7; // b .
     put(image, 0xe110, 0x1fff2000); put(image, 0xe114, 0x11010109);
     test_direct_rom_baseband_wrapper(image);
+    test_rom_rtc_wait(image);
     test_random_seed(image);
     BootImage boot = load_boot_image(image);
     CHECK(boot.flash[0x10108] == 0xfe);

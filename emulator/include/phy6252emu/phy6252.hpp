@@ -94,6 +94,13 @@ private:
     bool watchdog_interrupt_pending_{false};
     std::uint64_t rtc_epoch_ns_{0};
     std::uint32_t rtc_epoch_count_{0};
+    struct RtcWait {
+        bool active{false};
+        std::uint32_t start_count{0};
+        std::uint32_t ticks{0};
+        std::uint32_t return_pc{0};
+        std::uint64_t deadline_ns{0};
+    } rtc_wait_;
     bool sleep_allowed_{false};
     std::uint32_t sleep_mode_{0};
     bool system_sleep_request_{false};

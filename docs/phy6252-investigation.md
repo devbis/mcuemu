@@ -145,6 +145,13 @@ flash timing, protection ranges, page limits or most opcodes. Invalid flash
 and crypto arguments return `-EINVAL`; `efuse_read` returns its separate SDK
 status codes described below.
 
+The supplied ROM dump's entry at `0x8900` enables the AON RTC and polls its
+32.768 kHz counter until the requested number of ticks has elapsed. The host
+model implements that wait as a virtual-time delay and services scheduled chip
+events during it. This removes one missing host-ROM call seen in the closed
+TS0001 startup trace; it does not yet explain the later point where that image
+stops receiving or requesting radio transmission.
+
 The SDK declares ROM `set_timer(AP_TIM_TypeDef *, int)` at `0x16c2c`, but its
 body is not included. The model follows the SDK `hal_timer_set_loadtimer()`
 sequence: stop, select user mode, load `4 * time`, then enable the one-shot
