@@ -88,7 +88,6 @@ jobs:
       matrix:
         include:
           - { app: sampleGW,    image: telink-gw }
-          - { app: sampleGW,    image: telink-gw-ch11, channel: 11 }   # the TS0001 scans channel 11 only
           - { app: sampleLight, image: telink-light }
     steps:
       - uses: actions/checkout@v5
@@ -103,7 +102,7 @@ jobs:
       - name: Build ${{ matrix.app }} (TLSR8258, EVK v1.2)
         run: |
           set -euo pipefail
-          cmake -S tests/ci/telink -B build -DAPP=${{ matrix.app }} -DDEFAULT_CHANNEL=${{ matrix.channel }} \
+          cmake -S tests/ci/telink -B build -DAPP=${{ matrix.app }} \
             -DSDK_PREFIX="$RUNNER_TEMP/sdk/tl_zigbee_sdk" -DTOOLCHAIN_PREFIX="$RUNNER_TEMP/tc32"
           cmake --build build --target ${{ matrix.app }}.bin --parallel
           mkdir -p out
@@ -459,7 +458,7 @@ jobs:
           - name: zigbee-phy6252-ts0001
             command: >-
               python3 tests/firmware/test_phy6252_ts0001_join.py "$MCUEMU"
-              firmware/telink-gw-ch11.bin
+              firmware/telink-gw.bin
               tests/firmware-images/phy6252-ts0001.bin
               tests/firmware-images/phy6222-efuse.bin tests/firmware-images/phy6222-rfcal.bin
           - name: nrf52840-boot

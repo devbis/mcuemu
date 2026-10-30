@@ -1303,11 +1303,10 @@ was found from the closed image's behaviour, decompiled with Ghidra (the
    Key's link-key hash with it, so the join failed with "Network steering was
    not successful (status: -3)" right after the Transport Key arrived.
 
-With the SDK sampleGW built for channel 11 (`tests/ci/telink` with
-`-DDEFAULT_CHANNEL=11`; the stock sample forms its network on channel 15, which
-the relay never scans) the first-boot image scans channels 11..26, sends its
-Association Request on channel 11 at 10.58 s, polls for the response after
-the 492 ms response wait, is assigned `0x9da4`, receives the Transport Key
+With the stock SDK sampleGW (channel 15), or `samplegw_tb03f.bin`, the
+first-boot image scans channels 11..26, sends its
+Association Request on the coordinator's channel at about 10.6 s, polls for the response after
+the 492 ms response wait, is assigned a short address, receives the Transport Key
 and logs `Joined network successfully` / `network state=6` at 11.72 s, then
 exchanges NWK data with the coordinator. `firmware_phy6252_ts0001_join` checks
 this alone with the coordinator (frames attributed by transmitter, the

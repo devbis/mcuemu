@@ -13,7 +13,6 @@ the scenarios that need it.
 | Image | Source | How |
 | --- | --- | --- |
 | `telink-gw.bin` (coordinator) | Telink Zigbee SDK `V3.7.2.0`, `apps/sampleGW` | `tests/ci/telink` (CMake, tc32 GCC from `devbis/tc32` branch `linux`), board `BOARD_8258_EVK_V1P2` |
-| `telink-gw-ch11.bin` | same SDK, `apps/sampleGW` with `DEFAULT_CHANNEL` 11 | same, `-DDEFAULT_CHANNEL=11` (the TS0001 scans channel 11 only) |
 | `telink-light.bin` | same SDK, `apps/sampleLight` | same |
 | `z03mmc.bin` | `devbis/z03mmc` (default branch) | its own CMake, as in its workflow |
 | `tlsr8258-plug.bin` | `faronov/zigbee-rs-plugs`, feature `zbeacon-ts011f-512k` | `scripts/tlsr8258-firmware.sh` with the pinned tc32 Rust toolchain (SHA-256 checked) |
@@ -44,7 +43,7 @@ locally too when you put the images there.
 | `zigbee-esp32h2` | the sensor joins the sampleGW coordinator through the real ESP-IDF bootloader on ROM stand-ins (it scans all channels, backs off and reboots once); the console shows the AES self-test, `JoinedOrResumed`, Confirm-Key SUCCESS and `CommissioningComplete` |
 | `zigbee-esp32c6` | the same for the C6 sensor image, which also scans every channel (the log must show channel 26) |
 | `zigbee-efr32-zephyr-router`, `zigbee-efr32-zephyr-ed` | the Zephyr zigbee_shell sample on the EFR32MG21 (RAIL radio driver, no console) gets an Association Response with status 0 from the sampleGW coordinator, judged from the pcap |
-| `zigbee-phy6252-ts0001` | the Tuya TS0001 relay (PHY6222 on the host ROM stand-ins, NVM erased) scans, associates with the channel-11 sampleGW, gets the Transport Key and exchanges unicast NWK data, judged by `test_phy6252_ts0001_join.py` from the air sink, per transmitter |
+| `zigbee-phy6252-ts0001` | the Tuya TS0001 relay (PHY6222 on the host ROM stand-ins, NVM erased) scans, associates with the sampleGW (channel 15), gets the Transport Key and exchanges unicast NWK data, judged by `test_phy6252_ts0001_join.py` from the air sink, per transmitter |
 | `tlsr8258 + ca51 thermostat r02` | the ZT3L joins the coordinator and both UARTs of the two-chip board carry framed traffic |
 | `nrf52840-boot`, `zephyr-pm-wake`, `vendor-sleep-1s` | the existing scripts in `tests/firmware/` |
 

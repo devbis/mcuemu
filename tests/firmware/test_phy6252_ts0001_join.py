@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Verify the closed TS0001 image joins a coordinator's network on its own.
 
-The TS0001 scans channel 11 only, so COORDINATOR must form its network there
-(the Telink sampleGW built with DEFAULT_CHANNEL=11, see tests/ci/telink). Frames
-are attributed to a device by the air sink's transmitter label, never by the
-EUI inside the frame: another node can carry the same address.
+COORDINATOR is the Telink sampleGW (it forms its network on channel 15; the relay
+scans channels 11..26). Frames are attributed to a device by the air sink's
+transmitter label, never by the EUI inside the frame: another node can carry the
+same address.
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ def fail(message: str, output: str = "") -> int:
 def main() -> int:
     if len(sys.argv) not in (6, 7):
         print(
-            "usage: test_phy6252_ts0001_join.py EMULATOR COORDINATOR_CH11 "
+            "usage: test_phy6252_ts0001_join.py EMULATOR COORDINATOR "
             "FIRMWARE EFUSE RF_CALIBRATION [ROM]",
             file=sys.stderr,
         )

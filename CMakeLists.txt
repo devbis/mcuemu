@@ -457,14 +457,12 @@ if(MCUEMU_BUILD_TESTS)
             "Skipping firmware_phy6252_ts0001_boot: local TS0001 image and PHY6222 calibration inputs not found in firmware/")
     endif()
 
-    # The TS0001 joins a coordinator on channel 11 by itself (the Telink sampleGW built with
-    # DEFAULT_CHANNEL=11, tests/ci/telink: `-DAPP=sampleGW -DDEFAULT_CHANNEL=11`).
-    set(MCUEMU_PHY6252_CH11_COORDINATOR
-        "${CMAKE_CURRENT_SOURCE_DIR}/firmware/telink-gw-ch11.bin")
+    # The TS0001 joins the Telink sampleGW coordinator (channel 15) by itself.
+    set(MCUEMU_PHY6252_JOIN_COORDINATOR "${MCUEMU_SAMPLE_GW_FIRMWARE}")
     if(EXISTS "${MCUEMU_PHY6252_TS0001_FIRMWARE}" AND
        EXISTS "${MCUEMU_PHY6252_EFUSE}" AND
        EXISTS "${MCUEMU_PHY6252_RF_CALIBRATION}" AND
-       EXISTS "${MCUEMU_PHY6252_CH11_COORDINATOR}")
+       EXISTS "${MCUEMU_PHY6252_JOIN_COORDINATOR}")
         find_package(Python3 COMPONENTS Interpreter QUIET)
         if(Python3_Interpreter_FOUND)
             add_test(
@@ -472,7 +470,7 @@ if(MCUEMU_BUILD_TESTS)
                 COMMAND "${Python3_EXECUTABLE}"
                         "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_phy6252_ts0001_join.py"
                         "$<TARGET_FILE:mcuemu>"
-                        "${MCUEMU_PHY6252_CH11_COORDINATOR}"
+                        "${MCUEMU_PHY6252_JOIN_COORDINATOR}"
                         "${MCUEMU_PHY6252_TS0001_FIRMWARE}"
                         "${MCUEMU_PHY6252_EFUSE}"
                         "${MCUEMU_PHY6252_RF_CALIBRATION}")
@@ -486,7 +484,7 @@ if(MCUEMU_BUILD_TESTS)
         endif()
     else()
         message(STATUS
-            "Skipping firmware_phy6252_ts0001_join: local TS0001, PHY6222 inputs or the channel-11 sampleGW (firmware/telink-gw-ch11.bin) not found")
+            "Skipping firmware_phy6252_ts0001_join: local TS0001, PHY6222 inputs, or the sampleGW (firmware/samplegw_tb03f.bin) not found")
     endif()
 
     set(MCUEMU_ZEPHYR_PM_FIRMWARE

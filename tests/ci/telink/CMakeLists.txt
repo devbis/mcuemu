@@ -40,13 +40,6 @@ file(READ ${APP_DIR}/app_cfg.h APP_CFG)
 string(REPLACE "BOARD_8258_DONGLE//BOARD_8258_EVK_V1P2" "BOARD_8258_EVK_V1P2" APP_CFG "${APP_CFG}")
 file(WRITE ${APP_DIR}/app_cfg.h "${APP_CFG}")
 
-# Optional: the channel the coordinator forms its network on (the sample's default is 15).
-if(DEFAULT_CHANNEL AND EXISTS ${APP_DIR}/stack_cfg.h)
-    file(READ ${APP_DIR}/stack_cfg.h STACK_CFG)
-    string(REGEX REPLACE "#define DEFAULT_CHANNEL +[0-9]+" "#define DEFAULT_CHANNEL ${DEFAULT_CHANNEL}" STACK_CFG "${STACK_CFG}")
-    file(WRITE ${APP_DIR}/stack_cfg.h "${STACK_CFG}")
-endif()
-
 INCLUDE_DIRECTORIES(
     ${APP_DIR}
     ${SDK_PREFIX}/apps/common
