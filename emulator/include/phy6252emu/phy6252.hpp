@@ -82,6 +82,7 @@ private:
     std::uint64_t radio_rx_after_ns_{0};
     std::uint64_t radio_rx_deadline_cycle_{0};
     bool radio_tx_active_{false};
+    bool radio_tx_wait_for_rx_{false};
     bool radio_rx_active_{false};
     std::int8_t radio_rx_rssi_{-100};
     std::uint32_t spif_config_{0x80000000u};
@@ -101,6 +102,7 @@ private:
     bool unexported_init_hook_warned_{false};
     bool pendsv_dispatch_warning_logged_{false};
     bool ll_rand_warning_logged_{false};
+    bool radio_rtx_warning_logged_{false};
     bool baseband_irq_dispatch_warning_logged_{false};
     bool gpio_irq_dispatch_warning_logged_{false};
     bool gpio_control_warning_logged_{false};
@@ -149,7 +151,7 @@ private:
     std::uint32_t gpio_input_data() const noexcept;
     void update_gpio_irq();
     void notify_gpio(std::uint32_t changed);
-    void start_radio_tx();
+    void start_radio_tx(bool wait_for_rx = false);
     void schedule_radio_rx_timeout();
     void update_radio_irq();
     std::int8_t radio_energy_dbm(std::uint64_t at_ns) const;

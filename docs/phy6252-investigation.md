@@ -450,14 +450,19 @@ The PHY62 SDK places `ll_hw_*` declarations under its BLE controller, but the
 PHY+ example also uses those helpers for Zigbee. The four mode helpers write
 `0x000100` (`STX`), `0x010001` (`SRX`), `0x010102` (`TRX`), or `0x010103`
 (`RTX`) to LL+`0x04`, and write `7` to LL+`0x38`; `ll_hw_get_tr_mode()` returns
-the low nibble of LL+`0x04`. `ll_hw_go()` clears the `0x3fff` W1C status mask,
+the low nibble of LL+`0x04`. The PHY+ example uses `TRX` for a transmit that
+expects a response, setting an RX timeout before starting the operation. The
+model now transmits the FIFO frame, then listens until it receives a frame or
+the LL+`0x28` timeout expires; `MD` and `COK` or `RTO` report the result. `RTX`
+still remains register-only; triggering it logs that its operation is not
+modeled. `ll_hw_go()` clears the `0x3fff` W1C status mask,
 selects `MD`-only interrupts, triggers LL+`0x00`, and updates RF+`0x94` from
 the two RAM-resident TP calibration endpoints and the clamped RF channel index.
 `ll_hw_trigger()` only strobes LL+`0x00`. The model implements these contracts,
 IRQ status/mask/clear, FIFO reset, `ll_hw_get_irq_status`,
 `ll_hw_read_rfifo_zb`, and `read_current_fine_time` against the modeled
-baseband registers and FIFOs. Only standalone TX and RX modes currently drive
-the shared air; `TRX` and `RTX` remain register-only. The Zigbee FIFO helper
+baseband registers and FIFOs. Standalone TX/RX and the TRX response window
+drive the shared air. The Zigbee FIFO helper
 copies FIFO words containing the length byte, PSDU and FCS to firmware memory;
 it returns the copied word count (`1 + (blen >> 2)`) and writes `blen + 1` to
 `pktLen`, matching the SDK helper contract. SDK callers treat the high byte of
@@ -1092,6 +1097,13 @@ count as behavior of the current wrapper model. The current 15-second pcap
 still has no TS0001 frame; the callback ABI mismatch above now needs comparison
 against the exact ROM running on the relay before attributing the stall to the
 radio model.
+
+After implementing the PHY+ `TRX` response window, a current 15-second
+saved-state run with the sample gateway still captured only 19 gateway frames
+and no TS0001 transmission. A temporary trace at the LL trigger found no `STX`
+or `TRX` operation from the relay in this run. The missing frame therefore
+occurs before the model's TX/ACK operation is requested; implementing `TRX`
+alone does not unblock the saved-state network path.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables

@@ -524,6 +524,7 @@ void Phy6252::reset() {
     radio_rx_after_ns_ = 0;
     radio_rx_deadline_cycle_ = 0;
     radio_tx_active_ = false;
+    radio_tx_wait_for_rx_ = false;
     radio_rx_active_ = false;
     radio_rx_rssi_ = -100;
     timers_ = {};
@@ -556,6 +557,7 @@ void Phy6252::reset() {
     unexported_init_hook_warned_ = false;
     pendsv_dispatch_warning_logged_ = false;
     ll_rand_warning_logged_ = false;
+    radio_rtx_warning_logged_ = false;
     baseband_irq_dispatch_warning_logged_ = false;
     gpio_irq_dispatch_warning_logged_ = false;
     timer_irq_dispatch_warning_logged_.fill(false);
@@ -2679,6 +2681,7 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
                 radio_rx_deadline_cycle_ = 0;
                 // PHY_ABORT cancels controller completion but cannot retract a frame already on air.
                 radio_tx_active_ = false;
+                radio_tx_wait_for_rx_ = false;
             } else if ((ll_registers_[RadioLlBase + 0x04] & 7u) == 0) {
                 start_radio_tx();
             } else if ((ll_registers_[RadioLlBase + 0x04] & 7u) == 1) {
@@ -2687,6 +2690,15 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
                 schedule_radio_rx_timeout();
                 if (air_)
                     core_.request_service(core_.cycles() + 1);
+            } else if ((ll_registers_[RadioLlBase + 0x04] & 7u) == 2) {
+                // PHY62xx PHY+ uses TRX for TX followed by an RX response/ACK
+                // window, with its timeout programmed through LL+0x28.
+                start_radio_tx(true);
+            } else if ((ll_registers_[RadioLlBase + 0x04] & 7u) == 3 &&
+                       !radio_rtx_warning_logged_) {
+                std::fprintf(stderr,
+                             "PHY6252: LL RTX mode is not modeled; the trigger was ignored\n");
+                radio_rtx_warning_logged_ = true;
             }
             break;
         case 0x28:
@@ -3082,13 +3094,15 @@ std::int8_t Phy6252::radio_energy_dbm(std::uint64_t at_ns) const {
     return static_cast<std::int8_t>(std::clamp(strongest, -127.0, 0.0));
 }
 
-void Phy6252::start_radio_tx() {
+void Phy6252::start_radio_tx(bool wait_for_rx) {
     radio_rx_active_ = false;
     radio_rx_deadline_cycle_ = 0;
+    radio_tx_wait_for_rx_ = wait_for_rx;
     const std::uint32_t length = tx_fifo_.empty() ? 0 : tx_fifo_[0];
     if (length < 5 || length > 127 || tx_fifo_.size() < length - 1) {
         std::fprintf(stderr, "PHY6252: ignored radio TX command without a valid FIFO frame (length=%u, bytes=%zu)\n",
                      length, tx_fifo_.size());
+        radio_tx_wait_for_rx_ = false;
         return;
     }
     radio_tx_active_ = true;
@@ -3213,8 +3227,15 @@ void Phy6252::update_timer_irq(unsigned timer) {
 std::uint64_t Phy6252::service_radio(std::uint64_t now) {
     if (radio_tx_active_ && now >= radio_tx_end_cycle_) {
         radio_tx_active_ = false;
-        ll_registers_[RadioLlBase + 0x10] |= RadioIrqMd;
-        update_radio_irq();
+        if (radio_tx_wait_for_rx_) {
+            radio_tx_wait_for_rx_ = false;
+            radio_rx_active_ = true;
+            radio_rx_after_ns_ = core_.cycles_to_ns(now);
+            schedule_radio_rx_timeout();
+        } else {
+            ll_registers_[RadioLlBase + 0x10] |= RadioIrqMd;
+            update_radio_irq();
+        }
     }
 
     std::uint64_t next = radio_tx_active_ ? radio_tx_end_cycle_ :
