@@ -924,8 +924,13 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             }
         } else if (address == 0x10bbc) {
             // ll_hw_get_irq_status() returns LL_HW+0x10, whose bit layout is
-            // listed in ll_hw_drv.h (MD=0, COK=10, RTO=2, and so on).
-            core_.set_reg(0, ll_registers_[RadioLlBase + 0x10]);
+            // listed in ll_hw_drv.h (MD=0, COK=10, RTO=2, and so on). The
+            // compact status aliases belong to the PB-03F Zephyr MMIO driver;
+            // exposing them through this ROM API makes the TS0001 ROM treat a
+            // good RX status as an error because it interprets bits 0..1 as a
+            // two-bit result code.
+            core_.set_reg(0, ll_registers_[RadioLlBase + 0x10] &
+                             ~(RadioIrqCokZephyr | RadioIrqRtoZephyr));
         } else if (address == 0x11264 || address == 0x112a4 ||
                    address == 0x112b8 || address == 0x113c8) {
             // These generic PHY helpers select the modes declared in

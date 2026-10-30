@@ -577,7 +577,7 @@ int main() {
     CHECK((rom_test_chip.read(0x400300e8, 4) >> 24) == 50); // SDK RF RSSI is positive -dBm
     CHECK(rom_test_chip.read(0x40031054, 4) == (16u << 16)); // eight packet bytes plus two footers
     invoke_radio_rom(0x10bbc); // ll_hw_get_irq_status
-    CHECK(rom_test_chip.core().reg(0) == radio_irq_status);
+    CHECK(rom_test_chip.core().reg(0) == (radio_irq_status & ~((1u << 1) | (1u << 3))));
     constexpr std::uint32_t radio_packet = 0x1fff2300;
     constexpr std::uint32_t radio_length = 0x1fff2320;
     constexpr std::uint32_t radio_foot0 = 0x1fff2324;
