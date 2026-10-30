@@ -80,12 +80,20 @@ McuState Phy6252Mcu::run_until(std::uint64_t target_ns) {
             if (*end == ':') last = static_cast<std::uint32_t>(std::strtoull(end + 1, nullptr, 0));
         }
         chip_.core().set_pc_trace(time_ns() >= trace_from && time_ns() < trace_to ? &std::cerr : nullptr,
-                                  first, last, false);
+                                  first, last, std::getenv("MCUEMU_PHY6252_TRACE_REGS") != nullptr);
         std::uint32_t mmio_first = 0x40030000u, mmio_last = 0x40031fffu;
         if (const char *range = std::getenv("MCUEMU_PHY6252_TRACE_MMIO")) {
             char *end = nullptr;
             mmio_first = static_cast<std::uint32_t>(std::strtoull(range, &end, 0));
             if (*end == ':') mmio_last = static_cast<std::uint32_t>(std::strtoull(end + 1, nullptr, 0));
+        }
+        if (const char *watch = std::getenv("MCUEMU_PHY6252_WATCH_WRITE")) {
+            // "FIRST:LAST": log guest stores in that range during the trace window.
+            char *end = nullptr;
+            const auto first = static_cast<std::uint32_t>(std::strtoull(watch, &end, 0));
+            const auto last = *end == ':' ? static_cast<std::uint32_t>(std::strtoull(end + 1, nullptr, 0)) : first;
+            chip_.core().set_write_watch(time_ns() >= trace_from && time_ns() < trace_to ? &std::cerr : nullptr,
+                                         first, last);
         }
         chip_.set_mmio_trace(std::getenv("MCUEMU_PHY6252_TRACE_MMIO") && time_ns() >= trace_from &&
                                      time_ns() < trace_to ? &std::cerr : nullptr,

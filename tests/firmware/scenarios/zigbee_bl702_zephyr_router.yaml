@@ -1,0 +1,33 @@
+# CI scenario: the Zephyr zigbee_shell sample as a router on the BL702 (module XT-ZB1,
+# board dt_xt_zb1_devkit) joins the sampleGW coordinator. Judged from the pcap by
+# zigbee_air_check.py: it passes when the device gets an Association Response with status 0.
+# The image is a release of devbis/zephyr-tlsr8258 (docs/firmware-ci.md).
+version: 1
+
+world:
+  seed: 1
+  duration: 30s
+  radio:
+    - id: air0
+      model: log_distance
+      reference_loss_db: 40
+      path_loss_exponent: 2.5
+
+devices:
+  - id: coordinator
+    mcus:
+      - id: zb
+        model: tlsr8258
+        variant: F1K
+        firmware: ../../../firmware/telink-gw.bin
+        radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+  - include: ../../../examples/devices/bl702_xt_zb1.yaml
+    id: board
+    params:
+      firmware: ../../firmware/bl702-zephyr-router.bin
+      position: [4, 0, 1]
+      tx_power_dbm: 0
+
+attach:
+  - { endpoint: air0, sink: "pcap:air.pcap" }

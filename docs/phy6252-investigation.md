@@ -1267,32 +1267,66 @@ The Zephyr driver was then changed to the SDK bit layout (and to clear the
 the unit test checks that the status carries no bit 1 or 3 for a received
 frame.
 
-After the status fix the first-boot TS0001 image receives the coordinator's
-Beacon, but it does not join. An earlier version of this section reported a
+After the status fix the first-boot TS0001 image received the coordinator's
+Beacon but did not join. An earlier version of this section reported a
 successful join; that was wrong. The checks matched frames by the Association
 Request's source EUI `f6:89:7f:9b:74:38:c1:a4`, and the TLSR8258 sampleLight
 uses the same address, so the sampleLight's own association (and the NWK data
 that followed) was counted as the relay's. The air sink labels each frame with
-its transmitter, and it shows the relay sending nothing but one Beacon Request.
-The same applies to the saved-state "association" results recorded above
-(`0x3164`, `0x2554`): they are the sampleLight's.
+its transmitter, and it showed the relay sending nothing but one Beacon
+Request. The same applies to the saved-state "association" results recorded
+above (`0x3164`, `0x2554`): they are the sampleLight's.
 
-What the radio trace shows without a sampleLight, with the SDK sampleGW built
-for channel 11 (`tests/ci/telink` with `-DDEFAULT_CHANNEL=11`; the stock sample
-forms its network on channel 15, which the relay never scans):
+The relay now joins on its own. Three model errors stood in the way; each
+was found from the closed image's behaviour, decompiled with Ghidra (the
+`MCUEMU_PHY6252_*` debug variables below made that possible):
 
-- the relay sends one Beacon Request on channel 11 at 6.413 s, after the
-  GPIO8 release;
-- the coordinator answers with a Beacon (Association Permit set) at 6.433 s;
-- the relay transmits nothing more in 20 s. With the external ROM dump it
-  transmits nothing at all.
+1. **User-mode timers were one-shot.** In the DesignWare user-defined mode the
+   counter reloads LoadCount at zero and keeps running until the handler stops
+   it. The model disabled it after the first expiry. The stack starts timer 6
+   once with 15.36 ms (`0x3c00` us at 4 MHz) and counts ticks from its
+   interrupt; every delayed callback of the stack (scan duration, retries,
+   join timeout) is due in those ticks. With one tick ever counted, its scan
+   sat on channel 11 for ever, with or without a Beacon. Now the scan walks
+   channels 11..26 (about 0.26 s each) and associates.
+2. **A triggered TX read the FIFO immediately.** The baseband starts after the
+   TRX settle time (`ll_hw_set_trx_settle`: RF+0xbc = bb << 16 | afe << 8 | pll,
+   microseconds; the stack uses 0x580828 and 0x800828 for the ACK turnaround)
+   and reads the TX FIFO then. The stack triggers its ACK and writes the frame
+   right after, so the model sent nothing ("ignored radio TX command") and the
+   coordinator retried every frame. Registers other than that pair keep the
+   immediate start, so the Zephyr driver is unchanged.
+3. **ROM `LL_ENC_AES128_Encrypt0` takes (key, plaintext, ciphertext).** The
+   model had key and plaintext swapped. The dumped ROM loads its first argument
+   into the AES key registers and its second into the data registers (it is
+   standard AES on the byte order as given). The stack derives the Transport
+   Key's link-key hash with it, so the join failed with "Network steering was
+   not successful (status: -3)" right after the Transport Key arrived.
 
-`firmware_phy6252_ts0001_join` now checks this honestly (coordinator only,
-frames attributed by transmitter, Association Request from the relay itself,
-then a successful response and bidirectional NWK data). It fails today, so it
-is registered with `WILL_FAIL`; when the relay starts to associate it turns
-red, which is the cue to remove that property. The stack's reaction to the
-received Beacon is the next thing to trace.
+With the SDK sampleGW built for channel 11 (`tests/ci/telink` with
+`-DDEFAULT_CHANNEL=11`; the stock sample forms its network on channel 15, which
+the relay never scans) the first-boot image scans channels 11..26, sends its
+Association Request on channel 11 at 10.58 s, polls for the response after
+the 492 ms response wait, is assigned `0x9da4`, receives the Transport Key
+and logs `Joined network successfully` / `network state=6` at 11.72 s, then
+exchanges NWK data with the coordinator. `firmware_phy6252_ts0001_join` checks
+this alone with the coordinator (frames attributed by transmitter, the
+Association Request from the relay itself, a successful response and
+bidirectional NWK data) and runs in CI as `zigbee-phy6252-ts0001`.
+
+The external PHY6222 ROM does not reach that point with this image: the
+relay stays silent in 20 s on it (no UART output, no frame), unlike the Zephyr
+image. The host ROM stand-ins are used by the test.
+
+Debug aids in the sim adapter (environment variables, `mcuemu sim`):
+`MCUEMU_PHY6252_TRACE_PC="FROM_NS:TO_NS"` prints every executed instruction
+(`MCUEMU_PHY6252_TRACE_RANGE="FIRST:LAST"` limits the addresses,
+`MCUEMU_PHY6252_TRACE_REGS=1` adds the registers),
+`MCUEMU_PHY6252_TRACE_MMIO="FIRST:LAST"` logs register accesses in the window,
+`MCUEMU_PHY6252_WATCH_WRITE="FIRST:LAST"` logs guest stores to a RAM range and
+`MCUEMU_PHY6252_DUMP_SRAM="NS:PATH"` writes the 64 KiB SRAM at that time. The
+last two found the stuck tick counter and the state byte that the AES failure
+cleared.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
@@ -1356,5 +1390,5 @@ capture spells it `ky timer stop!`). At 30.454 s and 60.454 s, the stack report
 is `MiF=0x1918`, `Tim=131`, and `lMac=210`, compared with
 `MiF=0x18A0`, `Tim=122`, and `lMac=154` in the supplied capture. The local time
 remains zero, and no `On/Off` line appears. This offline replay checks the UART
-and local GPIO path. `firmware_phy6252_ts0001_join` is the acceptance test for
-the radio path and currently fails (the relay does not associate).
+and local GPIO path. `firmware_phy6252_ts0001_join` checks the radio path and the join with
+the coordinator.

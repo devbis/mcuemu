@@ -1036,11 +1036,13 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             core_.set_reg(15, saved[1] & ~1u);
             rom_branch = true;
         } else if (address == 0x3fdc) {
-            // SDK ROM symbol LL_ENC_AES128_Encrypt0(input, key, output).
+            // SDK ROM symbol LL_ENC_AES128_Encrypt0(key, plaintext, ciphertext). The dumped ROM
+            // loads its first argument into the AES key registers and its second into the data
+            // registers (the TS0001 stack's Transport Key decryption needs this order).
             crypto::Block input{}, key{};
             crypto::Block output{};
-            if (!core_.read_memory(core_.reg(0), input.data(), input.size()) ||
-                !core_.read_memory(core_.reg(1), key.data(), key.size())) {
+            if (!core_.read_memory(core_.reg(1), input.data(), input.size()) ||
+                !core_.read_memory(core_.reg(0), key.data(), key.size())) {
                 core_.set_reg(0, static_cast<std::uint32_t>(-22));
             } else {
                 output = crypto::aes128_encrypt(key, input);

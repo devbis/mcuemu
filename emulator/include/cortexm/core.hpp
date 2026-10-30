@@ -104,6 +104,9 @@ public:
         pc_last_ = last;
         pc_trace_regs_ = registers;
     }
+    // Debug aid: logs every guest store to [first, last] (pc, address, size, value) to `out`.
+    // Replaces an earlier watch; null turns it off. Flushes translated code.
+    void set_write_watch(std::ostream *out, std::uint32_t first, std::uint32_t last);
     // Logs the first stack pointer outside the caller-supplied valid range and
     // transitions back into range. The upper bound is inclusive for a stack
     // pointer at the top of memory.
@@ -115,6 +118,7 @@ public:
         msp_trace_initialized_ = psp_trace_initialized_ = false;
     }
 
+    std::ostream *write_watch_out() const noexcept { return write_watch_out_; }
     std::uint64_t cycles() const noexcept { return cycles_; }
     std::uint64_t instructions() const noexcept { return instructions_; }
     std::uint32_t clock_hz() const noexcept { return config_.clock_hz; }
@@ -174,6 +178,9 @@ private:
 
     Config config_;
     uc_struct *uc_{nullptr};
+    std::ostream *write_watch_out_{nullptr};
+    unsigned long write_watch_hook_{0};
+    bool write_watch_hooked_{false};
     std::unique_ptr<Impl> impl_;
     std::uint64_t cycles_{0};
     std::uint64_t clock_epoch_cycles_{0}, clock_epoch_ns_{0};

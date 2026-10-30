@@ -457,11 +457,8 @@ if(MCUEMU_BUILD_TESTS)
             "Skipping firmware_phy6252_ts0001_boot: local TS0001 image and PHY6222 calibration inputs not found in firmware/")
     endif()
 
-    # Acceptance test for the TS0001 joining a coordinator on channel 11 by itself
-    # (the Telink sampleGW built with DEFAULT_CHANNEL=11, tests/ci/telink). The relay
-    # sends its Beacon Request and receives the Beacon but does not associate yet, so
-    # the case is expected to fail: WILL_FAIL turns green when that changes, which is
-    # the signal to drop it.
+    # The TS0001 joins a coordinator on channel 11 by itself (the Telink sampleGW built with
+    # DEFAULT_CHANNEL=11, tests/ci/telink: `-DAPP=sampleGW -DDEFAULT_CHANNEL=11`).
     set(MCUEMU_PHY6252_CH11_COORDINATOR
         "${CMAKE_CURRENT_SOURCE_DIR}/firmware/telink-gw-ch11.bin")
     if(EXISTS "${MCUEMU_PHY6252_TS0001_FIRMWARE}" AND
@@ -481,8 +478,7 @@ if(MCUEMU_BUILD_TESTS)
                         "${MCUEMU_PHY6252_RF_CALIBRATION}")
             set_tests_properties(firmware_phy6252_ts0001_join PROPERTIES
                 TIMEOUT 900
-                WILL_FAIL TRUE
-                LABELS "firmware;zigbee;phy6252;tuya;known-failing"
+                LABELS "firmware;zigbee;phy6252;tuya"
             )
         else()
             message(STATUS

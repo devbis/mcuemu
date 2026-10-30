@@ -546,6 +546,31 @@ void Core::set_vtor(std::uint32_t address) {
         uc_arm_nvic(uc_, UC_ARM_NVIC_SCS_WRITE, 0xd08, &address, 4);
 }
 
+namespace {
+void write_watch_hook(uc_engine *uc, uc_mem_type, std::uint64_t address, int size, std::int64_t value,
+                      void *user) {
+    auto *core = static_cast<Core *>(user);
+    std::uint32_t pc = 0;
+    uc_reg_read(uc, UC_ARM_REG_PC, &pc);
+    if (auto *out = core->write_watch_out())
+        *out << "WATCH pc=0x" << std::hex << pc << " addr=0x" << address << std::dec << " size=" << size
+             << " value=0x" << std::hex << static_cast<std::uint64_t>(value) << std::dec
+             << " cycles=" << core->cycles() << '\n';
+}
+} // namespace
+
+void Core::set_write_watch(std::ostream *out, std::uint32_t first, std::uint32_t last) {
+    write_watch_out_ = out;
+    if (!uc_ || write_watch_hooked_)
+        return;
+    uc_hook hook = 0;
+    if (uc_hook_add(uc_, &hook, UC_HOOK_MEM_WRITE, reinterpret_cast<void *>(&write_watch_hook), this,
+                    first, last) == UC_ERR_OK) {
+        write_watch_hooked_ = true;
+        uc_ctl_flush_tb(uc_);
+    }
+}
+
 void Core::invalidate_code() {
     if (uc_)
         uc_ctl_flush_tb(uc_);

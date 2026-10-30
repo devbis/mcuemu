@@ -1277,7 +1277,7 @@ int main() {
     const std::uint32_t aes_output_address = BootImage::RamBase + 0x3080;
     CHECK(chip.core().write_memory(aes_input_address, aes_input.data(), aes_input.size()));
     CHECK(chip.core().write_memory(aes_key_address, aes_key.data(), aes_key.size()));
-    invoke_rom(0x3fdc, aes_input_address, aes_key_address, aes_output_address, 550);
+    invoke_rom(0x3fdc, aes_key_address, aes_input_address, aes_output_address, 550); // (key, plaintext, ciphertext)
     crypto::Block aes_output{};
     CHECK(chip.core().read_memory(aes_output_address, aes_output.data(), aes_output.size()));
     CHECK(aes_output == aes_expected);
@@ -1691,7 +1691,7 @@ int main() {
     CHECK(chip.core().write_memory(dispatch_slot, &no_dispatch, sizeof no_dispatch));
     const std::uint32_t wrapper_sp = chip.core().reg(13);
     chip.core().set_reg(4, 0x76543210);
-    invoke_rom(0x3fc4, aes_dispatch_input, aes_dispatch_key, aes_dispatch_output,
+    invoke_rom(0x3fc4, aes_dispatch_key, aes_dispatch_input, aes_dispatch_output,
                chip.core().cycles() + 8);
     CHECK(chip.core().reg(0) == 0);
     CHECK(chip.core().reg(4) == 0x76543210);
