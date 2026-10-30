@@ -1245,7 +1245,11 @@ application reports therefore do not establish an active Zigbee link. The
 remaining issue is above basic PHY TX/RX: either the saved network identity and
 parent state are still unmatched, or the closed stack is not reaching a valid
 MAC/NWK transmit request. The current evidence does not distinguish those
-causes.
+causes. A targeted LL-entry trace through 4.5 s, including the key press and
+Tuya reports, records an RX FIFO helper call but no TX FIFO writer, STX, GO, or
+trigger call. This locates the observed stall before those radio TX requests;
+it does not show whether the stack rejected the saved network state or failed
+inside another closed-stack contract.
 
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
