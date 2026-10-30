@@ -93,13 +93,15 @@ struct SBoxes {
 constexpr SBoxes make_sboxes() {
     SBoxes boxes;
     for (unsigned x = 0; x < 256; ++x) {
-        std::uint8_t inverse = 0;
-        if (x != 0)
-            for (unsigned y = 1; y < 256; ++y)
-                if (gmul(static_cast<std::uint8_t>(x), static_cast<std::uint8_t>(y)) == 1) {
-                    inverse = static_cast<std::uint8_t>(y);
-                    break;
-                }
+        // x^254 is the inverse of x in GF(2^8) and maps {00} to {00}. Square-and-
+        // multiply keeps the evaluation inside clang's constexpr step limit.
+        std::uint8_t inverse = 1;
+        std::uint8_t base = static_cast<std::uint8_t>(x);
+        for (unsigned e = 254; e; e >>= 1) {
+            if (e & 1)
+                inverse = gmul(inverse, base);
+            base = gmul(base, base);
+        }
         const auto s = static_cast<std::uint8_t>(inverse ^ rotl8(inverse, 1) ^ rotl8(inverse, 2) ^
                                                  rotl8(inverse, 3) ^ rotl8(inverse, 4) ^ 0x63);
         boxes.forward[x] = s;
