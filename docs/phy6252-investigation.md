@@ -1152,6 +1152,20 @@ or `TRX` operation from the relay in this run. The missing frame therefore
 occurs before the model's TX/ACK operation is requested; implementing `TRX`
 alone does not unblock the saved-state network path.
 
+An instruction trace of the first-boot run narrows that gap to the proprietary
+stack's event handling. The LMAC task first waits on FreeRTOS event group
+`0x1fffd2a0`; the deferred `0x20` event wakes it once, and its BDB dispatcher
+moves from state 0 to state 1. Later, Timer1 runs the image callback
+`0x1fff49d9`, which calls `0x1fff4cb4(1, 1)`. That function successfully queues
+the deferred `0x1fff65d5(group, 0x20)` callback, and the callback runs. At that
+second event-group update, however, the only listed waiter has item value
+`0x2`; the set bit `0x20` does not match, so the task is not unblocked and the
+BDB dispatcher does not run again. The trace still shows no `STX`/`TRX` call.
+This shows where the current closed-stack run stops before radio TX, but not
+why the waiter item changes from its earlier `0x81ffffff` value to `0x2`. That
+change remains the next investigation target; it is not evidence of a PHY
+transmitter defect.
+
 Run an image with `mcuemu run --model PHY6252 --firmware IMAGE --for 1s` or use
 the YAML model name `phy6252` in `sim`. `--trace-pc-range START:END` enables
 instruction tracing for a PC interval and prints registers on a fault.
