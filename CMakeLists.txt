@@ -465,6 +465,26 @@ if(MCUEMU_BUILD_TESTS)
         endif()
     endif()
 
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/firmware/zephyr-router-tick-start-no-retry.bin" AND
+       EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/firmware/zephyr-router-tick-start-retry.bin" AND
+       EXISTS "${MCUEMU_SAMPLE_GW_FIRMWARE}")
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            add_test(
+                NAME firmware_zephyr_tick_start
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_zephyr_tick_start.py"
+                        "$<TARGET_FILE:mcuemu>"
+                        "${MCUEMU_SAMPLE_GW_FIRMWARE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/firmware/zephyr-router-tick-start-no-retry.bin"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/firmware/zephyr-router-tick-start-retry.bin")
+            set_tests_properties(firmware_zephyr_tick_start PROPERTIES
+                TIMEOUT 600
+                LABELS "firmware;zigbee"
+            )
+        endif()
+    endif()
+
     set(MCUEMU_NRF52840_SENSOR_FIRMWARE
         "${CMAKE_CURRENT_SOURCE_DIR}/firmware/nrf52840-sensor.bin")
     if(EXISTS "${MCUEMU_NRF52840_SENSOR_FIRMWARE}")

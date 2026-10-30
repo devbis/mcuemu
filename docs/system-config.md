@@ -30,6 +30,9 @@ devices:
         supply_mv: 3300    # tlsr8258 only: supply seen by the ADC's VBAT input (default 3300)
         start_at: 100us    # power-on delay on the world timeline
         flash_timing: true # tlsr8258 only: flash instruction-cache and register-bus timing (default true)
+        tick_start_settle: 30us # tlsr8258 only: a system timer START this soon after a STOP is ignored (default off)
+        tick_start_jitter: 15us # tlsr8258 only: random +- on that window, redrawn at every STOP (needs tick_start_settle)
+        tick_start_seed: 3      # tlsr8258 only: seed of that draw (default 1; every device draws its own sequence)
         rtt: { address: 0x20000100 }   # optional: SEGGER RTT control block
         radio:             # optional: attach to a medium
           air: air0
