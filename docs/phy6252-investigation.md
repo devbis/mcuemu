@@ -224,21 +224,24 @@ starting at `0x1fff28f1`. Its XIP initializer at `0x110148d0` writes that entry
 to the callback slot. The surrounding routine uses `r0` as a mode value and the
 block at `0x1fff2984` returns `0x12` for values other than 0 or 1. The dumped
 ROM's wrapper leaves the callback address in `r0`, so this image and ROM dump
-appear to have an incompatible IRQ callback ABI. That is a concrete candidate
-for the stalled TS0001 radio path, but it is not proven to be the cause: the
+appear to have an incompatible IRQ callback ABI. This remains a concrete
+version-mismatch observation, but the callback argument alone does not explain
+the stalled radio path: changing it has not changed the tested execution. The
 relay may use a different ROM revision, and no hardware register trace is
-available. Under the modeled wrapper, the 15-second network run contains only
-16 coordinator Beacon Requests and 3 coordinator Data frames; TS0001 sends
-none. The dump remains an external analysis input; no ROM bytes or Ghidra
+available. The dump remains an external analysis input; no ROM bytes or Ghidra
 project files are stored in the repository.
 
 A diagnostic experiment temporarily passed `r0=0` and `r0=1` to the saved-state
-TS0001 callback instead of the callback address. Both 15-second captures were
-byte-identical to the pointer-in-`r0` run: 19 coordinator frames and no TS0001
-transmission. Neither accepted scalar value is sufficient to resume the
-outbound radio path. The emulator retains the ROM-disassembly-based pointer
-argument; the experiment does not validate the callback ABI for the relay's
-actual ROM revision.
+TS0001 callback instead of the callback address. In a stronger 20-second
+first-boot run, all three variants (pointer, zero, one) produced byte-identical
+UART logs and pcaps (SHA-256 `64874e20bdd2c8fdc7e886482af7e674e72527be622d19c9e6763f1400f8fa03`
+and `67dad0098c9382feb206057edd518688aeb0be4c6c867fab42e4820837ebf2f7`,
+respectively). Each pcap has 76 frames: the coordinator formed an active
+channel-11 network, sampleLight joined as `0x3acc` and exchanged NWK data, but
+TS0001 emitted no frame. Substituting either scalar therefore has no observable
+effect in this scenario. Keep the ROM-disassembly-based pointer argument. This
+comparison does not establish the callback ABI used by the relay's actual ROM
+revision or identify why its application never requests transmission.
 
 The supplied `SoC_info.txt` reports the attached flash ID as `0x1364c8` and a
 512 KiB capacity. The external-ROM path accepts the SDK's three-byte `RDID`
@@ -1093,10 +1096,12 @@ A pre-ABI-fix LL trace of a same-channel first-boot run saw 317
 channel 26, with no `STX`, `TRX`, or `RTX` calls and no TX FIFO data. That run
 used the earlier host trap, which preserved the interrupted `r0` instead of
 matching the supplied ROM's callback call. Do not treat its repeated-receive
-count as behavior of the current wrapper model. The current 15-second pcap
-still has no TS0001 frame; the callback ABI mismatch above now needs comparison
-against the exact ROM running on the relay before attributing the stall to the
-radio model.
+count as behavior of the current wrapper model. The stronger three-variant
+comparison above confirms the current run also emits no TS0001 frame, but did
+not capture an LL trigger trace for each argument variant. The remaining gap is
+in the proprietary stack's transition from commissioning/RX state to its first
+TX request; the tested callback argument and the modeled TX/ACK path have not
+been shown to cause the stall.
 
 After implementing the PHY+ `TRX` response window, a current 15-second
 saved-state run with the sample gateway still captured only 19 gateway frames
