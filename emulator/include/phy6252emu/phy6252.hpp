@@ -57,6 +57,8 @@ private:
     std::string radio_node_;
     std::uint64_t radio_tx_end_cycle_{0};
     std::uint64_t radio_rx_after_ns_{0};
+    std::uint64_t radio_rx_deadline_cycle_{0};
+    std::uint32_t radio_rx_timeout_us_{0};
     bool radio_tx_active_{false};
     bool radio_rx_active_{false};
     std::int8_t radio_rx_rssi_{-100};
@@ -71,13 +73,16 @@ private:
     bool sleep_allowed_{false};
     std::uint32_t sleep_mode_{0};
     bool unexported_init_hook_warned_{false};
+    bool pendsv_dispatch_warning_logged_{false};
+    bool ll_rand_warning_logged_{false};
+    bool baseband_irq_dispatch_warning_logged_{false};
+    bool gpio_irq_dispatch_warning_logged_{false};
+    std::array<bool, 6> timer_irq_dispatch_warning_logged_{};
     bool ll_context_warning_logged_{false};
-    bool ll_rx_timeout_warning_logged_{false};
-    bool ble_srx_warning_logged_{false};
-    bool ble_settle_warning_logged_{false};
-    bool ble_fifo_warning_logged_{false};
-    bool ble_mode_warning_logged_{false};
+    bool ll_settle_warning_logged_{false};
+    bool rf_sample_e8_warning_logged_{false};
     std::uint32_t heap_start_{0}, heap_size_{0};
+    std::uint32_t random_state_{0x6d2b79f5};
     std::map<std::uint32_t, std::uint32_t> free_heap_blocks_;
     std::unordered_map<std::uint32_t, std::uint32_t> heap_allocations_;
     std::string pending_fault_;
@@ -86,7 +91,7 @@ private:
         bool interrupt_pending{false};
         std::uint64_t last_cycle{0}, cycle_remainder{0};
     };
-    std::array<TimerState, 2> timers_{};
+    std::array<TimerState, 6> timers_{};
     std::uint32_t gpio_data_{0}, gpio_direction_{0};
     std::uint32_t gpio_interrupt_enable_{0}, gpio_interrupt_mask_{0x007fffff};
     std::uint32_t gpio_interrupt_type_{0}, gpio_interrupt_polarity_{0};
@@ -103,6 +108,7 @@ private:
     void update_gpio_irq();
     void notify_gpio(std::uint32_t changed);
     void start_radio_tx();
+    void schedule_radio_rx_timeout();
     void update_radio_irq();
     std::int8_t radio_energy_dbm(std::uint64_t at_ns) const;
     void rom_log_printf();

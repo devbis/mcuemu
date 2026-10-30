@@ -11,6 +11,7 @@
 #include <limits>
 #include <span>
 #include <stdexcept>
+#include <utility>
 
 namespace phy6252emu {
 namespace {
@@ -20,17 +21,21 @@ cortexm::Core::Config config() {
     c.clock_hz = 16000000;
     c.irq_count = 32;
     c.priority_bits = 2;
+    c.vtor_present = false;
     c.track_last_instruction_pc = true;
     return c;
 }
 constexpr std::uint32_t RomSize = 0x18000, UartBase = 0x40004000;
+constexpr std::uint32_t RomNmiHandler = 0x8481;
+constexpr std::uint32_t RomHardFaultHandler = 0x28f1;
+constexpr std::uint32_t RomPendSvHandler = 0x84cd;
 constexpr std::uint32_t TimerBase = 0x40001000;
+constexpr unsigned TimerCount = 6;
+constexpr std::uint32_t TimerRegisterStride = 0x14;
 constexpr std::uint32_t WatchdogBase = 0x40002000;
 constexpr std::uint32_t WatchdogControl = WatchdogBase;
 constexpr std::uint32_t WatchdogTimeout = WatchdogBase + 0x04;
 constexpr std::uint32_t WatchdogIrq = 10;
-constexpr std::uint32_t Timer5Base = TimerBase + 0x50;
-constexpr std::uint32_t Timer6Base = TimerBase + 0x64;
 constexpr std::uint32_t GpioBase = 0x40008000;
 constexpr std::uint32_t DmaBase = 0x40010000;
 constexpr std::uint32_t DmaChannel3Sar = DmaBase + 0x108;
@@ -113,8 +118,24 @@ constexpr std::uint32_t RadioRxFifoSize = 0x800;
 constexpr std::uint32_t RadioBasebandMemoryEnd = RadioRxFifo + RadioRxFifoSize;
 constexpr unsigned RadioIrq = 4;
 constexpr std::uint32_t RadioIrqMd = 1u << 0;
-constexpr std::uint32_t RadioIrqCok = 1u << 1;
-constexpr std::uint32_t RadioIrqMask = 0x1f;
+constexpr std::uint32_t RadioIrqCok = 1u << 10;
+// The PB-03F Zephyr driver reads the LL status register directly and uses a
+// compact five-bit IRQ layout, while the SDK ROM API exposes the BLE LL bits.
+constexpr std::uint32_t RadioIrqCokZephyr = 1u << 1;
+constexpr std::uint32_t RadioIrqRto = 1u << 2;
+constexpr std::uint32_t RadioIrqRtoZephyr = 1u << 3;
+constexpr std::uint32_t RadioIrqMask = 0x3fffu;
+constexpr std::uint32_t RadioModeStx = 0x00;
+constexpr std::uint32_t RadioModeSrx = 0x01;
+constexpr std::uint32_t RadioModeTrx = 0x10;
+constexpr std::uint32_t RadioModeRtx = 0x12;
+constexpr std::uint32_t RomLlIrqHandler = 0x4e25;
+constexpr std::uint32_t RomGpioIrqHandler = 0x112d;
+constexpr std::uint32_t RomTimerIrqDispatch = 0x17ff1; // Private host trap; no exported ROM symbol.
+constexpr std::uint32_t JumpTableBase = BootImage::RamBase;
+constexpr std::uint32_t BasebandIrqJumpSlot = 228;
+constexpr std::uint32_t GpioIrqJumpSlot = 240;
+constexpr std::uint32_t Timer1IrqJumpSlot = 244;
 constexpr std::uint64_t RadioPollCycles = 256; // 16 us at the 16 MHz core clock
 constexpr std::uint32_t GpioMask = 0x007fffff;
 constexpr std::uint32_t TimerEnable = 1u << 0;
@@ -137,7 +158,7 @@ bool phy_rf_register(std::uint32_t offset) {
     case 0x00: case 0x0c: case 0x40: case 0x48: case 0x4c:
     case 0x80: case 0x90: case 0x94: case 0xb0: case 0xb4: case 0xb8:
     case 0xcc: case 0xd0: case 0xd4: case 0xd8: case 0xdc: case 0xe0:
-    case 0xe4: case 0x104: case 0x108: case 0x10c:
+    case 0xe4: case 0xe8: case 0x104: case 0x108: case 0x10c:
         return true;
     default:
         return false;
@@ -168,6 +189,18 @@ std::uint32_t lane_write(std::uint32_t old, std::uint32_t value,
     const unsigned shift = (address & 3u) * 8;
     const std::uint32_t mask = (size == 1 ? 0xffu : 0xffffu) << shift;
     return (old & ~mask) | ((value << shift) & mask);
+}
+
+std::uint16_t ieee802154_fcs(std::span<const std::uint8_t> payload) {
+    // The radio validates the received frame and exposes its FCS in the FIFO;
+    // VirtualAir intentionally carries only the MAC bytes between devices.
+    std::uint16_t crc = 0;
+    for (const std::uint8_t byte : payload) {
+        crc ^= byte;
+        for (unsigned bit = 0; bit < 8; ++bit)
+            crc = static_cast<std::uint16_t>((crc & 1u) ? (crc >> 1) ^ 0x8408u : crc >> 1);
+    }
+    return crc;
 }
 
 struct PhySecResult {
@@ -243,15 +276,17 @@ void phy_sec_crc_result(std::span<const std::uint8_t> input, PhySecResult &resul
 }
 
 int timer_index(std::uint32_t aligned) {
-    if (aligned >= Timer5Base && aligned <= Timer5Base + 0x10)
-        return 0;
-    if (aligned >= Timer6Base && aligned <= Timer6Base + 0x10)
-        return 1;
-    return -1;
+    if (aligned < TimerBase)
+        return -1;
+    const std::uint32_t offset = aligned - TimerBase;
+    const unsigned timer = offset / TimerRegisterStride;
+    if (timer >= TimerCount || offset % TimerRegisterStride > 0x10)
+        return -1;
+    return static_cast<int>(timer);
 }
 
 std::uint32_t timer_base(unsigned timer) {
-    return timer == 0 ? Timer5Base : Timer6Base;
+    return TimerBase + timer * TimerRegisterStride;
 }
 }
 
@@ -303,6 +338,21 @@ void Phy6252::reset() {
     if (!run_address_)
         throw std::runtime_error("PHY6252 firmware has not been loaded");
     std::fill_n(vector_alias_, 0x100, 0);
+    const std::array<std::pair<unsigned, std::uint32_t>, 3> rom_vectors = {{
+        {2, RomNmiHandler}, {3, RomHardFaultHandler}, {14, RomPendSvHandler},
+    }};
+    for (const auto &[index, handler] : rom_vectors)
+        std::memcpy(vector_alias_ + index * sizeof(std::uint32_t), &handler, sizeof handler);
+    const std::array<std::pair<unsigned, std::uint32_t>, 2> irq_vectors = {{
+        {16 + 4, RomLlIrqHandler}, {16 + 16, RomGpioIrqHandler},
+    }};
+    for (const auto &[index, handler] : irq_vectors)
+        std::memcpy(vector_alias_ + index * sizeof(std::uint32_t), &handler, sizeof handler);
+    for (unsigned timer = 0; timer < TimerCount; ++timer) {
+        const std::uint32_t handler = RomTimerIrqDispatch;
+        const unsigned vector = 16 + 20 + timer;
+        std::memcpy(vector_alias_ + vector * sizeof handler, &handler, sizeof handler);
+    }
     std::copy(boot_ram_.begin(), boot_ram_.end(), ram_);
     lcr_ = ier_ = dll_ = dlm_ = mcr_ = scratch_ = 0;
     rx_.clear();
@@ -315,6 +365,8 @@ void Phy6252::reset() {
     rx_fifo_read_ = 0;
     radio_tx_end_cycle_ = 0;
     radio_rx_after_ns_ = 0;
+    radio_rx_deadline_cycle_ = 0;
+    radio_rx_timeout_us_ = 0;
     radio_tx_active_ = false;
     radio_rx_active_ = false;
     radio_rx_rssi_ = -100;
@@ -334,13 +386,16 @@ void Phy6252::reset() {
     sleep_allowed_ = false;
     sleep_mode_ = 0;
     unexported_init_hook_warned_ = false;
+    pendsv_dispatch_warning_logged_ = false;
+    ll_rand_warning_logged_ = false;
+    baseband_irq_dispatch_warning_logged_ = false;
+    gpio_irq_dispatch_warning_logged_ = false;
+    timer_irq_dispatch_warning_logged_.fill(false);
     ll_context_warning_logged_ = false;
-    ll_rx_timeout_warning_logged_ = false;
-    ble_srx_warning_logged_ = false;
-    ble_settle_warning_logged_ = false;
-    ble_fifo_warning_logged_ = false;
-    ble_mode_warning_logged_ = false;
+    ll_settle_warning_logged_ = false;
+    rf_sample_e8_warning_logged_ = false;
     heap_start_ = heap_size_ = 0;
+    random_state_ = 0x6d2b79f5u;
     free_heap_blocks_.clear();
     heap_allocations_.clear();
     pending_fault_.clear();
@@ -366,6 +421,30 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
         auto result = core_.run(until_cycle);
         const auto pc = core_.pc();
         if (result.reason == cortexm::StopReason::Reset && !pending_fault_.empty()) {
+            std::uint32_t vtor = 0;
+            std::array<std::uint32_t, 16> vectors{};
+            const bool have_vector_table = core_.read_memory(0xe000ed08, &vtor, sizeof vtor) &&
+                vtor >= BootImage::RamBase &&
+                static_cast<std::uint64_t>(vtor) + sizeof vectors <=
+                    static_cast<std::uint64_t>(BootImage::RamBase) + BootImage::RamSize &&
+                core_.read_memory(vtor, vectors.data(), sizeof vectors);
+            if (have_vector_table) {
+                char context[192];
+                std::snprintf(context, sizeof context,
+                              " VTOR=0x%08x initial_sp=0x%08x hardfault=0x%08x pendsv=0x%08x",
+                              vtor, vectors[0], vectors[3], vectors[14]);
+                pending_fault_ += context;
+            } else if (core_.read_memory(0xe000ed08, &vtor, sizeof vtor)) {
+                char context[40];
+                std::snprintf(context, sizeof context, " VTOR=0x%08x", vtor);
+                pending_fault_ += context;
+            }
+            if (const std::uint8_t *handler = core_.host_pointer(pc & ~1u, 4)) {
+                char context[48];
+                std::snprintf(context, sizeof context, " handler_bytes=%02x%02x%02x%02x",
+                              handler[0], handler[1], handler[2], handler[3]);
+                pending_fault_ += context;
+            }
             result.reason = cortexm::StopReason::Fault;
             result.message = std::move(pending_fault_);
             pending_fault_.clear();
@@ -435,66 +514,134 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                               pc, numerator, core_.reg(14));
                 return {cortexm::StopReason::Fault, message};
             }
+        } else if (address == 0x0f74) {
+            // ARM runtime __aeabi_uread4 performs an unaligned little-endian
+            // 32-bit load. The M0 core uses this helper for such accesses.
+            std::array<std::uint8_t, 4> bytes{};
+            if (!core_.read_memory(core_.reg(0), bytes.data(), bytes.size()))
+                return {cortexm::StopReason::Fault,
+                        "invalid pointer passed to PHY6252 __aeabi_uread4"};
+            core_.set_reg(0, static_cast<std::uint32_t>(bytes[0]) |
+                             (static_cast<std::uint32_t>(bytes[1]) << 8) |
+                             (static_cast<std::uint32_t>(bytes[2]) << 16) |
+                             (static_cast<std::uint32_t>(bytes[3]) << 24));
         } else if (address == 0x16b14) {
             // SDK ROM rtc_get_counter() exposes the AON 32.768 kHz counter.
             core_.set_reg(0, rtc_count(core_.cycles_to_ns(core_.cycles())));
+        } else if (address == 0x16c2c) {
+            // SDK declares set_timer(AP_TIM_TypeDef *, int). The exported body
+            // is absent; match the load/control sequence in timer.c's
+            // hal_timer_set_loadtimer() for the observed Timer1 call path.
+            const std::uint32_t base = core_.reg(0);
+            const std::int32_t time = static_cast<std::int32_t>(core_.reg(1));
+            const int timer = timer_index(base);
+            if (timer < 0 || base != timer_base(static_cast<unsigned>(timer)) ||
+                time > std::numeric_limits<std::int32_t>::max() / 4) {
+                char message[160];
+                std::snprintf(message, sizeof message,
+                              "invalid PHY6252 set_timer(base=0x%08x, time=%d)", base, time);
+                return {cortexm::StopReason::Fault, message};
+            }
+            write_register(base + 0x08, 0, 4);
+            if (time > 0) {
+                write_register(base + 0x08, TimerUserMode, 4);
+                write_register(base, static_cast<std::uint32_t>(time) * 4u, 4);
+                write_register(base + 0x08, TimerEnable | TimerUserMode, 4);
+            }
+        } else if (address == 0x10adc) {
+            // ll_hw_clr_irq() writes the SDK's 14-bit IRQ mask to the W1C
+            // status register (same sequence as phy_hw_go() in PHY+).
+            write_register(RadioLlBase + 0x14, 0x3fffu, 4);
+        } else if (address == 0x10cf8 || address == 0x11420) {
+            // Both exported entries start the mode configured in LL_HW+0x04.
+            write_register(RadioLlBase, 1, 4);
+        } else if (address == 0x11174) {
+            // ll_hw_set_irq(mask) maps to LL_HW+0x0c, as the SDK's PHY+
+            // implementation documents with its direct register setup.
+            write_register(RadioLlBase + 0x0c, core_.reg(0), 4);
+        } else if (address == 0x10f50) {
+            // ll_hw_read_rfifo_zb(rxPkt, pktLen, pktFoot0, pktFoot1) copies
+            // the FIFO's length byte followed by the PSDU and its FCS.
+            const std::uint32_t packet = core_.reg(0);
+            const std::uint32_t length_out = core_.reg(1);
+            const std::uint32_t foot0_out = core_.reg(2);
+            const std::uint32_t foot1_out = core_.reg(3);
+            const std::uint16_t packet_length = rx_fifo_[0];
+            const std::uint32_t foot0 =
+                (static_cast<std::uint32_t>(static_cast<std::uint8_t>(radio_rx_rssi_)) << 24) | 2u;
+            constexpr std::uint32_t foot1 = 0;
+            const std::size_t fifo_bytes = static_cast<std::size_t>(packet_length) + 1;
+            const bool valid = packet_length >= 2 && packet_length <= 127 &&
+                packet != 0 && length_out != 0 && foot0_out != 0 && foot1_out != 0 &&
+                core_.write_memory(packet, rx_fifo_.data(), fifo_bytes) &&
+                core_.write_memory(length_out, &packet_length, sizeof packet_length) &&
+                core_.write_memory(foot0_out, &foot0, sizeof foot0) &&
+                core_.write_memory(foot1_out, &foot1, sizeof foot1);
+            if (valid) {
+                rx_fifo_read_ = fifo_bytes;
+                core_.set_reg(0, 0); // LL_STATUS_SUCCESS
+            } else {
+                core_.set_reg(0, 1);
+            }
+        } else if (address == 0x10bbc) {
+            // ll_hw_get_irq_status() returns LL_HW+0x10, whose bit layout is
+            // listed in ll_hw_drv.h (MD=0, COK=10, RTO=2, and so on).
+            core_.set_reg(0, ll_registers_[RadioLlBase + 0x10]);
+        } else if (address == 0x11264 || address == 0x112a4 ||
+                   address == 0x112b8 || address == 0x113c8) {
+            // These generic PHY helpers select the modes declared in
+            // ll_hw_drv.h. PHY+ uses them for Zigbee as well as BLE.
+            const std::uint32_t mode = address == 0x11264 ? RadioModeRtx :
+                address == 0x112a4 ? RadioModeSrx :
+                address == 0x112b8 ? RadioModeStx : RadioModeTrx;
+            ll_registers_[RadioLlBase + 0x04] = mode;
+        } else if (address == 0x110b0) {
+            rx_fifo_.fill(0);
+            rx_fifo_read_ = 0;
+        } else if (address == 0x110e8) {
+            tx_fifo_.clear();
         } else if (address == 0x11278 || address == 0x11284) {
-            // These SDK entries are ll_hw_set_rx_timeout() and
-            // ll_hw_set_rx_timeout_1st(), each taking a uint32_t.
-            // Their BLE receive-timeout register effect is outside the 802.15.4 model.
-            if (!ll_rx_timeout_warning_logged_) {
-                std::fprintf(stderr,
-                             "PHY6252: BLE ll_hw_set_rx_timeout entry 0x%05x reached; RF timeout effect is not modeled\n",
-                             address);
-                ll_rx_timeout_warning_logged_ = true;
-            }
-        } else if (address == 0x112a4) {
-            // SDK ll_hw_set_srx() selects BLE receive mode; it has no
-            // equivalent in this model's IEEE 802.15.4 radio.
-            if (!ble_srx_warning_logged_) {
-                std::fprintf(stderr,
-                             "PHY6252: BLE ll_hw_set_srx reached; BLE RF mode is not modeled\n");
-                ble_srx_warning_logged_ = true;
-            }
+            // The PHY+ SDK wrapper names this parameter rxTimeOutUs. The
+            // timeout is applied to an active receive and reused by the next.
+            radio_rx_timeout_us_ = core_.reg(0);
+            if (radio_rx_active_)
+                schedule_radio_rx_timeout();
         } else if (address == 0x113dc) {
-            // SDK ll_hw_set_trx_settle(tmBb, tmAfe, tmPll) configures BLE
-            // turnaround timing, which is distinct from the 802.15.4 MAC path.
-            if (!ble_settle_warning_logged_) {
+            // The SDK exposes three settle values, but the available sources
+            // do not identify their backing registers or clock units.
+            if (!ll_settle_warning_logged_) {
                 std::fprintf(stderr,
-                             "PHY6252: BLE ll_hw_set_trx_settle reached; BLE timing is not modeled\n");
-                ble_settle_warning_logged_ = true;
-            }
-        } else if (address == 0x110b0 || address == 0x110e8) {
-            // SDK ll_hw_rst_rfifo()/ll_hw_rst_tfifo() reset BLE controller
-            // FIFOs, which are separate from the modeled 802.15.4 FIFOs.
-            if (!ble_fifo_warning_logged_) {
-                std::fprintf(stderr,
-                             "PHY6252: BLE ll_hw_rst_%s reached; BLE FIFO state is not modeled\n",
-                             address == 0x110b0 ? "rfifo" : "tfifo");
-                ble_fifo_warning_logged_ = true;
+                             "PHY6252: ll_hw_set_trx_settle reached (bb=%u afe=%u pll=%u); timing effect is not modeled\n",
+                             core_.reg(0), core_.reg(1), core_.reg(2));
+                ll_settle_warning_logged_ = true;
             }
         } else if (address == 0x10cdc) {
-            // The SDK exports ll_hw_get_tr_mode but omits its prototype in
-            // this header. With no BLE operation active, report idle and log.
-            if (!ble_mode_warning_logged_) {
-                std::fprintf(stderr,
-                             "PHY6252: BLE ll_hw_get_tr_mode reached; returning idle (BLE RF state is not modeled)\n");
-                ble_mode_warning_logged_ = true;
-            }
-            core_.set_reg(0, 0);
+            // Return the current LL_HW operation mode; the symbol is exported
+            // by the SDK ROM map but its declaration is omitted from headers.
+            core_.set_reg(0, ll_registers_[RadioLlBase + 0x04]);
+        } else if (address == 0x15cc8) {
+            // timer.h wraps fine-time deltas at BASE_TIME_UNITS. Core cycles
+            // are the only exposed 16 MHz clock in this model.
+            core_.set_reg(0, static_cast<std::uint32_t>(core_.cycles()) & 0x3fffffu);
         } else if (address == 0xace0) {
-            // The TS0001 image calls efuse_read(1, buffer) and consumes eight
-            // bytes. The supplied board log reports the two RF cap bytes;
-            // remaining calibration bytes are unavailable from the flash dump.
+            // The SDK names this entry but omits its prototype. The simple
+            // block/buffer path is only a test fixture; TS0001 passes more
+            // arguments and its output layout is still unknown.
             const std::uint32_t block = core_.reg(0);
             const std::uint32_t destination = core_.reg(1);
             constexpr std::array<std::uint8_t, 8> rf_calibration = {
                 0x2b, 0x23, 0, 0, 0, 0, 0, 0};
-            if (block != 1 || !core_.write_memory(destination, rf_calibration.data(),
-                                                   rf_calibration.size())) {
-                core_.set_reg(0, static_cast<std::uint32_t>(-22));
+            if (block == 1 && core_.reg(2) == 0 && core_.reg(3) == 0) {
+                if (!core_.write_memory(destination, rf_calibration.data(),
+                                        rf_calibration.size()))
+                    core_.set_reg(0, static_cast<std::uint32_t>(-22));
+                else
+                    core_.set_reg(0, 0);
             } else {
-                core_.set_reg(0, 0); // efuse_read returns zero on success in this image.
+                std::fprintf(stderr,
+                             "PHY6252: unverified efuse_read call (block=%u r1=0x%08x r2=0x%08x r3=0x%08x lr=0x%08x); leaving memory unchanged\n",
+                             block, destination, core_.reg(2), core_.reg(3), core_.reg(14));
+                core_.set_reg(0, block == 1 ? 0 : static_cast<std::uint32_t>(-22));
             }
         } else if (address == 0x3fdc) {
             // SDK ROM symbol LL_ENC_AES128_Encrypt0(input, key, output).
@@ -669,6 +816,33 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                 }
                 core_.set_reg(0, 0); // LL_STATUS_SUCCESS for unused BLE context setup.
             }
+        } else if (address == 0x5e04) {
+            // SDK LL_Rand(buffer, length) accepts lengths from 1 to 255 and
+            // returns an LL status. Use a deterministic PRNG for repeatable
+            // simulation; this is not a cryptographic random source.
+            const std::uint32_t destination = core_.reg(0);
+            const std::uint32_t length = core_.reg(1);
+            if (length == 0 || length > 255) {
+                core_.set_reg(0, 0x12); // LL_STATUS_ERROR_BAD_PARAMETER
+            } else {
+                std::vector<std::uint8_t> bytes(length);
+                for (std::uint8_t &byte : bytes) {
+                    random_state_ ^= random_state_ << 13;
+                    random_state_ ^= random_state_ >> 17;
+                    random_state_ ^= random_state_ << 5;
+                    byte = static_cast<std::uint8_t>(random_state_ >> 24);
+                }
+                if (!core_.write_memory(destination, bytes.data(), bytes.size())) {
+                    core_.set_reg(0, 0x12);
+                } else {
+                    if (!ll_rand_warning_logged_) {
+                        std::fprintf(stderr,
+                                     "PHY6252: LL_Rand uses deterministic non-cryptographic bytes\n");
+                        ll_rand_warning_logged_ = true;
+                    }
+                    core_.set_reg(0, 0); // LL_STATUS_SUCCESS
+                }
+            }
         } else if (address == 0x13ae4) {
             rom_log_printf();
         } else if (address == 0xa2e0) {
@@ -681,6 +855,95 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                 unexported_init_hook_warned_ = true;
             }
             core_.set_reg(0, 0);
+        } else if (address == (RomPendSvHandler & ~1u)) {
+            // The ROM body is unavailable, but this image installs FreeRTOS
+            // handlers in the observed exception callback slots at 0x1fff0374.
+            // Dispatch PendSV to its image-resident handler and expose its
+            // registered SysTick handler through the fixed vector alias.
+            std::array<std::uint32_t, 3> handlers{};
+            if (!core_.read_memory(0x1fff0374, handlers.data(), sizeof handlers) ||
+                (handlers[1] & 1u) == 0 || (handlers[2] & 1u) == 0 ||
+                (handlers[1] & ~1u) < BootImage::RamBase ||
+                (handlers[1] & ~1u) >= BootImage::RamBase + BootImage::RamSize ||
+                (handlers[2] & ~1u) < BootImage::RamBase ||
+                (handlers[2] & ~1u) >= BootImage::RamBase + BootImage::RamSize) {
+                return {cortexm::StopReason::Fault,
+                        "PHY6252 PendSV_Handler has no valid image callback"};
+            }
+            if (!pendsv_dispatch_warning_logged_) {
+                std::fprintf(stderr,
+                             "PHY6252: ROM PendSV body unavailable; dispatching registered image handlers PendSV=0x%08x SysTick=0x%08x (inferred callback slots)\n",
+                             handlers[1], handlers[2]);
+                pendsv_dispatch_warning_logged_ = true;
+            }
+            std::memcpy(vector_alias_ + 15 * sizeof(std::uint32_t),
+                        &handlers[2], sizeof handlers[2]);
+            core_.set_reg(15, handlers[1] & ~1u);
+            rom_branch = true;
+        } else if (address == (RomLlIrqHandler & ~1u) ||
+                   address == (RomGpioIrqHandler & ~1u)) {
+            const bool gpio_irq = address == (RomGpioIrqHandler & ~1u);
+            const std::uint32_t slot = gpio_irq ? GpioIrqJumpSlot : BasebandIrqJumpSlot;
+            const std::uint32_t jump_address = JumpTableBase + slot * sizeof(std::uint32_t);
+            std::uint32_t handler = 0;
+            const bool have_handler = core_.read_memory(jump_address, &handler, sizeof handler);
+            const std::uint32_t handler_address = handler & ~1u;
+            const bool handler_in_ram = handler_address >= BootImage::RamBase &&
+                handler_address < BootImage::RamBase + BootImage::RamSize;
+            const bool handler_in_flash = handler_address >= BootImage::FlashBase &&
+                handler_address < BootImage::FlashBase + BootImage::FlashSize;
+            if (!have_handler || (handler & 1u) == 0 ||
+                (!handler_in_ram && !handler_in_flash)) {
+                char message[160];
+                std::snprintf(message, sizeof message,
+                              "PHY6252 ROM %s IRQ vector has no valid JUMP_FUNCTION(%u) callback (0x%08x)",
+                              gpio_irq ? "GPIO" : "baseband", slot, handler);
+                return {cortexm::StopReason::Fault, message};
+            }
+            bool &logged = gpio_irq ? gpio_irq_dispatch_warning_logged_ :
+                                      baseband_irq_dispatch_warning_logged_;
+            if (!logged) {
+                std::fprintf(stderr,
+                             "PHY6252: ROM %s IRQ dispatches JUMP_FUNCTION(%u)=0x%08x\n",
+                             gpio_irq ? "GPIO" : "baseband", slot, handler);
+                logged = true;
+            }
+            core_.set_reg(15, handler & ~1u);
+            rom_branch = true;
+        } else if (address == (RomTimerIrqDispatch & ~1u)) {
+            std::uint32_t ipsr = 0;
+            uc_reg_read(core_.engine(), UC_ARM_REG_IPSR, &ipsr);
+            const unsigned irq = ipsr >= 16 ? ipsr - 16 : 0;
+            if (irq < 20 || irq >= 20 + TimerCount)
+                return {cortexm::StopReason::Fault,
+                        "PHY6252 internal timer IRQ dispatch reached outside IRQ20..IRQ25"};
+            const unsigned timer = irq - 20;
+            const std::uint32_t slot = Timer1IrqJumpSlot + timer;
+            const std::uint32_t jump_address = JumpTableBase + slot * sizeof(std::uint32_t);
+            std::uint32_t handler = 0;
+            const bool have_handler = core_.read_memory(jump_address, &handler, sizeof handler);
+            const std::uint32_t handler_address = handler & ~1u;
+            const bool handler_in_ram = handler_address >= BootImage::RamBase &&
+                handler_address < BootImage::RamBase + BootImage::RamSize;
+            const bool handler_in_flash = handler_address >= BootImage::FlashBase &&
+                handler_address < BootImage::FlashBase + BootImage::FlashSize;
+            if (!have_handler || (handler & 1u) == 0 ||
+                (!handler_in_ram && !handler_in_flash)) {
+                char message[160];
+                std::snprintf(message, sizeof message,
+                              "PHY6252 Timer%u IRQ has no valid JUMP_FUNCTION(%u) callback (0x%08x)",
+                              timer + 1, slot, handler);
+                return {cortexm::StopReason::Fault, message};
+            }
+            bool &logged = timer_irq_dispatch_warning_logged_[timer];
+            if (!logged) {
+                std::fprintf(stderr,
+                             "PHY6252: Timer%u IRQ dispatches JUMP_FUNCTION(%u)=0x%08x (inferred ROM vector)\n",
+                             timer + 1, slot, handler);
+                logged = true;
+            }
+            core_.set_reg(15, handler_address);
+            rom_branch = true;
         } else if (address == 0xa920) {
             sleep_allowed_ = false; // SDK disableSleep() only changes power-manager policy.
         } else if (address == 0xaeac) {
@@ -762,7 +1025,9 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             } else {
                 core_.set_reg(0, static_cast<std::uint32_t>(-22));
             }
-        } else if (address == 0x17394) {
+        } else if (address == 0x17394 || address == 0x1744c) {
+            // SDK ROM spif_write()/spif_write_dma() share the same destination,
+            // RAM source and byte-count contract.
             rom_flash_write();
         } else if (address == 0x16fa8) {
             rom_flash_erase();
@@ -882,13 +1147,39 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
                 core_.set_reg(0, 0);
             }
         } else {
-            char message[384];
+            char message[512];
             std::uint32_t stack_args[2]{};
+            std::uint32_t msp = 0, psp = 0, control = 0, ipsr = 0;
+            std::uint32_t cfsr = 0, hfsr = 0, bfar = 0, mmfar = 0;
             core_.read_memory(core_.reg(13), stack_args, sizeof stack_args);
+            core_.read_memory(0xe000ed28, &cfsr, sizeof cfsr);
+            core_.read_memory(0xe000ed2c, &hfsr, sizeof hfsr);
+            core_.read_memory(0xe000ed34, &mmfar, sizeof mmfar);
+            core_.read_memory(0xe000ed38, &bfar, sizeof bfar);
+            uc_reg_read(core_.engine(), UC_ARM_REG_MSP, &msp);
+            uc_reg_read(core_.engine(), UC_ARM_REG_PSP, &psp);
+            uc_reg_read(core_.engine(), UC_ARM_REG_CONTROL, &control);
+            uc_reg_read(core_.engine(), UC_ARM_REG_IPSR, &ipsr);
+            const std::uint32_t lr = core_.reg(14);
+            const std::uint32_t exception_sp = (lr & 4u) != 0 ? psp : msp;
+            std::array<std::uint32_t, 8> exception_frame{};
+            const bool have_exception_frame = ipsr != 0 &&
+                core_.read_memory(exception_sp, exception_frame.data(), sizeof exception_frame);
+            const char *symbol = address == (RomPendSvHandler & ~1u) ? "PendSV_Handler at " :
+                                 address == (RomNmiHandler & ~1u) ? "NMI_Handler at " :
+                                 address == (RomHardFaultHandler & ~1u) ? "HardFault_Handler at " :
+                                 nullptr;
             std::snprintf(message, sizeof message,
-                          "unimplemented PHY6252 ROM call 0x%08x (r0=0x%08x r1=0x%08x r2=0x%08x r3=0x%08x sp=0x%08x stack=[0x%08x,0x%08x] lr=0x%08x)",
-                          pc, core_.reg(0), core_.reg(1), core_.reg(2), core_.reg(3),
-                          core_.reg(13), stack_args[0], stack_args[1], core_.reg(14));
+                          "unimplemented PHY6252 ROM call %s0x%08x last_pc=0x%08x previous_pc=0x%08x (r0=0x%08x r1=0x%08x r2=0x%08x r3=0x%08x sp=0x%08x msp=0x%08x psp=0x%08x control=0x%08x ipsr=0x%08x cfsr=0x%08x hfsr=0x%08x bfar=0x%08x mmfar=0x%08x stack=[0x%08x,0x%08x] frame_pc=0x%08x frame_lr=0x%08x xpsr=0x%08x lr=0x%08x)",
+                          symbol ? symbol : "", pc, core_.last_instruction_pc(),
+                          core_.previous_instruction_pc(),
+                          core_.reg(0), core_.reg(1), core_.reg(2), core_.reg(3),
+                          core_.reg(13), msp, psp, control, ipsr,
+                          cfsr, hfsr, bfar, mmfar,
+                          stack_args[0], stack_args[1],
+                          have_exception_frame ? exception_frame[6] : 0,
+                          have_exception_frame ? exception_frame[5] : 0,
+                          have_exception_frame ? exception_frame[7] : 0, lr);
             return {cortexm::StopReason::Fault, message};
         }
         if (rom_branch)
@@ -1134,7 +1425,7 @@ std::uint32_t Phy6252::read(std::uint32_t address, unsigned size) {
     }
     if (address >= RadioTxFifo && address < RadioTxFifo + RadioTxFifoSize) {
         if (size != 1 && size != 2 && size != 4) {
-            unsupported_register(address, "read");
+            unsupported_register(address, "read", 0, size);
             return 0;
         }
         std::uint32_t value = 0;
@@ -1147,7 +1438,7 @@ std::uint32_t Phy6252::read(std::uint32_t address, unsigned size) {
     }
     if (address >= RadioRxFifo && address < RadioRxFifo + RadioRxFifoSize) {
         if (size != 1 && size != 2 && size != 4) {
-            unsupported_register(address, "read");
+            unsupported_register(address, "read", 0, size);
             return 0;
         }
         std::uint32_t value = 0;
@@ -1173,7 +1464,7 @@ std::uint32_t Phy6252::read(std::uint32_t address, unsigned size) {
         (address >= 0x40003000 && address < 0x40004000) ||
         (address >= 0x4000f000 && address < 0x40010000))
         return read_register(address, size);
-    unsupported_register(address, "read");
+    unsupported_register(address, "read", 0, size);
     return 0;
 }
 
@@ -1261,7 +1552,7 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
             break;
         case 0x10: value = state.interrupt_pending ? 1u : 0u; break;
         default:
-            unsupported_register(address, "read");
+            unsupported_register(address, "read", 0, size);
             return 0;
         }
         return lane_read(value, address, size);
@@ -1279,7 +1570,7 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
         case 0x4c: value = gpio_interrupt_status_; break;
         case 0x50: value = gpio_input_data(); break;
         default:
-            unsupported_register(address, "read");
+            unsupported_register(address, "read", 0, size);
             return 0;
         }
         return lane_read(value, address, size);
@@ -1296,7 +1587,7 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
         else if (aligned == DmaConfig)
             value = control_registers_[aligned];
         else {
-            unsupported_register(address, "read");
+            unsupported_register(address, "read", 0, size);
             return 0;
         }
         return lane_read(value, address, size);
@@ -1342,7 +1633,7 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
             core_.set_irq_line(WatchdogIrq, false);
             break;
         default:
-            unsupported_register(address, "read");
+            unsupported_register(address, "read", 0, size);
             return 0;
         }
         return lane_read(value, address, size);
@@ -1350,10 +1641,15 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
     if (aligned >= RadioRfBase && aligned < RadioRfBase + 0x1000) {
         const std::uint32_t offset = aligned - RadioRfBase;
         if (!phy_rf_register(offset)) {
-            unsupported_register(address, "read");
+            unsupported_register(address, "read", 0, size);
             return 0;
         }
-        if (offset == 0xe4) {
+        if (offset == 0xe4 || offset == 0xe8) {
+            if (offset == 0xe8 && !rf_sample_e8_warning_logged_) {
+                std::fprintf(stderr,
+                             "PHY6252: RF register 0x400300e8 is read by TS0001 calibration code; returning the virtual-air RSSI sample (inferred)\n");
+                rf_sample_e8_warning_logged_ = true;
+            }
             const std::int8_t rssi = radio_rx_rssi_ > -100 ? radio_rx_rssi_ :
                                      radio_energy_dbm(core_.cycles_to_ns(core_.cycles()));
             value = rf_registers_[aligned] & 0x00ffffffu;
@@ -1368,7 +1664,7 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
     if (aligned >= RadioLlBase && aligned < RadioLlBase + 0x1000) {
         const std::uint32_t offset = aligned - RadioLlBase;
         if (!phy_ll_register(offset)) {
-            unsupported_register(address, "read");
+            unsupported_register(address, "read", 0, size);
             return 0;
         }
         if (offset == 0x00)
@@ -1442,7 +1738,7 @@ std::uint32_t Phy6252::read_register(std::uint32_t address, unsigned size) {
         else if (aligned >= AonPullBase && aligned <= AonPullEnd && ((aligned - AonPullBase) % 4) == 0)
             value = control_registers_[aligned];
         else {
-            unsupported_register(address, "read");
+            unsupported_register(address, "read", 0, size);
             return 0;
         }
     }
@@ -1469,6 +1765,11 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             state.cycle_remainder = 0;
             state.last_cycle = core_.cycles();
             break;
+        case 0x04:
+            state.current = lane_write(state.current, value, address, size);
+            state.cycle_remainder = 0;
+            state.last_cycle = core_.cycles();
+            break;
         case 0x08: {
             const std::uint32_t old_control = state.control;
             state.control = lane_write(state.control, value, address, size) & 7u;
@@ -1490,7 +1791,7 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             // Interrupt status is read-only on the DesignWare timer.
             break;
         default:
-            unsupported_register(address, "write");
+            unsupported_register(address, "write", value, size);
             return;
         }
         return;
@@ -1523,9 +1824,17 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             update_gpio_irq();
             break;
         case 0x38:
-            gpio_interrupt_type_ = lane_write(gpio_interrupt_type_, value, address, size) & GpioMask;
+        {
+            const std::uint32_t updated =
+                lane_write(gpio_interrupt_type_, value, address, size) & GpioMask;
+            // Switching an active-low level input to edge mode does not
+            // synthesize an edge; the SDK configures edge mode before it
+            // enables the pin and installs its ROM callback.
+            gpio_interrupt_status_ &= ~(updated & ~gpio_interrupt_type_);
+            gpio_interrupt_type_ = updated;
             update_gpio_irq();
             break;
+        }
         case 0x3c:
             gpio_interrupt_polarity_ = lane_write(gpio_interrupt_polarity_, value, address, size) & GpioMask;
             update_gpio_irq();
@@ -1629,6 +1938,7 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             ll_registers_[aligned] = written & ~1u;
             if ((written & 1u) == 0) {
                 radio_rx_active_ = false;
+                radio_rx_deadline_cycle_ = 0;
                 // PHY_ABORT cancels controller completion but cannot retract a frame already on air.
                 radio_tx_active_ = false;
             } else if ((ll_registers_[RadioLlBase + 0x04] & 7u) == 0) {
@@ -1636,6 +1946,7 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             } else if ((ll_registers_[RadioLlBase + 0x04] & 7u) == 1) {
                 radio_rx_active_ = true;
                 radio_rx_after_ns_ = core_.cycles_to_ns(core_.cycles());
+                schedule_radio_rx_timeout();
                 if (air_)
                     core_.request_service(core_.cycles() + 1);
             }
@@ -1645,8 +1956,13 @@ void Phy6252::write_register(std::uint32_t address, std::uint32_t value, unsigne
             break;
         case 0x14:
             ll_registers_[RadioLlBase + 0x10] &= ~written;
+            if ((written & (RadioIrqCok | RadioIrqCokZephyr)) != 0)
+                ll_registers_[RadioLlBase + 0x10] &= ~(RadioIrqCok | RadioIrqCokZephyr);
+            if ((written & (RadioIrqRto | RadioIrqRtoZephyr)) != 0)
+                ll_registers_[RadioLlBase + 0x10] &= ~(RadioIrqRto | RadioIrqRtoZephyr);
             ll_registers_[aligned] = written;
-            if ((ll_registers_[RadioLlBase + 0x10] & (RadioIrqMd | RadioIrqCok)) == 0)
+            if ((ll_registers_[RadioLlBase + 0x10] &
+                 (RadioIrqMd | RadioIrqCok | RadioIrqCokZephyr)) == 0)
                 radio_rx_rssi_ = -100;
             update_radio_irq();
             break;
@@ -1864,15 +2180,32 @@ std::uint8_t Phy6252::radio_channel() const noexcept {
 }
 
 void Phy6252::receive_radio_frame(const mcuemu::RadioFrame &frame) {
-    if (!radio_rx_active_ || frame.payload.size() + 2 > 127 || frame.channel != radio_channel())
+    if (!radio_rx_active_ || frame.payload.size() + 2 > 127 || frame.channel != radio_channel() ||
+        (radio_rx_deadline_cycle_ != 0 &&
+         frame.end_ns > core_.cycles_to_ns(radio_rx_deadline_cycle_)))
         return;
     rx_fifo_.fill(0);
     rx_fifo_[0] = static_cast<std::uint8_t>(frame.payload.size() + 2);
     std::copy(frame.payload.begin(), frame.payload.end(), rx_fifo_.begin() + 1);
+    const std::uint16_t fcs = ieee802154_fcs(frame.payload);
+    rx_fifo_[frame.payload.size() + 1] = static_cast<std::uint8_t>(fcs);
+    rx_fifo_[frame.payload.size() + 2] = static_cast<std::uint8_t>(fcs >> 8);
     rx_fifo_read_ = 0;
     radio_rx_rssi_ = static_cast<std::int8_t>(std::clamp(frame.rssi_dbm, -127, 0));
-    ll_registers_[RadioLlBase + 0x10] |= RadioIrqMd | RadioIrqCok;
+    radio_rx_active_ = false;
+    radio_rx_deadline_cycle_ = 0;
+    ll_registers_[RadioLlBase + 0x10] |= RadioIrqMd | RadioIrqCok | RadioIrqCokZephyr;
     update_radio_irq();
+}
+
+void Phy6252::schedule_radio_rx_timeout() {
+    radio_rx_deadline_cycle_ = 0;
+    if (radio_rx_timeout_us_ == 0)
+        return;
+    const std::uint64_t duration_cycles = std::max<std::uint64_t>(1,
+        static_cast<std::uint64_t>(radio_rx_timeout_us_) * core_.clock_hz() / 1'000'000);
+    radio_rx_deadline_cycle_ = core_.cycles() + duration_cycles;
+    core_.request_service(radio_rx_deadline_cycle_);
 }
 
 std::int8_t Phy6252::radio_energy_dbm(std::uint64_t at_ns) const {
@@ -1894,6 +2227,7 @@ std::int8_t Phy6252::radio_energy_dbm(std::uint64_t at_ns) const {
 
 void Phy6252::start_radio_tx() {
     radio_rx_active_ = false;
+    radio_rx_deadline_cycle_ = 0;
     const std::uint32_t length = tx_fifo_.empty() ? 0 : tx_fifo_[0];
     if (length < 5 || length > 127 || tx_fifo_.size() < length - 1) {
         std::fprintf(stderr, "PHY6252: ignored radio TX command without a valid FIFO frame (length=%u, bytes=%zu)\n",
@@ -2012,7 +2346,7 @@ void Phy6252::sync_timer(unsigned timer, std::uint64_t now) {
 
 void Phy6252::update_timer_irq(unsigned timer) {
     const TimerState &state = timers_[timer];
-    const unsigned irq = timer == 0 ? 24 : 25;
+    const unsigned irq = 20 + timer;
     const bool asserted = state.interrupt_pending && (state.control & TimerInterruptMask) == 0;
     core_.set_irq_line(irq, asserted);
 }
@@ -2031,11 +2365,25 @@ std::uint64_t Phy6252::service_radio(std::uint64_t now) {
         for (const mcuemu::RadioFrame &frame : air_->receive(
                  radio_node_, mcuemu::RadioProtocol::Zigbee802154,
                  radio_channel(), now_ns, radio_rx_after_ns_)) {
-            if ((ll_registers_[RadioLlBase + 0x10] & RadioIrqMd) == 0)
-                receive_radio_frame(frame);
+            if ((ll_registers_[RadioLlBase + 0x10] & RadioIrqMd) != 0)
+                break;
+            receive_radio_frame(frame);
+            if (!radio_rx_active_)
+                break;
         }
         radio_rx_after_ns_ = now_ns;
-        next = std::min(next, now + RadioPollCycles);
+        if (radio_rx_active_)
+            next = std::min(next, now + RadioPollCycles);
+    }
+    if (radio_rx_active_ && radio_rx_deadline_cycle_ != 0) {
+        if (now >= radio_rx_deadline_cycle_) {
+            radio_rx_active_ = false;
+            radio_rx_deadline_cycle_ = 0;
+            ll_registers_[RadioLlBase + 0x10] |= RadioIrqRto | RadioIrqRtoZephyr;
+            update_radio_irq();
+        } else {
+            next = std::min(next, radio_rx_deadline_cycle_);
+        }
     }
     return next;
 }

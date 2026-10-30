@@ -86,6 +86,18 @@ int main() {
     Phy6252 chip;
     chip.load_firmware(image);
     chip.reset();
+    std::uint32_t vtor_value = 0x1fff8b00, handler_vector = 0;
+    CHECK(chip.core().write_memory(0xe000ed08, &vtor_value, sizeof vtor_value));
+    CHECK(chip.core().read_memory(0xe000ed08, &vtor_value, sizeof vtor_value));
+    CHECK(vtor_value == 0);
+    CHECK(chip.core().read_memory(0x0c, &handler_vector, sizeof handler_vector));
+    CHECK(handler_vector == 0x28f1);
+    CHECK(chip.core().read_memory(0x38, &handler_vector, sizeof handler_vector));
+    CHECK(handler_vector == 0x84cd);
+    CHECK(chip.core().read_memory(0x50, &handler_vector, sizeof handler_vector));
+    CHECK(handler_vector == 0x4e25); // SDK LL_IRQHandler for BB_IRQn=4
+    CHECK(chip.core().read_memory(0x80, &handler_vector, sizeof handler_vector));
+    CHECK(handler_vector == 0x112d); // SDK GPIO_IRQHandler for GPIO_IRQn=16
     const std::uint32_t vector_word = 0x11010109;
     std::uint32_t vector_readback = 0;
     CHECK(chip.core().write_memory(0, &vector_word, sizeof vector_word));
@@ -95,6 +107,258 @@ int main() {
     CHECK(chip.core().read_memory(0, &vector_readback, sizeof vector_readback));
     CHECK(vector_readback == 0);
     CHECK(chip.run(100).reason == cortexm::StopReason::Deadline);
+    Phy6252 rom_test_chip;
+    rom_test_chip.load_firmware(image);
+    rom_test_chip.reset();
+    CHECK(rom_test_chip.run(100).reason == cortexm::StopReason::Deadline);
+    constexpr std::uint32_t random_buffer = 0x1fff2100;
+    rom_test_chip.core().set_reg(0, random_buffer);
+    rom_test_chip.core().set_reg(1, 8);
+    rom_test_chip.core().set_reg(14, 0x11010109);
+    rom_test_chip.core().set_reg(15, 0x5e04); // SDK LL_Rand entry
+    CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 16).reason == cortexm::StopReason::Deadline);
+    CHECK(rom_test_chip.core().reg(0) == 0); // LL_STATUS_SUCCESS
+    std::array<std::uint8_t, 8> random_bytes{};
+    CHECK(rom_test_chip.core().read_memory(random_buffer, random_bytes.data(), random_bytes.size()));
+    CHECK(std::any_of(random_bytes.begin(), random_bytes.end(),
+                      [](std::uint8_t byte) { return byte != 0; }));
+    rom_test_chip.core().set_reg(0, random_buffer);
+    rom_test_chip.core().set_reg(1, 0); // SDK LL_Rand rejects an empty request
+    rom_test_chip.core().set_reg(14, 0x11010109);
+    rom_test_chip.core().set_reg(15, 0x5e04);
+    CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 16).reason == cortexm::StopReason::Deadline);
+    CHECK(rom_test_chip.core().reg(0) == 0x12); // LL_STATUS_ERROR_BAD_PARAMETER
+    const std::array<std::uint8_t, 4> unaligned_word{0x12, 0x34, 0x56, 0x78};
+    CHECK(rom_test_chip.core().write_memory(random_buffer + 1, unaligned_word.data(), unaligned_word.size()));
+    rom_test_chip.core().set_reg(0, random_buffer + 1);
+    rom_test_chip.core().set_reg(14, 0x11010109);
+    rom_test_chip.core().set_reg(15, 0x0f74); // ARM runtime __aeabi_uread4 entry
+    CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 16).reason == cortexm::StopReason::Deadline);
+    CHECK(rom_test_chip.core().reg(0) == 0x78563412);
+    rom_test_chip.core().set_reg(0, 0x40001000); // AP_TIM1
+    rom_test_chip.core().set_reg(1, 2); // set_timer() receives microseconds
+    rom_test_chip.core().set_reg(14, 0x11010109);
+    rom_test_chip.core().set_reg(15, 0x16c2c);
+    CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 8).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(rom_test_chip.read(0x40001000, 4) == 8); // 4 MHz timer count per us
+    CHECK(rom_test_chip.read(0x40001008, 4) == 3); // enabled one-shot
+    CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 32).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(rom_test_chip.read(0x40001010, 4) == 1);
+    CHECK(rom_test_chip.read(0x4000100c, 4) == 1); // EOI clears Timer1 pending
+    CHECK(rom_test_chip.read(0x40001010, 4) == 0);
+    auto invoke_radio_rom = [&](std::uint32_t address, std::uint32_t arg0 = 0) {
+        rom_test_chip.core().set_reg(0, arg0);
+        rom_test_chip.core().set_reg(14, 0x11010109);
+        rom_test_chip.core().set_reg(15, address);
+        CHECK(rom_test_chip.run(rom_test_chip.core().cycles() + 64).reason ==
+              cortexm::StopReason::Deadline);
+    };
+    invoke_radio_rom(0x112a4); // ll_hw_set_srx
+    CHECK(rom_test_chip.read(0x40031004, 4) == 1);
+    invoke_radio_rom(0x10cdc); // ll_hw_get_tr_mode
+    CHECK(rom_test_chip.core().reg(0) == 1);
+    invoke_radio_rom(0x112b8); // ll_hw_set_stx
+    CHECK(rom_test_chip.read(0x40031004, 4) == 0);
+    invoke_radio_rom(0x113c8); // ll_hw_set_trx
+    CHECK(rom_test_chip.read(0x40031004, 4) == 0x10);
+    invoke_radio_rom(0x11264); // ll_hw_set_rtx
+    CHECK(rom_test_chip.read(0x40031004, 4) == 0x12);
+    invoke_radio_rom(0x11174, 1); // ll_hw_set_irq
+    CHECK(rom_test_chip.read(0x4003100c, 4) == 1);
+    rom_test_chip.write(0x40031400, 0x78563412, 4);
+    invoke_radio_rom(0x110e8); // ll_hw_rst_tfifo
+    CHECK(rom_test_chip.read(0x40031400, 4) == 0);
+    rom_test_chip.write(0x40031c00, 0x78563412, 4);
+    invoke_radio_rom(0x110b0); // ll_hw_rst_rfifo
+    CHECK(rom_test_chip.read(0x40031c00, 4) == 0);
+
+    mcuemu::VirtualAir phy_air;
+    rom_test_chip.connect_radio(phy_air, "phy6252-rom-test");
+    rom_test_chip.write(0x40031400, 5, 1); // PHR: three payload bytes and FCS
+    rom_test_chip.write(0x40031401, 0x01, 1);
+    rom_test_chip.write(0x40031402, 0x00, 1);
+    rom_test_chip.write(0x40031403, 0x5a, 1);
+    invoke_radio_rom(0x112b8); // ll_hw_set_stx
+    invoke_radio_rom(0x10cf8); // ll_hw_go
+    CHECK(phy_air.frames().size() == 1);
+    if (!phy_air.frames().empty()) {
+        CHECK(phy_air.frames()[0].payload == std::vector<std::uint8_t>({0x01, 0x00, 0x5a}));
+        const std::uint64_t tx_done = rom_test_chip.core().ns_to_cycles(phy_air.frames()[0].end_ns);
+        CHECK(rom_test_chip.run(tx_done + 64).reason == cortexm::StopReason::Deadline);
+    }
+    CHECK((rom_test_chip.read(0x40031010, 4) & 1u) != 0);
+    invoke_radio_rom(0x10adc); // ll_hw_clr_irq
+    CHECK(rom_test_chip.read(0x40031010, 4) == 0);
+
+    invoke_radio_rom(0x112a4); // ll_hw_set_srx
+    invoke_radio_rom(0x11420); // ll_hw_trigger
+    CHECK(rom_test_chip.radio_receiving());
+    const std::uint64_t phy_rx_start = rom_test_chip.core().cycles_to_ns(
+        rom_test_chip.core().cycles()) + 1000;
+    const std::uint64_t phy_rx_id = phy_air.transmit(
+        "coordinator", {}, mcuemu::RadioProtocol::Zigbee802154, 11, phy_rx_start,
+        {0x01, 0x00, 0xa5});
+    const auto phy_rx_frame = std::find_if(phy_air.frames().begin(), phy_air.frames().end(),
+        [phy_rx_id](const mcuemu::RadioFrame &frame) { return frame.id == phy_rx_id; });
+    CHECK(phy_rx_frame != phy_air.frames().end());
+    if (phy_rx_frame != phy_air.frames().end()) {
+        const std::uint64_t rx_done = rom_test_chip.core().ns_to_cycles(phy_rx_frame->end_ns + 20000);
+        CHECK(rom_test_chip.run(rx_done + 64).reason == cortexm::StopReason::Deadline);
+    }
+    const std::uint32_t radio_irq_status = rom_test_chip.read(0x40031010, 4);
+    CHECK((radio_irq_status & 1u) != 0); // LIRQ_MD
+    CHECK((radio_irq_status & (1u << 10)) != 0); // LIRQ_COK
+    CHECK((radio_irq_status & (1u << 1)) != 0); // PB-03F Zephyr COK alias
+    invoke_radio_rom(0x10bbc); // ll_hw_get_irq_status
+    CHECK(rom_test_chip.core().reg(0) == radio_irq_status);
+    constexpr std::uint32_t radio_packet = 0x1fff2300;
+    constexpr std::uint32_t radio_length = 0x1fff2320;
+    constexpr std::uint32_t radio_foot0 = 0x1fff2324;
+    constexpr std::uint32_t radio_foot1 = 0x1fff2328;
+    rom_test_chip.core().set_reg(1, radio_length);
+    rom_test_chip.core().set_reg(2, radio_foot0);
+    rom_test_chip.core().set_reg(3, radio_foot1);
+    invoke_radio_rom(0x10f50, radio_packet); // ll_hw_read_rfifo_zb
+    CHECK(rom_test_chip.core().reg(0) == 0);
+    std::array<std::uint8_t, 6> received_packet{};
+    std::uint16_t received_length = 0;
+    std::uint32_t received_foot0 = 0, received_foot1 = 0;
+    CHECK(rom_test_chip.core().read_memory(radio_packet, received_packet.data(),
+                                           received_packet.size()));
+    CHECK(rom_test_chip.core().read_memory(radio_length, &received_length,
+                                           sizeof received_length));
+    CHECK(rom_test_chip.core().read_memory(radio_foot0, &received_foot0,
+                                           sizeof received_foot0));
+    CHECK(rom_test_chip.core().read_memory(radio_foot1, &received_foot1,
+                                           sizeof received_foot1));
+    CHECK(received_length == 5); // PHR length includes the two-byte FCS
+    CHECK(received_packet[0] == 5 && received_packet[1] == 0x01 &&
+          received_packet[2] == 0x00 && received_packet[3] == 0xa5);
+    CHECK((received_foot0 & 0x00ffffffu) == 2);
+    CHECK(received_foot1 == 0);
+    rom_test_chip.write(0x40031014, 1u << 1, 4); // Zephyr W1C clears the SDK COK alias too
+    CHECK(rom_test_chip.read(0x40031010, 4) == 1u); // LIRQ_MD remains pending
+    invoke_radio_rom(0x110b0); // ll_hw_rst_rfifo
+    CHECK(rom_test_chip.read(0x40031c00, 1) == 0);
+    rom_test_chip.write(0x40031000, 0, 4); // PHY_ABORT stops the receive operation
+    CHECK(!rom_test_chip.radio_receiving());
+    invoke_radio_rom(0x10adc); // ll_hw_clr_irq
+    invoke_radio_rom(0x11174, 1u << 2); // enable LIRQ_RTO for the timeout check
+    invoke_radio_rom(0x11278, 33); // ll_hw_set_rx_timeout(33 us)
+    invoke_radio_rom(0x112a4); // ll_hw_set_srx
+    invoke_radio_rom(0x11420); // ll_hw_trigger
+    CHECK(rom_test_chip.radio_receiving());
+    const std::uint64_t rx_timeout = rom_test_chip.core().cycles() + 33 * 16 + 128;
+    CHECK(rom_test_chip.run(rx_timeout).reason == cortexm::StopReason::Deadline);
+    CHECK(!rom_test_chip.radio_receiving());
+    CHECK(rom_test_chip.read(0x40031010, 4) == ((1u << 2) | (1u << 3)));
+    // SDK and PB-03F Zephyr expose RTO at bits 2 and 3 respectively.
+    rom_test_chip.write(0x40031014, 1u << 3, 4);
+    CHECK(rom_test_chip.read(0x40031010, 4) == 0);
+    Phy6252 irq_chip;
+    irq_chip.load_firmware(image);
+    irq_chip.reset();
+    CHECK(irq_chip.run(100).reason == cortexm::StopReason::Deadline);
+    constexpr std::uint32_t irq_callback = 0x1fff2201;
+    CHECK(irq_chip.core().write_memory(0x1fff03c0, &irq_callback, sizeof irq_callback));
+    const std::array<std::uint8_t, 24> gpio_irq_callback = {
+        0x07, 0x20, // movs r0, #7
+        0x03, 0x49, // ldr r1, [pc, #12] ; marker address
+        0x08, 0x60, // str r0, [r1]
+        0x01, 0x20, // movs r0, #1
+        0x02, 0x49, // ldr r1, [pc, #8] ; GPIO interrupt status
+        0x08, 0x60, // str r0, [r1] ; clear edge status
+        0x70, 0x47, // bx lr
+        0x00, 0x00,
+        0x00, 0x23, 0xff, 0x1f, // 0x1fff2300 marker
+        0x4c, 0x80, 0x00, 0x40, // 0x4000804c GPIO interrupt status
+    };
+    CHECK(irq_chip.core().write_memory(0x1fff2200, gpio_irq_callback.data(),
+                                       gpio_irq_callback.size()));
+    irq_chip.write(0x40008038, 1, 4); // edge-triggered GPIO0
+    irq_chip.write(0x4000803c, 1, 4); // rising edge
+    irq_chip.write(0x40008034, ~1u, 4); // unmask GPIO0
+    irq_chip.write(0x40008030, 1, 4); // enable GPIO0 interrupt
+    const std::uint32_t enable_gpio_irq = 1u << 16;
+    CHECK(irq_chip.core().write_memory(0xe000e100, &enable_gpio_irq,
+                                       sizeof enable_gpio_irq));
+    CHECK(irq_chip.run(irq_chip.core().cycles() + 20).reason ==
+          cortexm::StopReason::Deadline);
+    std::uint32_t irq_marker = 0;
+    CHECK(irq_chip.core().read_memory(0x1fff2300, &irq_marker, sizeof irq_marker));
+    CHECK(irq_marker == 0); // changing level mode to edge is not itself an edge
+    irq_chip.set_gpio_input(0, true);
+    CHECK(irq_chip.run(irq_chip.core().cycles() + 100).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(irq_chip.core().read_memory(0x1fff2300, &irq_marker, sizeof irq_marker));
+    CHECK(irq_marker == 7);
+
+    Phy6252 timer_irq_chip;
+    timer_irq_chip.load_firmware(image);
+    timer_irq_chip.reset();
+    CHECK(timer_irq_chip.run(100).reason == cortexm::StopReason::Deadline);
+    constexpr std::uint32_t timer_irq_callback = 0x1fff2201;
+    CHECK(timer_irq_chip.core().write_memory(0x1fff03e4, &timer_irq_callback,
+                                              sizeof timer_irq_callback)); // V25_IRQ_HANDLER
+    const std::array<std::uint8_t, 20> timer_irq_handler = {
+        0x07, 0x20, // movs r0, #7
+        0x02, 0x49, // ldr r1, [pc, #8] ; marker address
+        0x08, 0x60, // str r0, [r1]
+        0x02, 0x49, // ldr r1, [pc, #8] ; Timer6 EOI
+        0x08, 0x68, // ldr r0, [r1] ; SDK clears EOI by reading it
+        0x70, 0x47, // bx lr
+        0x00, 0x23, 0xff, 0x1f, // 0x1fff2300 marker
+        0x70, 0x10, 0x00, 0x40, // 0x40001070 Timer6 EOI
+    };
+    CHECK(timer_irq_chip.core().write_memory(0x1fff2200, timer_irq_handler.data(),
+                                              timer_irq_handler.size()));
+    const std::uint32_t enable_timer6_irq = 1u << 25;
+    CHECK(timer_irq_chip.core().write_memory(0xe000e100, &enable_timer6_irq,
+                                              sizeof enable_timer6_irq));
+    const std::uint64_t timer_irq_start = timer_irq_chip.core().cycles();
+    timer_irq_chip.write(0x40001064, 3, 4); // Timer6 load count
+    timer_irq_chip.write(0x4000106c, 3, 4); // enable one-shot with IRQ unmasked
+    CHECK(timer_irq_chip.run(timer_irq_start + 100).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(timer_irq_chip.core().read_memory(0x1fff2300, &irq_marker, sizeof irq_marker));
+    CHECK(irq_marker == 7);
+    CHECK(timer_irq_chip.read(0x40001074, 4) == 0);
+
+    Phy6252 timer1_irq_chip;
+    timer1_irq_chip.load_firmware(image);
+    timer1_irq_chip.reset();
+    CHECK(timer1_irq_chip.run(100).reason == cortexm::StopReason::Deadline);
+    CHECK(timer1_irq_chip.core().write_memory(0x1fff03d0, &timer_irq_callback,
+                                               sizeof timer_irq_callback)); // V20_IRQ_HANDLER
+    const std::array<std::uint8_t, 20> timer1_irq_handler = {
+        0x07, 0x20, // movs r0, #7
+        0x02, 0x49, // ldr r1, [pc, #8] ; marker address
+        0x08, 0x60, // str r0, [r1]
+        0x02, 0x49, // ldr r1, [pc, #8] ; Timer1 EOI
+        0x08, 0x68, // ldr r0, [r1] ; SDK clears EOI by reading it
+        0x70, 0x47, // bx lr
+        0x00, 0x23, 0xff, 0x1f, // 0x1fff2300 marker
+        0x0c, 0x10, 0x00, 0x40, // 0x4000100c Timer1 EOI
+    };
+    CHECK(timer1_irq_chip.core().write_memory(0x1fff2200, timer1_irq_handler.data(),
+                                               timer1_irq_handler.size()));
+    const std::uint32_t enable_timer1_irq = 1u << 20;
+    CHECK(timer1_irq_chip.core().write_memory(0xe000e100, &enable_timer1_irq,
+                                               sizeof enable_timer1_irq));
+    timer1_irq_chip.core().set_reg(0, 0x40001000); // AP_TIM1
+    timer1_irq_chip.core().set_reg(1, 1);
+    timer1_irq_chip.core().set_reg(14, 0x11010109);
+    timer1_irq_chip.core().set_reg(15, 0x16c2c);
+    CHECK(timer1_irq_chip.run(timer1_irq_chip.core().cycles() + 8).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(timer1_irq_chip.run(timer1_irq_chip.core().cycles() + 100).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(timer1_irq_chip.core().read_memory(0x1fff2300, &irq_marker, sizeof irq_marker));
+    CHECK(irq_marker == 7);
+    CHECK(timer1_irq_chip.read(0x40001010, 4) == 0);
+
     const std::uint32_t fifo_probe = 0x11030000;
     auto *fifo_probe_code = chip.core().host_pointer(fifo_probe, 6);
     CHECK(fifo_probe_code != nullptr);
@@ -249,10 +513,11 @@ int main() {
 
     auto invoke_rom = [&chip](std::uint32_t pc, std::uint32_t r0,
                               std::uint32_t r1, std::uint32_t r2,
-                              std::uint64_t deadline) {
+                              std::uint64_t deadline, std::uint32_t r3 = 0) {
         chip.core().set_reg(0, r0);
         chip.core().set_reg(1, r1);
         chip.core().set_reg(2, r2);
+        chip.core().set_reg(3, r3);
         chip.core().set_reg(14, 0x11010109);
         chip.core().set_reg(15, pc);
         const auto result = chip.run(deadline);
@@ -293,6 +558,14 @@ int main() {
                       [](std::uint8_t value) { return value == 0; }));
     invoke_rom(0xace0, 2, efuse_buffer, 0, 545);
     CHECK(chip.core().reg(0) == static_cast<std::uint32_t>(-22));
+    const std::uint8_t untouched_efuse_data[] = {1, 2, 3, 4, 5, 6, 7, 8};
+    CHECK(chip.core().write_memory(efuse_buffer, untouched_efuse_data,
+                                  sizeof untouched_efuse_data));
+    invoke_rom(0xace0, 1, efuse_buffer, 0x60, 547, 0x1fff2b29);
+    CHECK(chip.core().reg(0) == 0);
+    CHECK(chip.core().read_memory(efuse_buffer, efuse_data, sizeof efuse_data));
+    CHECK(std::equal(std::begin(untouched_efuse_data), std::end(untouched_efuse_data),
+                     std::begin(efuse_data)));
     const crypto::Block aes_key = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
                                    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f};
     const crypto::Block aes_input = {0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
@@ -346,6 +619,18 @@ int main() {
     CHECK(chip.core().reg(0) == 0);
     chip_flash = chip.core().host_pointer(destination, sizeof second_write);
     CHECK(chip_flash != nullptr && chip_flash[0] == 0xff && chip_flash[1] == 0xff && chip_flash[2] == 0xff);
+
+    const std::uint8_t dma_write[] = {0xa5, 0x5a};
+    const std::uint32_t flash_dma_destination = BootImage::FlashBase + 0x13020;
+    CHECK(chip.core().write_memory(source, dma_write, sizeof dma_write));
+    invoke_rom(0x1744c, flash_dma_destination, source, sizeof dma_write, 710);
+    CHECK(chip.core().reg(0) == 0);
+    auto *dma_flash = chip.core().host_pointer(flash_dma_destination, sizeof dma_write);
+    CHECK(dma_flash != nullptr && dma_flash[0] == 0xa5 && dma_flash[1] == 0x5a);
+
+    invoke_rom(0x1744c, BootImage::FlashBase + BootImage::FlashSize - 1,
+               source, 2, 720);
+    CHECK(chip.core().reg(0) == static_cast<std::uint32_t>(-22));
 
     invoke_rom(0x17394, BootImage::FlashBase + BootImage::FlashSize - 1,
                source, 2, 800);
@@ -445,10 +730,13 @@ int main() {
         const std::uint64_t rx_done = chip.core().ns_to_cycles(rx_it->end_ns + 20000);
         CHECK(chip.run(rx_done + 100).reason == cortexm::StopReason::Deadline);
     }
-    CHECK((chip.read(0x40031010, 4) & 3) == 3);
+    CHECK((chip.read(0x40031010, 4) & ((1u << 0) | (1u << 10))) ==
+          ((1u << 0) | (1u << 10)));
     CHECK(chip.read(0x40031c00, 1) == sizeof(rx_frame) + 2);
     for (std::size_t i = 0; i < sizeof rx_frame; ++i)
         CHECK(chip.read(0x40031c01 + static_cast<std::uint32_t>(i), 1) == rx_frame[i]);
+    CHECK(chip.read(0x40031c01 + sizeof rx_frame, 1) == 0x7b);
+    CHECK(chip.read(0x40031c02 + sizeof rx_frame, 1) == 0xa8);
     CHECK(static_cast<std::int8_t>(chip.read(0x400300e4, 4) >> 24) == -50);
     chip.write(0x40031f00, 0x1fff0a4a, 4);
     CHECK(chip.read(0x40031f00, 4) == 0x1fff0a4a);
@@ -503,6 +791,8 @@ int main() {
     CHECK(chip.run(timer6_start + 12).reason == cortexm::StopReason::Deadline);
     CHECK(chip.read(0x40001074, 4) == 1);
     CHECK(chip.read(0x40001070, 4) == 1);
+    chip.write(0x40001068, 0, 4); // SDK hal_timer_stop_counter clears CurrentCount
+    CHECK(chip.read(0x40001068, 4) == 0);
 
     constexpr char crc_vector[] = "123456789";
     const std::uint32_t crc_source = BootImage::RamBase + 0x4f00;
@@ -618,7 +908,7 @@ int main() {
     invoke_rom(0x110b0, 0, 0, 0, chip.core().cycles() + 8);
     invoke_rom(0x110e8, 0, 0, 0, chip.core().cycles() + 8);
     invoke_rom(0x10cdc, 0, 0, 0, chip.core().cycles() + 8);
-    CHECK(chip.core().reg(0) == 0);
+    CHECK(chip.core().reg(0) == 1); // ll_hw_get_tr_mode returns SRX selected above
     chip.reset();
     CHECK((chip.read(0x4000f024, 4) & 1u) != 0);
     chip.core().advance_to(chip.core().cycles() + 16000);
