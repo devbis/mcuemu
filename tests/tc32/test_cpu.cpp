@@ -31,6 +31,52 @@ void test_cpu_arithmetic_and_branch() {
     CHECK(result.instructions == 7);
 }
 
+// The boot ROM copies the image head from flash to the bottom of SRAM, and the CPU sees it
+// there at address 0. A bootloader that copies the head of another image over it and jumps
+// to 0 runs the new head, although the flash at 0 still holds its own.
+void test_cpu_runs_the_head_a_bootloader_copied() {
+    mcuemu::Tlsr8258 device;
+    // The head is 32 bytes: "KNLT" at offset 8, the size in 16-byte units after it.
+    auto flash = words({
+        0x801e, // 0x00 tj 0x40: the first image's head leaves for its code
+        0x0000, 0x0000, 0x0000,
+        0x4e4b, 0x544c, 0x0002, 0x0000, // 0x08 "KNLT", 2 units
+    });
+    flash.resize(0x40);
+    const auto code = words({
+        0xa000, // 0x40 tmov r0, #0
+        0x87dd, // 0x42 tj 0x00
+    });
+    flash.insert(flash.end(), code.begin(), code.end());
+    device.load_firmware(flash);
+    mcuemu::Cpu cpu(device);
+    CHECK(cpu.boot_head_size() == 32);
+
+    // Head, tmov, tj: the CPU is back in front of the head.
+    const auto first = cpu.run(3);
+    CHECK(first.reason == mcuemu::StopReason::StepLimit);
+    CHECK(cpu.pc() == 0);
+
+    // What a bootloader's copy loop does: another head into SRAM.
+    const auto head = words({
+        0xa107, // tmov r1, #7
+        0xcf01, // tserv #1
+    });
+    for (std::size_t i = 0; i < head.size(); ++i)
+        device.write8(mcuemu::Tlsr8258::RetainedSramBase + static_cast<std::uint32_t>(i), head[i]);
+
+    const auto second = cpu.run(100);
+    CHECK(second.reason == mcuemu::StopReason::Halted);
+    CHECK(cpu.reg(1) == 7);
+    CHECK(device.flash()[0] == 0x1e); // the flash keeps the first head
+
+    // A reset is the boot ROM again: the head comes from the flash.
+    cpu.reset();
+    const auto third = cpu.run(3);
+    CHECK(third.reason == mcuemu::StopReason::StepLimit);
+    CHECK(cpu.pc() == 0);
+}
+
 void test_cpu_load_store() {
     mcuemu::Tlsr8258 device;
     // str r0, [r1, r2]; ldr r3, [r1, r2]; tserv #0

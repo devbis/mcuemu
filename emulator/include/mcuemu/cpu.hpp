@@ -58,6 +58,12 @@ public:
 
     void reset(std::uint32_t pc = 0);
     void sync_flash();
+
+    // The boot ROM copies the image head (the first bytes of the flash, up to the
+    // size the "KNLT" boot header gives) to the bottom of SRAM at every reset, and
+    // the CPU sees that SRAM at address 0 (reset(), boot_head_size()). A bootloader
+    // that copies another image's head there and jumps to 0 runs that head.
+    std::uint32_t boot_head_size() const noexcept { return boot_head_size_; }
     // Executes up to `instruction_limit` instructions. Instructions are run in
     // batches inside one Unicorn call; a batch ends before the instruction that
     // follows an event the wrapper must handle (a pending IRQ, a sleep request,
@@ -130,6 +136,18 @@ private:
     uc_struct *uc_{nullptr};
     std::array<MmioBinding, 2> mmio_bindings_{};
     std::size_t code_hook_{0};
+    // Size of the head the boot ROM copies to SRAM, 0 when the flash has no
+    // "KNLT" boot header. Addresses [0, size) are that SRAM, not the flash.
+    std::uint32_t boot_head_size_{0};
+    // What the CPU sees at [0, boot_head_size_): the SRAM head as of the last
+    // time execution entered it. Unicorn maps the flash at address 0, so the view
+    // is brought up to date (resync_boot_head) when the code enters the head.
+    std::vector<std::uint8_t> boot_head_;
+    bool in_boot_head_{false};
+    bool boot_head_resync_{false};
+    std::uint32_t read_boot_head_size() const;
+    void load_boot_head();
+    void resync_boot_head();
     bool halted_{false};
     bool instruction_seen_{false};
     bool batch_active_{false};

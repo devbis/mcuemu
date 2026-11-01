@@ -3,6 +3,7 @@
 namespace mcuemu_tests {
 void test_cpu_arithmetic_and_branch();
 void test_cpu_load_store();
+void test_cpu_runs_the_head_a_bootloader_copied();
 void test_cpu_load_multiple_preserves_loaded_base_register();
 void test_cpu_vendor_mmio_alias();
 void test_cpu_pc_add_uses_word_aligned_pc();
@@ -45,6 +46,7 @@ int main() {
     using namespace mcuemu_tests;
     RUN(test_cpu_arithmetic_and_branch);
     RUN(test_cpu_load_store);
+    RUN(test_cpu_runs_the_head_a_bootloader_copied);
     RUN(test_cpu_load_multiple_preserves_loaded_base_register);
     RUN(test_cpu_vendor_mmio_alias);
     RUN(test_cpu_pc_add_uses_word_aligned_pc);

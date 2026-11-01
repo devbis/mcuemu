@@ -57,6 +57,29 @@ to code addresses in this window, consistent with the chip's instruction
 cache behavior. This is based on firmware execution and remains an inferred
 hardware mapping.
 
+### The boot head
+
+Every TLSR8258 image in the test corpus (the vendor SDK samples, the Telink-based
+products, Zephyr, a bootloader) starts with a boot header: `KNLT` at flash offset 8 and,
+in the low half word after it, the size of the image head in 16-byte units. That is the
+convention of the chip's boot ROM, not of one firmware: the ROM copies that many bytes
+of the flash to the bottom of SRAM at every reset, and the CPU runs from them at address
+0. `Cpu::reset()` does the same (`boot_head_size()` is 0 for an image without the header,
+and the model behaves as before).
+
+A bootloader relies on this: it copies the head of the image it chooses over the one the
+ROM copied and jumps to 0. Unicorn maps the flash at address 0, so the model keeps what
+the CPU sees at `[0, head size)` apart from the flash: the SRAM bytes as of the moment the
+code enters that window from outside (address 0 or the fetch alias at `0x840000`). A
+changed head makes the batch stop in front of it, the view is updated and the translated
+blocks are dropped (`Cpu::resync_boot_head()`). Flash writes do not reach the window.
+
+This is an inferred model, like the fetch alias: it follows the bootloader's documented
+use of the header and the images above, not silicon. It is a view synchronised on entry,
+not a true alias: a store into the head's SRAM is seen at address 0 only after the next
+entry into the window, which is enough for a copy followed by a jump. Sizes over half of
+the SRAM are treated as no header.
+
 The datasheet does not list the alias at `0x1000000`. It is mapped to the same
 registers because the vendor firmware's `LoadTblCmdSet` computes addresses in
 that range. Treat this as a compatibility inference until validated on silicon.

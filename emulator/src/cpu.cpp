@@ -21,6 +21,11 @@ constexpr std::uint32_t estimated_cycles_per_instruction = 3;
 // Extra cycles for an access to the register window with flash_timing (inferred
 // together with the cache miss cost, see Cpu::fetch_penalty).
 constexpr std::uint32_t register_access_cycles = 40;
+// Boot header at flash offset 8: "KNLT", then the head size in 16-byte units in
+// the low half word. The head is at most the retained SRAM.
+constexpr std::uint32_t boot_signature = 0x544c4e4bu;
+constexpr std::uint32_t boot_signature_offset = 8;
+constexpr std::uint32_t boot_head_unit = 16;
 
 std::string instruction_text(std::uint32_t pc, std::uint16_t instruction) {
     std::ostringstream out;
@@ -94,6 +99,59 @@ void Cpu::sync_flash() {
     check_error(uc_mem_write(reinterpret_cast<uc_engine *>(uc_), 0,
                              device_.flash().data(), device_.flash().size()),
                 "load flash image");
+    boot_head_size_ = read_boot_head_size();
+}
+
+std::uint32_t Cpu::read_boot_head_size() const {
+    const auto &flash = device_.flash();
+    if (flash.size() < boot_signature_offset + 6)
+        return 0;
+    auto word = [&](std::size_t at) {
+        return static_cast<std::uint32_t>(flash[at]) |
+               (static_cast<std::uint32_t>(flash[at + 1]) << 8) |
+               (static_cast<std::uint32_t>(flash[at + 2]) << 16) |
+               (static_cast<std::uint32_t>(flash[at + 3]) << 24);
+    };
+    if (word(boot_signature_offset) != boot_signature)
+        return 0;
+    const std::uint32_t size = (word(boot_signature_offset + 4) & 0xffffu) * boot_head_unit;
+    if (size == 0 || size > Tlsr8258::SramSize / 2 || size > flash.size())
+        return 0;
+    return size;
+}
+
+// The boot ROM, at every reset and deep-sleep wake: the head goes from flash to the
+// bottom of SRAM, and the CPU sees it there at address 0.
+void Cpu::load_boot_head() {
+    in_boot_head_ = false;
+    boot_head_resync_ = false;
+    if (boot_head_size_ == 0)
+        return;
+    const auto &flash = device_.flash();
+    // A head that differs from the one the CPU last ran leaves translated blocks of
+    // the old one behind.
+    const bool changed = !std::equal(flash.begin(), flash.begin() + boot_head_size_,
+                                     boot_head_.begin(), boot_head_.end());
+    boot_head_.assign(flash.begin(), flash.begin() + boot_head_size_);
+    std::copy(boot_head_.begin(), boot_head_.end(), device_.sram_data());
+    auto *engine = reinterpret_cast<uc_engine *>(uc_);
+    check_error(uc_mem_write(engine, 0, boot_head_.data(), boot_head_.size()),
+                "load boot head");
+    if (changed)
+        check_error(uc_ctl_flush_tb(engine), "flush translated blocks");
+}
+
+// The code is about to run from a head the SRAM changed: bring the view of address 0
+// up to date. Done between batches, so no translated block is running from it, and
+// Unicorn drops the blocks it had translated from the old bytes.
+void Cpu::resync_boot_head() {
+    std::copy(device_.sram_data(), device_.sram_data() + boot_head_size_, boot_head_.begin());
+    auto *engine = reinterpret_cast<uc_engine *>(uc_);
+    check_error(uc_mem_write(engine, 0, boot_head_.data(), boot_head_.size()),
+                "update boot head");
+    // The blocks translated from the old head are not valid any more, at address 0
+    // and in the SRAM window the fetch alias maps onto the same bytes.
+    check_error(uc_ctl_flush_tb(engine), "flush translated blocks");
 }
 
 void Cpu::reset(std::uint32_t pc_value) {
@@ -131,6 +189,7 @@ void Cpu::reset(std::uint32_t pc_value) {
     recent_trace_count_ = 0;
     instruction_seen_ = false;
     icache_tags_.fill(0); // the cache is empty after a reset or a deep-sleep wake
+    load_boot_head();
 }
 
 std::uint32_t Cpu::reg(unsigned index) const {
@@ -321,12 +380,16 @@ void Cpu::mmio_write(uc_struct *opaque, std::uint64_t offset, unsigned size,
         }
         std::uint32_t flash_begin = 0;
         std::uint32_t flash_end = 0;
-        if (self->device_.take_flash_dirty(flash_begin, flash_end))
-            self->check_error(
-                uc_mem_write(reinterpret_cast<uc_engine *>(self->uc_),
-                             flash_begin, self->device_.flash().data() + flash_begin,
-                             flash_end - flash_begin),
-                "mirror flash write");
+        if (self->device_.take_flash_dirty(flash_begin, flash_end)) {
+            // Below the head size the CPU sees SRAM, which a flash write does not touch.
+            flash_begin = std::max(flash_begin, self->boot_head_size_);
+            if (flash_end > flash_begin)
+                self->check_error(
+                    uc_mem_write(reinterpret_cast<uc_engine *>(self->uc_),
+                                 flash_begin, self->device_.flash().data() + flash_begin,
+                                 flash_end - flash_begin),
+                    "mirror flash write");
+        }
         const auto trace_address = static_cast<std::uint32_t>(binding->base + offset);
         if (self->mmio_trace_output_ &&
             self->executed_instructions_ >= self->trace_after_step_ &&
@@ -381,6 +444,28 @@ void Cpu::fetch_commit(std::uint64_t address) noexcept {
 void Cpu::code_hook(uc_struct *opaque, std::uint64_t address,
                     std::uint32_t size, void *user_data) {
     auto *self = static_cast<Cpu *>(user_data);
+    if (self->boot_head_size_ != 0) {
+        // The head is run from SRAM, whose bytes the bootloader of the image may
+        // have replaced since the CPU last ran there.
+        const bool in_head =
+            address < self->boot_head_size_ ||
+            (address >= Tlsr8258::RetainedSramBase &&
+             address - Tlsr8258::RetainedSramBase < self->boot_head_size_);
+        if (in_head && !self->in_boot_head_) {
+            self->in_boot_head_ = true;
+            if (!std::equal(self->boot_head_.begin(), self->boot_head_.end(),
+                            self->device_.sram_data())) {
+                const std::uint32_t resume_pc = static_cast<std::uint32_t>(address);
+                auto *engine = reinterpret_cast<uc_engine *>(opaque);
+                self->boot_head_resync_ = true;
+                uc_reg_write(engine, UC_TC32_REG_PC, &resume_pc);
+                uc_emu_stop(engine);
+                return;
+            }
+        } else if (!in_head) {
+            self->in_boot_head_ = false;
+        }
+    }
     bool tick_now = true;
     const std::uint32_t cost = estimated_cycles_per_instruction + self->fetch_penalty(address);
     if (self->batch_active_) {
@@ -466,9 +551,17 @@ void Cpu::code_hook(uc_struct *opaque, std::uint64_t address,
                   Tlsr8258::RetainedSramBase
             : UINT64_MAX;
     const auto &flash = self->device_.flash();
+    const std::uint64_t head_offset =
+        address < self->boot_head_size_ ? address : flash_offset;
     // Instructions come from flash (through the SRAM-window alias or at its own
     // addresses) or from SRAM; reading them through the engine is far slower.
-    if (size >= bytes.size() && flash_offset < flash.size() &&
+    // The head, at address 0 or in the alias, is the SRAM copy of it.
+    if (size >= bytes.size() && head_offset < self->boot_head_.size() &&
+        bytes.size() <= self->boot_head_.size() - head_offset) {
+        bytes[0] = self->boot_head_[static_cast<std::size_t>(head_offset)];
+        bytes[1] = self->boot_head_[static_cast<std::size_t>(head_offset + 1)];
+        have_instruction = true;
+    } else if (size >= bytes.size() && flash_offset < flash.size() &&
         bytes.size() <= flash.size() - flash_offset) {
         bytes[0] = flash[static_cast<std::size_t>(flash_offset)];
         bytes[1] = flash[static_cast<std::size_t>(flash_offset + 1)];
@@ -653,6 +746,11 @@ bool Cpu::run_batch(std::size_t limit, std::string *fault,
                      0, 0);
     flush_owed();
     batch_active_ = false;
+    if (boot_head_resync_ && error == UC_ERR_OK) {
+        boot_head_resync_ = false;
+        resync_boot_head();
+        instruction_seen_ = true; // the batch stopped in front of the head, on purpose
+    }
     *executed = executed_instructions_ - before;
     if (instruction)
         *instruction = current_instruction_;
