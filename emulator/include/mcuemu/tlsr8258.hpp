@@ -344,6 +344,12 @@ private:
     std::array<std::uint8_t, 256> analog_registers_{};
     alignas(4096) std::array<std::uint8_t, SramSize> sram_{};
     std::array<std::uint8_t, 5> gpio_inputs_{};
+    // GPIO interrupt: a pin whose level is its active one (polarity bit clear: high,
+    // set: low) and whose source is enabled raises IRQ 18, which the core latches when
+    // the pin reaches that condition (update_gpio_irq()). The pins that matched
+    // at the last update, per port.
+    std::array<std::uint8_t, 5> gpio_irq_active_{};
+    void update_gpio_irq();
     std::array<std::uint8_t, 5> gpio_outputs_{};
     GpioPadObserver gpio_pad_observer_;
     I2cPadObserver i2c_pad_observer_;

@@ -30,6 +30,13 @@ constexpr std::uint8_t uart_tx_buffer_irq_bit = 1u << 1;
 constexpr std::uint8_t uart_rx_buffer_irq_bit = 1u << 3;
 constexpr std::uint8_t uart_irq_flag_bit = 1u << 3;
 constexpr std::uint8_t uart_irq_mask_bit = 1u << 6;
+// GPIO interrupts: IRQ 18 in the interrupt controller (source byte 0x64a, bit 2),
+// gated by bit 3 of 0x5b5; per port the polarity is at +4 and the pin source enable
+// at +7 (the vendor SDK and the Zephyr gpio driver agree).
+constexpr std::uint32_t gpio_irq_source_offset = 0x64a;
+constexpr std::uint8_t gpio_irq_source_bit = 1u << 2;
+constexpr std::uint32_t gpio_core_irq_gate_offset = 0x5b5;
+constexpr std::uint8_t gpio_core_irq_gate_bit = 1u << 3;
 constexpr std::uint8_t aes_data_feed_bit = 1u << 1;
 constexpr std::uint8_t aes_codec_finished_bit = 1u << 2;
 constexpr std::uint64_t aes_block_cycles = 1000;
@@ -432,6 +439,7 @@ void Tlsr8258::reset_volatile_state_after_deep_sleep() {
     timer_last_tick_.fill(0);
     timer_fired_.fill(false);
     gpio_outputs_.fill(0);
+    gpio_irq_active_.fill(0);
     uart_rx_fifo_.clear();
     uart_tx_fifo_.clear();
     uart_tx_cycles_remaining_ = 0;
@@ -795,6 +803,25 @@ void Tlsr8258::set_gpio_input(unsigned port, std::uint8_t value) {
     if (port >= gpio_inputs_.size())
         throw std::out_of_range("GPIO port must be PA..PE (0..4)");
     gpio_inputs_[port] = value;
+    update_gpio_irq();
+}
+
+void Tlsr8258::update_gpio_irq() {
+    // Each pin raises the core interrupt when it reaches its active level: the
+    // edge of that pin, not of the sum of all of them, so a press is not lost while
+    // another pin (the CF pulses of a meter) is active. The source stays latched
+    // until firmware clears it.
+    const bool gate = (registers_[gpio_core_irq_gate_offset] & gpio_core_irq_gate_bit) != 0;
+    for (unsigned port = 0; port != gpio_port_offsets.size(); ++port) {
+        const std::uint32_t base = gpio_port_offsets[port];
+        const std::uint8_t active = gate
+            ? static_cast<std::uint8_t>((gpio_inputs_[port] ^ registers_[base + 4]) &
+                                        registers_[base + 7])
+            : std::uint8_t{0};
+        if ((active & static_cast<std::uint8_t>(~gpio_irq_active_[port])) != 0)
+            registers_[gpio_irq_source_offset] |= gpio_irq_source_bit;
+        gpio_irq_active_[port] = active;
+    }
 }
 
 std::uint8_t Tlsr8258::gpio_oen(unsigned port) const {
@@ -1684,6 +1711,12 @@ void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
     const std::uint8_t previous_pwm_enable =
         pwm_enable_write ? pwm_enable_mask() : 0;
     registers_[offset] = value;
+    if (offset == gpio_core_irq_gate_offset)
+        update_gpio_irq();
+    else
+        for (std::uint32_t base : gpio_port_offsets)
+            if (offset == base + 4 || offset == base + 7)
+                update_gpio_irq();
     if (pwm_enable_write) {
         const std::uint8_t current_pwm_enable = pwm_enable_mask();
         if (current_pwm_enable != previous_pwm_enable)

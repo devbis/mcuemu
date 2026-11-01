@@ -60,6 +60,52 @@ void test_tlsr_memory_gpio_and_timer() {
     CHECK(one_megabyte.read8(one_megabyte.flash_size() - 1u) == 0x3c);
 }
 
+// GPIO interrupt: IRQ 18 (source byte 0x64a, bit 2), gated by bit 3 of 0x5b5; per port
+// the polarity is at +4 and the pin source enable at +7. A pin raises it when it reaches
+// its active level, each pin on its own: a press is not lost while another pin is active.
+void test_tlsr_gpio_interrupt_source() {
+    constexpr std::uint32_t source = mcuemu::Tlsr8258::RegisterBase + 0x64a;
+    constexpr std::uint8_t irq18 = 1u << 2;
+    mcuemu::Tlsr8258 device;
+    const auto port = [](unsigned index) {
+        return mcuemu::Tlsr8258::GpioBase + 8u * index;
+    };
+
+    // PA0: active low, enabled; the core gate is still closed.
+    device.write8(port(0) + 4, 0x01);
+    device.write8(port(0) + 7, 0x01);
+    device.set_gpio_input(0, 0xfe);
+    CHECK((device.read8(source) & irq18) == 0);
+    device.set_gpio_input(0, 0xff);
+
+    device.write8(mcuemu::Tlsr8258::RegisterBase + 0x5b5, 0x08);
+    CHECK((device.read8(source) & irq18) == 0); // idle high: not active
+    device.set_gpio_input(0, 0xfe);
+    CHECK((device.read8(source) & irq18) != 0);
+
+    // Writing one clears it; the pin staying low does not raise it again.
+    device.write8(source, irq18);
+    CHECK((device.read8(source) & irq18) == 0);
+    device.set_gpio_input(0, 0xfe);
+    CHECK((device.read8(source) & irq18) == 0);
+    device.set_gpio_input(0, 0xff);
+    CHECK((device.read8(source) & irq18) == 0); // the release is not an active edge
+
+    // PB4: active high. While it is active a press of PA0 still raises the interrupt.
+    device.write8(port(1) + 4, 0x00);
+    device.write8(port(1) + 7, 0x10);
+    device.set_gpio_input(1, 0x10);
+    CHECK((device.read8(source) & irq18) != 0);
+    device.write8(source, irq18);
+    device.set_gpio_input(0, 0xfe);
+    CHECK((device.read8(source) & irq18) != 0);
+
+    // A pin whose source is not enabled raises nothing.
+    device.write8(source, irq18);
+    device.set_gpio_input(2, 0x00);
+    CHECK((device.read8(source) & irq18) == 0);
+}
+
 void test_tlsr_analog_registers_and_32k_tick() {
     mcuemu::Tlsr8258 device;
     device.write8(mcuemu::Tlsr8258::AnalogAddress, 0x7f);

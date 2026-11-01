@@ -76,6 +76,7 @@ These were added for the system simulation (see
 
 | Registers | Model | Evidence |
 |---|---|---|
+| GPIO `base+4` (polarity), `base+7` (pin interrupt enable), `0x5b5[3]` (core interrupt enable) | A pin whose source is enabled and whose level is its active one (polarity 0: high, 1: low) latches IRQ 18 (source byte `0x64a`, bit 2) when it reaches that level, each pin on its own, so a press is not lost while another pin is active. Firmware clears the source by writing one to `0x648..0x64a`. The pin source does not latch by itself while the level only stays. Wake from sleep by GPIO is not modelled. | SDK GPIO IRQ and the Zephyr `gpio_tlsr8258` driver; inferred, not measured. |
 | GPIO `base+2` (OEN), `base+3` (OUT), `base+6` (ACT_AS_GPIO) | Pad observers report changes. OEN resets to `0xff` and ACT_AS_GPIO to `0xff` (all pads start as GPIO inputs). A pad whose ACT_AS_GPIO bit is 0 is not driven by OUT/OEN. | Datasheet reset values; SDK `gpio_set_func`. |
 | AREG `0x0e..0x17` | Internal pull resistors, two bits per pad: 1 pull-up 1M, 2 pull-down 100K, 3 pull-up 10K. Modeled as weak pull-up/down on the pad's net. | SDK `gpio_setup_up_down_resistor`. |
 | `0x00..0x07` | I2C master: speed `0x00`, id `0x01`, status `0x02` (CMD_BUSY, BUS_BUSY, NAK), mode `0x03[1]` master enable, ADR/DO/DI `0x04..0x06`, command `0x07` (ID, ADDR, DO, DI, START, STOP, READ_ID, ACK). Phases run START, ID, ADR, DO, DI, STOP; each bit takes `4 * speed` cycles. Pads follow the pair whose ACT_AS_GPIO bits are cleared: A3/A4, B6/D7, C0/C1 or C2/C3. | Datasheet 7.3.4 and SDK I2C driver. |
