@@ -16,6 +16,7 @@ void test_cpu_long_branches_and_call();
 void test_cpu_status_modes_and_exception_return();
 void test_tlsr_memory_gpio_and_timer();
 void test_tlsr_gpio_interrupt_source();
+void test_tlsr_timer_gpio_trigger_counts_edges();
 void test_tlsr_analog_registers_and_32k_tick();
 void test_tlsr_rc32k_calibration_ready_after_virtual_time();
 void test_tlsr_deep_sleep_sram_retention();
@@ -60,6 +61,7 @@ int main() {
     RUN(test_cpu_status_modes_and_exception_return);
     RUN(test_tlsr_memory_gpio_and_timer);
     RUN(test_tlsr_gpio_interrupt_source);
+    RUN(test_tlsr_timer_gpio_trigger_counts_edges);
     RUN(test_tlsr_analog_registers_and_32k_tick);
     RUN(test_tlsr_rc32k_calibration_ready_after_virtual_time);
     RUN(test_tlsr_deep_sleep_sram_retention);

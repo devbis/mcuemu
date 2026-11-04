@@ -106,6 +106,57 @@ void test_tlsr_gpio_interrupt_source() {
     CHECK((device.read8(source) & irq18) == 0);
 }
 
+// Timer mode 1 (GPIO trigger, datasheet 5.1.3 and 7.1.2): the tick goes up on each edge of the
+// pin routed to the timer (m0/m1/m2 at 0x5b8/0x5c0/0x5c8 + port), the polarity at port + 4 picks the
+// edge; every edge counts, however many arrive between two reads, and no clock cycle does.
+void test_tlsr_timer_gpio_trigger_counts_edges() {
+    using mcuemu::Tlsr8258;
+    constexpr std::uint32_t reg = Tlsr8258::RegisterBase;
+    const auto edges = [](Tlsr8258 &device, unsigned port, std::uint8_t bit, unsigned n) {
+        for (unsigned i = 0; i != n; ++i) {
+            device.set_gpio_input(port, static_cast<std::uint8_t>(0xff & ~bit)); // low
+            device.set_gpio_input(port, 0xff);                                   // high: rising
+        }
+    };
+
+    Tlsr8258 device;
+    // Timer0 counts PB4 (rising: polarity 0), Timer2 counts PB5 (falling: polarity 1)
+    device.write8(reg + 0x588 + 4, 0x20);        // PB polarity: bit 5 falling, bit 4 rising
+    device.write8(reg + 0x5b8 + 1, 0x10);        // m0: PB4
+    device.write8(reg + 0x5c8 + 1, 0x20);        // m2: PB5
+    device.write32(reg + 0x630, 0);
+    device.write32(reg + 0x638, 0);
+    device.write32(reg + 0x624, 0xffffffffu);    // capture: never reached
+    device.write32(reg + 0x62c, 0xffffffffu);
+    device.set_gpio_input(1, 0xff);
+    device.write8(reg + 0x620, 0x01 | (1 << 1)); // Timer0: enable, mode 1
+    device.write8(reg + 0x620, 0x01 | (1 << 1) | 0x40 | 0x80); // + Timer2: enable, mode bit 7 (=1)
+    device.write8(reg + 0x621, 0x00);
+
+    edges(device, 1, 0x10, 1800);
+    edges(device, 1, 0x20, 7);
+    CHECK(device.read32(reg + 0x630) == 1800u); // PB4 rising edges
+    CHECK(device.read32(reg + 0x638) == 7u);    // PB5 falling edges (polarity 1)
+    CHECK(device.read32(reg + 0x634) == 0u);    // Timer1 is not routed to anything
+
+    // The clock does not move it, and a pin that is not routed does not count
+    const std::uint64_t before = device.time_ns();
+    device.tick(1000000);
+    CHECK(device.time_ns() > before);
+    CHECK(device.read32(reg + 0x630) == 1800u);
+    device.write8(reg + 0x5b8 + 1, 0x00);
+    edges(device, 1, 0x10, 10);
+    CHECK(device.read32(reg + 0x630) == 1800u);
+
+    // The tick can be set; a match with the capture value stops the timer and flags it
+    device.write8(reg + 0x5b8 + 1, 0x10);
+    device.write32(reg + 0x630, 5);
+    device.write32(reg + 0x624, 8);
+    edges(device, 1, 0x10, 20);
+    CHECK(device.read32(reg + 0x630) == 8u);
+    CHECK((device.read8(reg + 0x623) & 0x01) != 0);
+}
+
 void test_tlsr_analog_registers_and_32k_tick() {
     mcuemu::Tlsr8258 device;
     device.write8(mcuemu::Tlsr8258::AnalogAddress, 0x7f);

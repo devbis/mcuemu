@@ -291,6 +291,7 @@ Tlsr8258::Tlsr8258(Tlsr8258Model model, std::uint32_t clock_hz)
     adc_next_sample_ns_ = 0;
     timer_last_tick_.fill(0);
     timer_fired_.fill(false);
+    timer_gpio_stopped_.fill(false);
     // UART register reset values follow datasheet table 7-9. The SDK's polling
     // API assumes TX_DONE is set while idle, despite the table listing 0 for
     // status register 0x9e; the model follows the SDK here pending a hardware trace.
@@ -438,6 +439,7 @@ void Tlsr8258::reset_volatile_state_after_deep_sleep() {
     system_timer_calibration_pending_ = false;
     timer_last_tick_.fill(0);
     timer_fired_.fill(false);
+    timer_gpio_stopped_.fill(false);
     gpio_outputs_.fill(0);
     gpio_irq_active_.fill(0);
     uart_rx_fifo_.clear();
@@ -639,6 +641,8 @@ void Tlsr8258::tick(std::uint32_t cycles) {
         const unsigned enable_bit = timer * 3u;
         if ((control & (1u << enable_bit)) == 0)
             continue;
+        if (timer_mode(timer) == 1)
+            continue; // counts the edges of its GPIO, see count_gpio_timers()
         const std::uint32_t count = timer_tick(timer) + cycles;
         timer_last_tick_[timer] = count;
         const std::uint32_t capture =
@@ -732,7 +736,8 @@ std::uint64_t Tlsr8258::cycles_until_event() const noexcept {
         (static_cast<std::uint32_t>(registers_[0x622]) << 16) |
         (static_cast<std::uint32_t>(registers_[0x623]) << 24);
     for (unsigned timer = 0; timer != 3; ++timer) {
-        if ((control & (1u << (timer * 3u))) == 0 || timer_fired_[timer])
+        if ((control & (1u << (timer * 3u))) == 0 || timer_fired_[timer] ||
+            timer_mode(timer) == 1)
             continue;
         const std::uint32_t capture =
             static_cast<std::uint32_t>(registers_[0x624 + timer * 4]) |
@@ -802,8 +807,52 @@ void Tlsr8258::set_radio_channel(std::uint8_t zigbee_channel) {
 void Tlsr8258::set_gpio_input(unsigned port, std::uint8_t value) {
     if (port >= gpio_inputs_.size())
         throw std::out_of_range("GPIO port must be PA..PE (0..4)");
+    const std::uint8_t before = gpio_inputs_[port];
     gpio_inputs_[port] = value;
+    count_gpio_timers(port, before, value);
     update_gpio_irq();
+}
+
+unsigned Tlsr8258::timer_mode(unsigned timer) const noexcept {
+    switch (timer) {
+    case 0: return (registers_[0x620] >> 1) & 3u;
+    case 1: return (registers_[0x620] >> 4) & 3u;
+    default: return ((registers_[0x620] >> 7) & 1u) | ((registers_[0x621] & 1u) << 1);
+    }
+}
+
+bool Tlsr8258::timer_enabled(unsigned timer) const noexcept {
+    return (registers_[0x620] & (1u << (timer * 3u))) != 0;
+}
+
+void Tlsr8258::count_gpio_timers(unsigned port, std::uint8_t before, std::uint8_t after) noexcept {
+    // Counting signal of a timer = (input ^ polarity) & m<timer>; the tick goes up on its
+    // rising edge (datasheet 5.1.3 and 7.1.2).
+    static constexpr std::uint32_t route_base[3] = {0x5b8, 0x5c0, 0x5c8};
+    const std::uint8_t pol = registers_[gpio_port_offsets[port] + 4];
+    for (unsigned timer = 0; timer != 3; ++timer) {
+        if (!timer_enabled(timer) || timer_mode(timer) != 1 || timer_gpio_stopped_[timer])
+            continue;
+        const std::uint8_t route = registers_[route_base[timer] + port];
+        const std::uint8_t was = static_cast<std::uint8_t>((before ^ pol) & route);
+        const std::uint8_t now = static_cast<std::uint8_t>((after ^ pol) & route);
+        std::uint8_t rising = static_cast<std::uint8_t>(now & ~was);
+        for (; rising != 0; rising &= static_cast<std::uint8_t>(rising - 1)) {
+            ++timer_last_tick_[timer];
+            const std::uint32_t capture =
+                static_cast<std::uint32_t>(registers_[0x624 + timer * 4]) |
+                (static_cast<std::uint32_t>(registers_[0x625 + timer * 4]) << 8) |
+                (static_cast<std::uint32_t>(registers_[0x626 + timer * 4]) << 16) |
+                (static_cast<std::uint32_t>(registers_[0x627 + timer * 4]) << 24);
+            if (timer_last_tick_[timer] == capture) { // matches: an interrupt, the timer stops
+                timer_gpio_stopped_[timer] = true;
+                timer_fired_[timer] = true;
+                registers_[0x623] |= static_cast<std::uint8_t>(1u << timer);
+                registers_[0x648] |= static_cast<std::uint8_t>(1u << timer);
+                break;
+            }
+        }
+    }
 }
 
 void Tlsr8258::update_gpio_irq() {
@@ -1702,8 +1751,15 @@ void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
             return;
         }
     }
-    if (offset >= 0x630 && offset <= 0x63b)
-        return; // timer counters are read-only
+    if (offset >= 0x630 && offset <= 0x63b) {
+        // The tick goes on from the value firmware writes (the datasheet advises 0)
+        const unsigned index = (offset - 0x630) / 4u;
+        const unsigned byte = (offset - 0x630) % 4u;
+        std::uint32_t &tick = timer_last_tick_[index];
+        tick = (tick & ~(0xffu << (byte * 8u))) | (static_cast<std::uint32_t>(value) << (byte * 8u));
+        timer_gpio_stopped_[index] = false;
+        return;
+    }
 
     const bool pwm_enable_write =
         offset == PwmEnable - RegisterBase ||
@@ -1728,8 +1784,10 @@ void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
             const unsigned enable_bit = timer * 3u;
             const bool enabled = (registers_[0x620 + enable_bit / 8u] &
                                   (1u << (enable_bit % 8u))) != 0;
-            if (!enabled)
+            if (!enabled) {
                 timer_fired_[timer] = false;
+                timer_gpio_stopped_[timer] = false;
+            }
         }
     }
     if (offset >= 0x94 && offset <= 0x99)

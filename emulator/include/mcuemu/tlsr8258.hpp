@@ -389,6 +389,13 @@ private:
     std::vector<AnalogRegisterEvent> analog_register_events_;
     std::array<std::uint32_t, 3> timer_last_tick_{};
     std::array<bool, 3> timer_fired_{};
+    // Timer mode 1 (GPIO trigger): the tick counts the edges of the pins routed to it
+    // (m0/m1/m2 at 0x5b8/0x5c0/0x5c8 + port, polarity at port + 4); a timer stopped by its
+    // capture value stays stopped until it is enabled again or its tick is written.
+    std::array<bool, 3> timer_gpio_stopped_{};
+    unsigned timer_mode(unsigned timer) const noexcept;
+    bool timer_enabled(unsigned timer) const noexcept;
+    void count_gpio_timers(unsigned port, std::uint8_t before, std::uint8_t after) noexcept;
     std::deque<std::uint8_t> uart_rx_fifo_;
     std::deque<std::uint8_t> uart_tx_fifo_;
     std::vector<std::uint8_t> uart_transmitted_;
