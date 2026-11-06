@@ -1,0 +1,75 @@
+name: Build WebAssembly
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main", "wasm"]
+  pull_request:
+    branches: ["main", "wasm"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wasm-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UNICORN_REPOSITORY: devbis/unicorn
+  UNICORN_REF: wasm
+  EMSCRIPTEN_VERSION: 6.0.13
+
+jobs:
+  build-wasm:
+    name: Emscripten module
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout mcuemu
+        uses: actions/checkout@v5
+
+      - name: Checkout Unicorn WebAssembly branch
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ env.UNICORN_REPOSITORY }}
+          ref: ${{ env.UNICORN_REF }}
+          path: engine/unicorn
+
+      - name: Set up Emscripten
+        uses: emscripten-core/setup-emsdk@v16
+        with:
+          version: ${{ env.EMSCRIPTEN_VERSION }}
+          actions-cache-folder: emsdk-cache
+
+      - name: Install Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ninja-build
+
+      - name: Show tool versions
+        run: |
+          emcc --version
+          cmake --version
+          ninja --version
+
+      - name: Configure WebAssembly target
+        run: >-
+          emcmake cmake -S . -B build-wasm -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DMCUEMU_BUILD_WASM=ON
+
+      - name: Build WebAssembly target
+        run: cmake --build build-wasm --target mcuemu-wasm --parallel
+
+      - name: Verify output files
+        run: |
+          test -s build-wasm/mcuemu-wasm.mjs
+          test -s build-wasm/mcuemu-wasm.wasm
+
+      - name: Upload WebAssembly artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: mcuemu-wasm
+          path: |
+            build-wasm/mcuemu-wasm.mjs
+            build-wasm/mcuemu-wasm.wasm
+          if-no-files-found: error

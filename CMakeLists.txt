@@ -8,6 +8,16 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 option(MCUEMU_BUILD_TESTS "Build the emulator self-tests" ON)
+option(MCUEMU_BUILD_WASM "Build the browser-facing WebAssembly control module" OFF)
+
+if(MCUEMU_BUILD_WASM)
+    if(NOT EMSCRIPTEN)
+        message(FATAL_ERROR "MCUEMU_BUILD_WASM requires the Emscripten toolchain")
+    endif()
+    # The native test executables are not browser targets.
+    set(MCUEMU_BUILD_TESTS OFF CACHE BOOL "Build the emulator self-tests" FORCE)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-fexceptions>)
+endif()
 
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/engine/unicorn/CMakeLists.txt")
     message(FATAL_ERROR
@@ -49,8 +59,28 @@ target_include_directories(mcuemu-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulat
 target_compile_options(mcuemu-core PRIVATE ${MCUEMU_WARNING_FLAGS})
 target_link_libraries(mcuemu-core PUBLIC unicorn)
 
-add_executable(mcuemu emulator/src/main.cpp)
-target_link_libraries(mcuemu PRIVATE mcuemu-core mcs51emu nrf52emu efr32emu esp32emu phy6252emu simcore)
+if(MCUEMU_BUILD_WASM)
+    add_executable(mcuemu-wasm emulator/src/wasm_api.cpp)
+    target_link_libraries(mcuemu-wasm PRIVATE simcore)
+    target_link_options(mcuemu-wasm PRIVATE
+        --no-entry
+        -fexceptions
+        -sMODULARIZE=1
+        -sEXPORT_ES6=1
+        -sENVIRONMENT=web,worker
+        -sALLOW_MEMORY_GROWTH=1
+        -sEMULATE_FUNCTION_POINTER_CASTS=1
+        -sEXPORTED_RUNTIME_METHODS=ccall,FS
+        # TCI helper calls intentionally use cast function pointers. The
+        # adapter pass works at O1; Binaryen currently asserts on this module
+        # at O3.
+        -O1
+    )
+    set_target_properties(mcuemu-wasm PROPERTIES SUFFIX ".mjs")
+elseif(NOT EMSCRIPTEN)
+    add_executable(mcuemu emulator/src/main.cpp)
+    target_link_libraries(mcuemu PRIVATE mcuemu-core mcs51emu nrf52emu efr32emu esp32emu phy6252emu simcore)
+endif()
 
 add_library(mcs51emu
     emulator/src/mcs51/ca51f253l3.cpp
