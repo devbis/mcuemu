@@ -47,6 +47,70 @@ constexpr std::uint32_t NoSegment = 1u << 8;
 constexpr std::uint32_t M154 = 0x4c000000;
 } // namespace
 
+// The header bflb-mcu-tool writes (read back from a board running MCUboot): no_segment set, no segment list,
+// bootentry 0, img_start the flash offset of the image (0x2000). The ROM maps the image at the start of the XIP
+// window and jumps there; the image's start code then sets the flash offset register to 0.
+void test_bl702_boot_header_of_the_flashing_tool_maps_the_image_at_img_start() {
+    std::vector<std::uint8_t> bytes(0x2000, 0xff);
+    put32(bytes, 0, 0x504e4642);
+    put32(bytes, 116, 0x310);
+    put32(bytes, 120, 0x20); // img_len, not a segment count
+    put32(bytes, 124, 0);
+    put32(bytes, 128, 0x2000);
+    put32(bytes, 0x2000, Wfi);
+    put32(bytes, 0x2004, JumpBack4);
+
+    Bl702 chip;
+    chip.load_flash(bytes);
+    chip.reset();
+    CHECK(chip.core().pc() == Bl702::FlashBase);
+    std::uint8_t code[8] = {};
+    CHECK(chip.core().read_memory(Bl702::FlashBase, code, sizeof code));
+    CHECK(std::memcmp(code, &bytes[0x2000], sizeof code) == 0);
+    CHECK(read32(chip, 0x4000b434) == 0x2000); // SF_CTRL_SF_ID0_OFFSET holds the image offset
+    CHECK(chip.run_until(100000).reason == riscv::StopReason::Deadline); // the image runs (a wfi loop)
+
+    write32(chip, 0x4000b434, 0); // the start code of the image: the window onto flash offset 0
+    CHECK(chip.core().read_memory(Bl702::FlashBase, code, sizeof code));
+    CHECK(code[0] == 'B' && code[1] == 'F' && code[2] == 'N' && code[3] == 'P');
+}
+
+// The driver's erase and program: the address bytes follow the command byte in IF_SAHB cmd_buf[0] and cmd_buf[1]
+// (three address bytes: cmd << 24 | addr; four: cmd_buf[0] |= addr >> 8, cmd_buf[1] = addr << 24).
+void test_bl702_sf_ctrl_commands_take_their_address_from_the_command_words() {
+    constexpr std::uint32_t Sf = 0x4000b000;
+    Bl702 chip;
+    chip.load_flash(image(NoSegment, Entry));
+    chip.reset();
+    auto command = [&](std::uint32_t config, std::uint32_t cmd0, std::uint32_t cmd1) {
+        write32(chip, Sf + 0xc, cmd0);
+        write32(chip, Sf + 0x10, cmd1);
+        write32(chip, Sf + 0x8, config | 2); // the trigger
+    };
+    auto write_enable = [&] { command(0x08000000, 0x06u << 24, 0); };
+    std::uint8_t *flash = chip.flash();
+
+    std::memset(flash + 0x3000, 0, 0x1000);
+    write_enable();
+    command(0x0c040000, (0x20u << 24) | 0x3000, 0); // sector erase, three address bytes
+    CHECK(flash[0x3000] == 0xff && flash[0x3fff] == 0xff);
+    CHECK(flash[0] == 'B');           // nothing else touched: the header is still there
+    CHECK(flash[0x2fff] == 0xff);     // and the sector below the erased one
+
+    const std::uint8_t data[4] = {0x5a, 0xa5, 0x3c, 0xc3};
+    for (unsigned i = 0; i < sizeof data; ++i)
+        chip.write(Sf + 0x700 + i, data[i], 1);
+    write_enable();
+    command(0x0d84000c, (0x02u << 24) | 0x3004, 0); // page program: four bytes at 0x3004
+    CHECK(std::memcmp(flash + 0x3004, data, sizeof data) == 0);
+    CHECK(flash[0x3000] == 0xff && flash[0x3008] == 0xff);
+
+    std::memset(flash + 0x5000, 0, 0x1000);
+    write_enable();
+    command(0x0c060000, (0x20u << 24) | (0x5000u >> 8), 0x5000u << 24); // four address bytes
+    CHECK(flash[0x5000] == 0xff && flash[0x5fff] == 0xff);
+}
+
 void test_bl702_boot_header_loads_segments_and_rejects_no_header() {
     // A header with one segment: 8 bytes that load into SRAM at 0x42010100. The code stays at CodeOffset.
     const std::uint8_t data[8] = {0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18};

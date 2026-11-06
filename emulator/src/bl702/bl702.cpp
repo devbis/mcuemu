@@ -14,7 +14,7 @@ namespace {
 // 16-byte header (load address, length, data CRC, header CRC) and its data.
 constexpr std::uint32_t BootMagic = 0x504e4642; // "BFNP", little-endian
 constexpr std::uint32_t BootHeaderLength = 176, SegmentHeaderLength = 16;
-constexpr std::uint32_t BootFlagsOffset = 116, SegmentCountOffset = 120, BootEntryOffset = 124;
+constexpr std::uint32_t BootFlagsOffset = 116, SegmentCountOffset = 120, BootEntryOffset = 124, ImageStartOffset = 128;
 constexpr std::uint32_t NoSegmentBit = 1u << 8; // no_segment in the boot config word
 
 std::uint32_t little_endian(const std::uint8_t *bytes) {
@@ -88,7 +88,19 @@ void Bl702::reset() {
     if (little_endian(flash) != BootMagic)
         throw std::runtime_error("no BL702 boot header ('BFNP') at flash offset 0");
     bool xip_mapped = false;
-    if ((little_endian(flash + BootFlagsOffset) & NoSegmentBit) == 0) {
+    std::uint32_t entry = little_endian(flash + BootEntryOffset);
+    if ((little_endian(flash + BootFlagsOffset) & NoSegmentBit) != 0) {
+        // What bflb-mcu-tool writes (checked on a board): no segment list, `img_start` is the flash offset of the
+        // image, and the ROM maps it at the start of the XIP window (the flash offset register takes that offset) and
+        // jumps there; `bootentry` is 0.
+        const std::uint32_t image = little_endian(flash + ImageStartOffset);
+        if (image >= config_.flash_size)
+            throw std::runtime_error("boot header image start is past the flash");
+        window_shift_ = image;
+        xip_mapped = true;
+        if (entry == 0)
+            entry = FlashBase;
+    } else if ((little_endian(flash + BootFlagsOffset) & NoSegmentBit) == 0) {
         const std::uint32_t count = little_endian(flash + SegmentCountOffset);
         std::uint64_t offset = BootHeaderLength;
         for (std::uint32_t i = 0; i < count; ++i) {
@@ -110,7 +122,7 @@ void Bl702::reset() {
     }
     sync_window();
     sf_offset_reg_ = (sf_offset_reg_ & 0xff00'0000) | (static_cast<std::uint32_t>(window_shift_) & 0x00ff'ffff);
-    core_.reset(little_endian(flash + BootEntryOffset));
+    core_.reset(entry);
 }
 
 riscv::RunResult Bl702::run_until(std::uint64_t target_ns) {

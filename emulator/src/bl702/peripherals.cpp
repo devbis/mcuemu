@@ -186,7 +186,12 @@ void SfCtrl::run_command() {
     const std::uint32_t config = word(SahbConfig);
     const std::uint8_t command = static_cast<std::uint8_t>(word(SahbCmd0) >> 24);
     const std::uint32_t addr_bytes = (config & SahbAddrEn) ? ((config >> SahbAddrBytePos) & 7) + 1 : 0;
-    const std::uint32_t address = addr_bytes ? word(SahbCmd1) >> (32 - 8 * addr_bytes) : 0;
+    // The command word is a byte stream: the command byte, then the address bytes, in IF_SAHB cmd_buf[0] and
+    // cmd_buf[1] (the driver's erase and program: cmd_buf[0] = cmd << 24 | addr for three address bytes,
+    // cmd_buf[0] |= addr >> 8 and cmd_buf[1] = addr << 24 for four).
+    const std::uint64_t stream = (static_cast<std::uint64_t>(word(SahbCmd0)) << 32) | word(SahbCmd1);
+    const std::uint32_t address =
+        addr_bytes ? static_cast<std::uint32_t>((stream << 8) >> (64 - 8 * addr_bytes)) : 0;
     const std::uint32_t length = (config & SahbDataEn) ? ((config >> SahbDataBytePos) & 0x3ff) + 1 : 0;
     const bool host_writes = (config & SahbDataRw) != 0;
     const std::int64_t size = chip_.flash_size();
