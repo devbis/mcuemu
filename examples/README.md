@@ -6,6 +6,7 @@
 | `devices/tuya_thermostat.yaml` | A Tuya-style thermostat: CA51F253L3 main board + ZT3L (TLSR8258) Zigbee module, joined by a UART running the "serial v2" protocol. |
 | `devices/tuya_plug.yaml` | A smart plug: TLSR8258 module, relay, LED, button and a BL0937 energy meter on three GPIOs. Defaults are the Zbeacon TS011F board of `zigbee-rs-plugs` (pins and vendor calibration). |
 | `plug_only.yaml` | The plug on its own radio medium, with a scenario (load change, button press) and VCD/pcap sinks, for firmware bring-up. |
+| `tlsr8269_smoke.yaml` | A bare TLSR8269 (TLSR826x family) running the SDK smoke firmware from `tests/tlsr826x/`: two lines over the DMA UART. |
 | `lywsd03mmc.yaml` | A Xiaomi LYWSD03MMC (hardware 1.4) joining a network run by the sampleGW coordinator, with the climate changed from the scenario. |
 | `devices/lywsd03mmc_v14.yaml` | LYWSD03MMC hardware B1.4: TLSR8258-class module, SHTC3 sensor and an I2C segment LCD (0x3C) on PC2/PC3, two test-point buttons. The display is decoded by `parts/lcd_lywsd03mmc.lua`. |
 | `devices/lywsd03mmc_v15.yaml` | LYWSD03MMC with the UART display (38400 baud, TX PD7) and an SHT4x sensor; the display frames are logged, not decoded. |

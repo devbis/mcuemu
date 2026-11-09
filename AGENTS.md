@@ -11,6 +11,10 @@ chips and a declarative system layer on top:
 
 - **TLSR8258** (Telink, TC32 core, 2.4 GHz radio: Zigbee/BLE-style frames): board
   model in `emulator/src/` (`cpu.cpp`, `tlsr8258*.cpp`, `radio.cpp`).
+- **TLSR8269 / TLSR8267** (Telink TLSR826x, TC32 core): `emulator/src/tlsr826x.cpp`
+  (`mcuemu::Tlsr826x`), sim adapter `sim/tlsr826x_mcu.cpp`; shares `Cpu` with the
+  TLSR8258 through `Tc32Device` (`tc32_device.hpp`). Registers are from the SDK
+  headers and driver disassembly only (no datasheet); see `docs/tlsr826x.md`.
 - **CA51F253L3** (Cmsemicron, MCS-51 core): `emulator/src/mcs51/`.
 - **CC2530F256** (TI, MCS-51 core, banked 256 KiB flash): `emulator/src/mcs51/cc2530f256.cpp`,
   sim adapter `emulator/src/sim/cc2530f256_mcu.cpp`. See `docs/cc2530.md`.

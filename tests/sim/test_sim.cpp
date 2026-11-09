@@ -9,6 +9,7 @@
 #include "sim/phy6252_mcu.hpp"
 #include "sim/scheduler.hpp"
 #include "sim/tlsr8258_mcu.hpp"
+#include "sim/tlsr826x_mcu.hpp"
 #include "sim/world.hpp"
 
 #include <string>
@@ -189,6 +190,40 @@ void test_tlsr_pad_drives_net_and_reads_back() {
         duplicate = true;
     }
     CHECK(duplicate);
+}
+
+void test_tlsr826x_pad_drives_net_and_reads_back() {
+    sim::World world;
+    auto &mcu = static_cast<sim::Tlsr826xMcu &>(
+        world.add_mcu(std::make_unique<sim::Tlsr826xMcu>("a")));
+    mcu.device().load_firmware(words({0x87fe})); // tj .
+    mcu.cpu().sync_flash();
+    mcu.reset();
+    CHECK(mcu.model() == "tlsr8269");
+    sim::Net &net = world.add_net("pb1");
+    world.connect(mcu, "PB1", net);
+    const std::uint32_t port_b = mcuemu::Tlsr826x::RegisterBase + 0x588;
+    CHECK(net.level() == sim::Level::Floating);
+    mcu.device().write8(port_b + 3, 0x02);
+    mcu.device().write8(port_b + 2, 0xfd); // OEN bit 1 = 0: driven
+    CHECK(net.level() == sim::Level::High);
+    mcu.device().write8(port_b + 3, 0x00);
+    CHECK(net.level() == sim::Level::Low);
+    mcu.device().write8(port_b + 2, 0xff);
+    CHECK(net.level() == sim::Level::Floating);
+    // The line level comes back through the input register.
+    sim::Net &other = world.add_net("pb2");
+    world.connect(mcu, "PB2", other);
+    other.set_pull(sim::Drive::PullDown);
+    CHECK((mcu.device().read8(port_b) & 0x04u) == 0);
+    bool unknown = false;
+    try {
+        world.connect(mcu, "PF0", net);
+    } catch (const std::invalid_argument &) {
+        unknown = true;
+    }
+    CHECK(unknown);
+    CHECK(mcu.run_until(50000) == sim::McuState::Running);
 }
 
 void test_phy6252_pads_follow_nets() {
@@ -515,6 +550,7 @@ int main() {
     RUN(test_net_analog_source);
     RUN(test_endpoint_registry_and_net_events);
     RUN(test_tlsr_pad_drives_net_and_reads_back);
+    RUN(test_tlsr826x_pad_drives_net_and_reads_back);
     RUN(test_phy6252_pads_follow_nets);
     RUN(test_two_mcus_and_a_button_on_one_net);
     RUN(test_start_offset_delays_mcu);

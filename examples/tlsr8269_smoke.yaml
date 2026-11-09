@@ -1,0 +1,21 @@
+# A bare TLSR8269 running the SDK smoke firmware (tests/tlsr826x): it prints two
+# lines over the UART. Build the image with tests/tlsr826x/build.sh and copy it:
+#
+#   tests/tlsr826x/build.sh && cp build/tlsr826x/tlsr826x-smoke.bin firmware/
+#   mkdir -p /tmp/t69 && cd /tmp/t69
+#   /path/to/build/mcuemu sim /path/to/examples/tlsr8269_smoke.yaml --for 50ms
+version: 1
+
+world:
+  seed: 1
+  duration: 50ms
+
+devices:
+  - id: node
+    mcus:
+      - id: main
+        model: tlsr8269
+        firmware: ../firmware/tlsr826x-smoke.bin
+
+attach:
+  - { endpoint: node.main.uart0, sink: "text" }

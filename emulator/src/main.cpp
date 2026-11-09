@@ -2,6 +2,7 @@
 #include "mcuemu/cpu.hpp"
 #include "mcuemu/radio.hpp"
 #include "mcuemu/tlsr8258.hpp"
+#include "mcuemu/tlsr826x.hpp"
 #include "mcs51emu/run_command.hpp"
 #include "efr32emu/run_command.hpp"
 #include "esp32emu/run_command.hpp"
@@ -64,7 +65,7 @@ void usage(std::ostream &out) {
            "       [--trace-nets]\n"
            "       mcuemu serve --root DIR [--port N] [--bind ADDR] [--token T]\n"
            "       [--allow-origin ORIGIN]... [--max-sessions N] [--idle-timeout SEC]\n\n"
-           "Models: TLSR8258F512, TLSR8258F1K, CA51F253L3 and CC2530F256 (MCS-51), NRF52840 (Cortex-M4),\n"
+           "Models: TLSR8258F512, TLSR8258F1K, TLSR8269, TLSR8267, CA51F253L3 and CC2530F256 (MCS-51), NRF52840 (Cortex-M4),\n"
            "        EFR32MG21 (Cortex-M33), ESP32C6, ESP32H2 (RISC-V), PHY6252 (Cortex-M0; experimental)\n"
            "Firmware is loaded as a raw image at flash address 0.\n"
            "Trace ranges are inclusive; addresses accept decimal or 0x hex.\n";
@@ -304,6 +305,13 @@ mcuemu::Tlsr8258Model parse_run_model(const std::string &model) {
     }
 }
 
+bool is_tlsr826x_model(const std::string &model) {
+    std::string lower;
+    for (char c : model)
+        lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    return lower.rfind("tlsr826", 0) == 0;
+}
+
 bool is_mcs51_model(const std::string &model) {
     return model.rfind("CA51", 0) == 0 || model == "CC2530F256";
 }
@@ -394,6 +402,55 @@ int run_command(int argc, char **argv) {
     if (firmware.empty())
         throw std::invalid_argument("--firmware is required");
     require_model(model);
+
+    if (is_tlsr826x_model(model)) {
+        // TLSR826x: no analog/RC options; the core, the registers and the UART
+        // output only (docs/tlsr826x.md).
+        mcuemu::Tlsr826x chip(mcuemu::parse_tlsr826x_model(model));
+        std::ifstream image_file(firmware, std::ios::binary);
+        if (!image_file)
+            throw std::runtime_error("cannot open firmware image: " + firmware);
+        std::vector<std::uint8_t> chip_image(
+            (std::istreambuf_iterator<char>(image_file)), std::istreambuf_iterator<char>());
+        chip.load_firmware(chip_image);
+        mcuemu::Cpu chip_cpu(chip);
+        chip_cpu.set_trace_limit(trace_limit);
+        chip_cpu.set_trace_after_step(trace_after_step);
+        chip_cpu.set_recent_trace_capacity(fault_trace);
+        if (trace_pc)
+            chip_cpu.set_pc_trace(&std::cerr, pc_range);
+        if (trace_mmio)
+            chip_cpu.set_mmio_trace(&std::cerr, mmio_range);
+        if (trace_stack)
+            chip_cpu.set_stack_trace(&std::cerr);
+        const mcuemu::RunResult chip_result = chip_cpu.run(steps);
+        std::cout << "model: " << mcuemu::model_name(chip.model()) << '\n'
+                  << "flash image: " << chip_image.size() << " bytes\n"
+                  << "instructions: " << chip_result.instructions << '\n'
+                  << "pc: 0x" << std::hex << chip_result.pc << std::dec << '\n'
+                  << "virtual time: " << chip.time_ns() << " ns\n";
+        for (unsigned reg = 0; reg != 16; ++reg)
+            std::cout << "r" << reg << "=0x" << std::hex << chip_cpu.reg(reg)
+                      << ((reg & 3u) == 3u ? '\n' : ' ');
+        std::cout << std::dec;
+        const std::vector<std::uint8_t> uart = chip.take_uart_transmitted();
+        if (!uart.empty()) {
+            std::cout << "uart tx (" << uart.size() << " bytes): ";
+            for (std::uint8_t byte : uart)
+                std::cout << static_cast<char>(byte >= 0x20 && byte < 0x7f || byte == '\n' ? byte : '.');
+            std::cout << '\n';
+        }
+        if (chip_result.reason == mcuemu::StopReason::Fault) {
+            std::cerr << "CPU fault: " << chip_result.message << '\n';
+            chip_cpu.dump_recent_trace(std::cerr);
+            return 1;
+        }
+        if (chip_result.reason == mcuemu::StopReason::Halted)
+            std::cout << "stopped on tserv software-service trap\n";
+        else
+            std::cout << "instruction limit reached\n";
+        return 0;
+    }
 
     mcuemu::Tlsr8258 device(parse_run_model(model));
     device.set_rc32k_characteristics(rc32k_hz, rc32k_calibration);
@@ -910,6 +967,8 @@ int main(int argc, char **argv) {
         if (std::string(argv[1]) == "models") {
             std::cout << "TLSR8258F512 (512 KiB flash, 64 KiB SRAM)\n"
                          "TLSR8258F1K (1 MiB flash, 64 KiB SRAM)\n"
+                         "TLSR8269 (512 KiB flash, 32 KiB SRAM)\n"
+                         "TLSR8267 (512 KiB flash, 16 KiB SRAM)\n"
                          "CA51F253L3 (32 KiB code flash, MCS-51; `run` and `sim`)\n"
                          "CC2530F256 (256 KiB banked flash, 8 KiB SRAM, MCS-51; `run` and `sim`)\n"
                          "NRF52840 (1 MiB flash, 256 KiB RAM, Cortex-M4F; `run`)\n"

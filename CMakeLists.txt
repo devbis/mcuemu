@@ -49,6 +49,7 @@ endif()
 add_library(mcuemu-core
     emulator/src/cpu.cpp
     emulator/src/tlsr8258.cpp
+    emulator/src/tlsr826x.cpp
     emulator/src/tlsr8258_i2c.cpp
     emulator/src/tlsr8258_adc.cpp
     emulator/src/radio.cpp
@@ -250,6 +251,7 @@ add_library(simcore
     emulator/src/sim/system.cpp
     emulator/src/sim/cli.cpp
     emulator/src/sim/tlsr8258_mcu.cpp
+    emulator/src/sim/tlsr826x_mcu.cpp
     emulator/src/sim/ca51f253l3_mcu.cpp
     emulator/src/sim/cc2530f256_mcu.cpp
     emulator/src/sim/nrf52840_mcu.cpp
@@ -275,6 +277,7 @@ if(MCUEMU_BUILD_TESTS)
         tests/test_main.cpp
         tests/tc32/test_cpu.cpp
         tests/machine/test_tlsr8258.cpp
+        tests/machine/test_tlsr826x.cpp
         tests/machine/test_api.cpp
         tests/radio/test_radio.cpp
     )
@@ -384,6 +387,19 @@ if(MCUEMU_BUILD_TESTS)
              COMMAND ${CMAKE_COMMAND} -DMCUEMU=$<TARGET_FILE:mcuemu>
                      -DWORK=${CMAKE_CURRENT_BINARY_DIR}/cli-exit-codes
                      -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli/cli_exit_codes.cmake)
+
+    # TLSR8269 smoke firmware built from the Telink SDK (skipped without the SDK/toolchain).
+    set(MCUEMU_TELINK_SDK "${CMAKE_CURRENT_SOURCE_DIR}/../telink/telink_zigbee_sdk/tl_zigbee_sdk")
+    set(MCUEMU_TC32_CLANG "${CMAKE_CURRENT_SOURCE_DIR}/../telink/llvm-tc32-arm-based/toolchains/tc32-stage2/llvm/bin/clang")
+    if((EXISTS "${MCUEMU_TELINK_SDK}" OR DEFINED ENV{TELINK_SDK}) AND
+       (EXISTS "${MCUEMU_TC32_CLANG}" OR DEFINED ENV{TC32_BIN}))
+        add_test(NAME firmware_tlsr826x_smoke
+                 COMMAND ${CMAKE_COMMAND} -DMCUEMU=$<TARGET_FILE:mcuemu>
+                         -DSRC=${CMAKE_CURRENT_SOURCE_DIR}
+                         -DOUT=${CMAKE_CURRENT_BINARY_DIR}/tlsr826x
+                         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/tlsr826x/smoke.cmake)
+        set_tests_properties(firmware_tlsr826x_smoke PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP")
+    endif()
 
     set(MCUEMU_SAMPLE_GW_FIRMWARE
         "${CMAKE_CURRENT_SOURCE_DIR}/firmware/samplegw_tb03f.bin")
@@ -636,6 +652,27 @@ if(MCUEMU_BUILD_TESTS)
                         "$<TARGET_FILE:mcuemu>"
                         "${CMAKE_CURRENT_SOURCE_DIR}/examples/nrf52840_zigbee.yaml")
             set_tests_properties(firmware_nrf52840_zigbee_join PROPERTIES
+                TIMEOUT 300
+                LABELS "firmware;zigbee"
+            )
+        endif()
+    endif()
+
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/firmware/samplesw_8269.bin" AND
+       EXISTS "${MCUEMU_SAMPLE_GW_FIRMWARE}")
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            # Vendor SDK sampleSwitch for the TLSR8269 joins the TLSR8258 sampleGW
+            # (build: tests/ci/telink with -DAPP=sampleSwitch -DTELINK_PLATFORM=826x).
+            add_test(
+                NAME firmware_tlsr8269_zigbee_join
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/zigbee_air_check.py"
+                        "$<TARGET_FILE:mcuemu>"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/scenarios/zigbee_tlsr8269_ed.yaml"
+                        --workdir "${CMAKE_CURRENT_BINARY_DIR}/tlsr8269-join"
+                        --for 40s --min-up 3 --min-unicast 2 --min-down 2)
+            set_tests_properties(firmware_tlsr8269_zigbee_join PROPERTIES
                 TIMEOUT 300
                 LABELS "firmware;zigbee"
             )

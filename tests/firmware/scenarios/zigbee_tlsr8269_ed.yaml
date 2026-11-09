@@ -1,0 +1,32 @@
+# The Telink Zigbee SDK sampleSwitch end device built for the TLSR8269 (tests/ci/telink,
+# -DTELINK_PLATFORM=826x) joins the sampleGW coordinator (TLSR8258) on one medium. Judged from
+# the pcap by zigbee_air_check.py. The image is firmware/samplesw_8269.bin.
+version: 1
+
+world:
+  seed: 1
+  duration: 40s
+  radio:
+    - id: air0
+      model: log_distance
+      reference_loss_db: 40
+      path_loss_exponent: 2.5
+
+devices:
+  - id: coordinator
+    mcus:
+      - id: zb
+        model: tlsr8258
+        variant: F1K
+        firmware: ../../../firmware/samplegw_tb03f.bin
+        radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+  - id: ed
+    mcus:
+      - id: mcu
+        model: tlsr8269
+        firmware: ../../../firmware/samplesw_8269.bin
+        radio: { air: air0, position: [4, 0, 1], tx_power_dbm: 0, protocols: [zigbee] }
+
+attach:
+  - { endpoint: air0, sink: "pcap:air.pcap" }

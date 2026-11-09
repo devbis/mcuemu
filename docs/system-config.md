@@ -23,7 +23,7 @@ devices:
   - id: node               # letters, digits, '_' and '-'
     mcus:
       - id: main
-        model: tlsr8258    # tlsr8258 | ca51f253l3 | cc2530f256 | nrf52840 | efr32mg21 | esp32c6 | bl702
+        model: tlsr8258    # tlsr8258 | tlsr8269 | tlsr8267 | ca51f253l3 | cc2530f256 | nrf52840 | efr32mg21 | esp32c6 | bl702
         variant: F1K       # tlsr8258 only: F512 (default) | F1K
         firmware: fw/a.bin # relative to this file; or a list of flash pieces, see below
         efuse: data/chip.efuse # phy6252 only: optional 32-byte external eFuse dump

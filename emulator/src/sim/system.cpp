@@ -8,6 +8,7 @@
 #include "sim/nrf52840_mcu.hpp"
 #include "sim/phy6252_mcu.hpp"
 #include "sim/tlsr8258_mcu.hpp"
+#include "sim/tlsr826x_mcu.hpp"
 
 #include <functional>
 #include <tuple>
@@ -75,6 +76,19 @@ const McuRegistry &McuRegistry::builtin() {
                     config.tick_start_seed.value_or(1) ^ std::hash<std::string>{}(name));
             return mcu;
         });
+        for (const char *chip : {"tlsr8269", "tlsr8267"}) {
+            r.add(chip, [chip](const McuConfig &config, const std::string &name) {
+                if (config.variant)
+                    throw std::invalid_argument(std::string(chip) + " has no variants");
+                auto mcu = std::make_unique<Tlsr826xMcu>(
+                    name, mcuemu::parse_tlsr826x_model(chip),
+                    config.clock_hz.value_or(mcuemu::Tlsr826x::DefaultClockHz));
+                // INFERRED: the 826x has the same instruction cache in front of the flash
+                // (cstartup/link script reserve its tag RAM), so the 8258 costs are used.
+                mcu->cpu().set_flash_timing(config.flash_timing.value_or(true));
+                return mcu;
+            });
+        }
         r.add("ca51f253l3", [](const McuConfig &config, const std::string &name) {
             if (config.variant)
                 throw std::invalid_argument(

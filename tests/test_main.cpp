@@ -35,6 +35,15 @@ void test_tlsr_flash_timing_charges_cache_misses();
 void test_virtual_air();
 void test_tlsr_radio_dma_packet_exchange();
 void test_c_api_register_access();
+void test_tlsr826x_memory_map();
+void test_tlsr826x_cpu_runs_and_sees_sram();
+void test_tlsr826x_timer_and_system_timer_irq();
+void test_tlsr826x_gpio_and_interrupt();
+void test_tlsr826x_mspi_flash();
+void test_tlsr826x_uart_dma();
+void test_tlsr826x_analog_and_rc_calibration();
+void test_tlsr826x_divider_aes_and_suspend();
+void test_tlsr826x_radio_dma_packet_exchange();
 }
 
 // Names each test on stderr before it runs, so a crash in CI shows where.
@@ -79,6 +88,15 @@ int main() {
     RUN(test_tlsr_flash_timing_charges_cache_misses);
     RUN(test_virtual_air);
     RUN(test_tlsr_radio_dma_packet_exchange);
+    RUN(test_tlsr826x_memory_map);
+    RUN(test_tlsr826x_cpu_runs_and_sees_sram);
+    RUN(test_tlsr826x_timer_and_system_timer_irq);
+    RUN(test_tlsr826x_gpio_and_interrupt);
+    RUN(test_tlsr826x_mspi_flash);
+    RUN(test_tlsr826x_uart_dma);
+    RUN(test_tlsr826x_analog_and_rc_calibration);
+    RUN(test_tlsr826x_divider_aes_and_suspend);
+    RUN(test_tlsr826x_radio_dma_packet_exchange);
     RUN(test_c_api_register_access);
     if (mcuemu_tests::failures) {
         std::cerr << mcuemu_tests::failures << " test check(s) failed\n";
