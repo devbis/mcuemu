@@ -98,12 +98,15 @@ reboot and answer `C1 02 0B 0A 52 7E` (reset code 0x0B), and the EZSP `version` 
 byte, so a host must send `1A` (or `7E`) before its first frame after a reset (the firmware's behaviour, not
 the model's).
 
-Two inferences the NCP forced: (1) EMU RSTCAUSE bit 6 is a system-request reset (the image's table maps it
-to "software reset, read the reset marker in RAM"), which makes the answer to RST a plain RSTACK 0x0B;
-(2) a LINKLOAD for an enabled channel with a transfer in progress is ignored. The NCP's driver starts the
-receive descriptor and 0.4 us later a "nothing pending" descriptor (source and destination the same RAM
-byte) on the same channel, and re-issues it every 1.5 ms; replacing the receive transfer drops every byte.
-That is the model matching the observed driver, not the silicon rule.
+One inference the NCP forced: EMU RSTCAUSE bit 6 is a system-request reset (the image's table maps it
+to "software reset, read the reset marker in RAM"), which makes the answer to RST a plain RSTACK 0x0B.
+
+LDMA: CHx_LINK bit 1 is "link valid" and bit 0 "relative address" (the NCP tests bit 1). A LINKLOAD takes effect at
+once, also on an enabled channel. The driver parks the receive channel on a "dummy" descriptor (source and
+destination the same RAM byte, linked back to the receive descriptor) every 1.5 ms; "DST == that byte" is its
+"ring empty" signal. The model lets such a no-op descriptor take the next USART request without reading RXDATA, so
+the byte reaches the receive descriptor it links to. (An earlier version ignored LINKLOAD on enabled channels; that
+made the firmware read phantom bytes forever and kept its main loop from ever running.)
 
 Radio iteration (NCP, EZSP `startScan` driven by `--uart0-send`; `scripts/efr32_trace.py` names the registers):
 the receiver now goes RXWARM (RAC STATUS.STATE 1) to RXSEARCH (2) about 40 us after the RX request, and AGC

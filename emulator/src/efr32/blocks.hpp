@@ -93,7 +93,9 @@ public:
 private:
     std::uint32_t channel_reg(unsigned ch, std::uint32_t off) const { return regs_[(0x5c + ch * 0x20 + off) >> 2]; }
     void set_channel_reg(unsigned ch, std::uint32_t off, std::uint32_t v) { regs_[(0x5c + ch * 0x20 + off) >> 2] = v; }
-    void load_descriptor(unsigned ch);
+    void load_descriptor(unsigned ch, std::uint32_t address);
+    void transfer_done(unsigned ch);
+    std::uint32_t desc_addr_[Channels]{};
     void update_irq();
     std::uint32_t enabled_{0};
 };

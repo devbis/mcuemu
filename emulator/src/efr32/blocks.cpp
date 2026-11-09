@@ -42,11 +42,11 @@ std::uint32_t Ldma::read(std::uint32_t reg) {
 
 void Ldma::update_irq() { set_irq_level(Irq, (regs_[LdmaIf >> 2] & regs_[LdmaIen >> 2]) != 0); }
 
-void Ldma::load_descriptor(unsigned ch) {
-    const std::uint32_t address = channel_reg(ch, ChLink) & ~3u;
+void Ldma::load_descriptor(unsigned ch, std::uint32_t address) {
     std::uint32_t words[4] = {0, 0, 0, 0};
     if (!chip().core().read_memory(address, words, sizeof words))
         return;
+    desc_addr_[ch] = address;
     set_channel_reg(ch, ChCtrl, words[0]);
     set_channel_reg(ch, ChSrc, words[1]);
     set_channel_reg(ch, ChDst, words[2]);
@@ -66,14 +66,12 @@ void Ldma::write(std::uint32_t reg, std::uint32_t value) {
         for (unsigned ch = 0; ch < Channels; ++ch) {
             if (!(value & (1u << ch)))
                 continue;
-            // INFERRED: a link load for a channel that is enabled and still has a transfer in
-            // progress does not replace it. The NCP's UART driver starts the receive descriptor and
-            // 0.4 us later a "no receive pending" descriptor (source and destination both the same
-            // RAM byte) on the same channel, and re-issues the latter every 1.5 ms; honouring them
-            // would drop every byte the host sends.
-            if (enabled_ & (1u << ch))
-                continue;
-            load_descriptor(ch);
+            // The NCP's UART driver parks the receive channel on a "dummy" descriptor (source and
+            // destination the same RAM byte, linked back to the receive descriptor) to freeze the
+            // write pointer, and tells "ring empty" by DST == that RAM byte. So a link load takes
+            // effect at once, even for an enabled channel. LINK: bit 1 = link valid, bit 0 =
+            // relative address (xG21 reference manual, CHx_LINK; the firmware tests bit 1).
+            load_descriptor(ch, channel_reg(ch, ChLink) & ~3u);
             enabled_ |= 1u << ch;
         }
         return;
@@ -83,31 +81,47 @@ void Ldma::write(std::uint32_t reg, std::uint32_t value) {
         update_irq();
 }
 
+// One transfer of the descriptor on `ch` has happened; completes it when the count runs out.
+void Ldma::transfer_done(unsigned ch) {
+    std::uint32_t ctrl = channel_reg(ch, ChCtrl);
+    const std::uint32_t count = (ctrl >> 4) & 0x7ffu;
+    if (count != 0) {
+        set_channel_reg(ch, ChCtrl, (ctrl & ~(0x7ffu << 4)) | ((count - 1) << 4));
+        return;
+    }
+    regs_[LdmaChdone >> 2] |= 1u << ch;
+    if (ctrl & (1u << 20))
+        regs_[LdmaIf >> 2] |= 1u << ch;
+    const std::uint32_t link = channel_reg(ch, ChLink);
+    if (link & 2u) {
+        std::uint32_t address = link & ~3u;
+        if (link & 1u)
+            address += desc_addr_[ch];
+        load_descriptor(ch, address);
+    } else {
+        enabled_ &= ~(1u << ch);
+    }
+    update_irq();
+}
+
 bool Ldma::usart0_rx(std::uint8_t byte) {
     for (unsigned ch = 0; ch < Channels; ++ch) {
+        if (!(enabled_ & (1u << ch)))
+            continue;
+        // A memory-to-memory no-op descriptor (the parking one) takes the request without
+        // touching RXDATA; the byte stays pending for the descriptor it links to.
+        for (unsigned guard = 0; guard < 4 && (enabled_ & (1u << ch)) &&
+                                 channel_reg(ch, ChSrc) == channel_reg(ch, ChDst);
+             ++guard)
+            transfer_done(ch);
         if (!(enabled_ & (1u << ch)) || !is_usart0_rxdata(channel_reg(ch, ChSrc)))
             continue;
-        std::uint32_t ctrl = channel_reg(ch, ChCtrl);
-        std::uint32_t dst = channel_reg(ch, ChDst);
+        const std::uint32_t ctrl = channel_reg(ch, ChCtrl);
+        const std::uint32_t dst = channel_reg(ch, ChDst);
         chip().core().write_memory(dst, &byte, 1);
         if (((ctrl >> 28) & 3u) == 0) // DSTINC: one byte
             set_channel_reg(ch, ChDst, dst + 1);
-        const std::uint32_t count = (ctrl >> 4) & 0x7ffu;
-        if (count != 0) {
-            ctrl = (ctrl & ~(0x7ffu << 4)) | ((count - 1) << 4);
-            set_channel_reg(ch, ChCtrl, ctrl);
-            return true;
-        }
-        // The descriptor is complete.
-        regs_[LdmaChdone >> 2] |= 1u << ch;
-        if (ctrl & (1u << 20))
-            regs_[LdmaIf >> 2] |= 1u << ch;
-        if (channel_reg(ch, ChLink) & 1u) {
-            load_descriptor(ch);
-        } else {
-            enabled_ &= ~(1u << ch);
-        }
-        update_irq();
+        transfer_done(ch);
         return true;
     }
     return false;
