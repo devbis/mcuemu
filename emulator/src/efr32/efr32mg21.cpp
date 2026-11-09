@@ -361,11 +361,17 @@ void Efr32mg21::acknowledge(const std::vector<std::uint8_t> &fifo) {
 // at +0x64 (IF_SET/IF_CLR through the aliases), IEN at +0x70, and the line is
 // IF & IEN.
 std::uint64_t Efr32mg21::service(std::uint64_t now) {
-    static constexpr std::uint64_t ProtimerPeriod = 3840; // 100 us at 38.4 MHz; the compare check rate
+    static constexpr std::uint64_t ProtimerPeriod = 3840; // 100 us at 38.4 MHz: fallback check rate
     if (now >= next_protimer_) {
-        const std::uint64_t divisor = static_cast<std::uint64_t>(rail_regs_->peek(ProtimerPrecntTop)) + 0x100u;
-        const std::uint64_t wrap_now = divisor != 0 ? now / divisor : 0;
+        // PRECNTTOP (+0x30) is the prescaler period in 1/256 core cycles minus one cycle (bits 31:8
+        // integer top, bits 7:0 fraction): the image writes 0x1233, i.e. 19.2 cycles = 2 MHz, and its
+        // time conversion (constants 0x7FFEAAAB at 0x2000433C) turns WRAPCNT into microseconds
+        // by 0.49998 per count. BASECNTTOP is never written and counts at that rate. The first model
+        // took the register as a plain cycle count, 256 times too slow.
+        const std::uint64_t divisor = static_cast<std::uint64_t>(rail_regs_->peek(ProtimerPrecntTop)) + 0x100u; // 1/256 cycle
+        const std::uint64_t wrap_now = divisor != 0 ? now * 256u / divisor : 0;
         const std::uint32_t enabled = rail_regs_->peek(ProtimerIen);
+        std::uint64_t next = now + ProtimerPeriod;
         for (unsigned channel = 0; channel < 8; ++channel) {
             const std::uint32_t cc = ProtimerBase + 0x100u + 16u * channel;
             const std::uint32_t bit = 1u << (8 + channel);
@@ -376,9 +382,11 @@ std::uint64_t Efr32mg21::service(std::uint64_t now) {
             const std::uint64_t compare = rail_regs_->peek(cc + 0x0Cu);
             if (previous < compare && compare <= wrap_now)
                 rail_regs_->set_bits(ProtimerIf, bit);
+            else if (compare > wrap_now)
+                next = std::min(next, (compare * divisor + 255u) / 256u + 1u); // the exact cycle of the match
         }
         core_->set_irq_line(ProtimerIrq, (rail_regs_->peek(ProtimerIf) & enabled) != 0);
-        next_protimer_ = now + ProtimerPeriod;
+        next_protimer_ = std::max(next, now + 1);
     }
     // The end of the frame sets FRC TX_PACKET_SENT; the ACK wait then runs out
     // unless an ACK arrives, which the RAIL model does not receive from the air.

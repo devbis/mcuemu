@@ -114,6 +114,19 @@ step is an event this model does not produce yet. Injecting each RAC SEQ event b
 runs the radio IRQ handler but starts no transmit. Observed quirk: the PROTIMER IRQ line is updated only on the
 model's periodic check, so the handler re-enters until then.
 
+PROTIMER time base (found through the NCP): PRECNTTOP (+0x30, image value 0x1233) is the prescaler period
+in 1/256 core cycles (integer top in bits 31:8, fraction in 7:0), 19.2 cycles = 2 MHz, and the image's own time
+conversion (constant 0x7FFEAAAB at RAM 0x2000433C) turns a WRAPCNT count into 0.49998 us. The model had taken the register
+as a plain cycle count, 256 times too slow. A compare match is now scheduled at its exact cycle.
+
+What the NCP does when it runs (from `efr32_trace.py`): the stack advances only while it handles an EZSP command in this
+model: after `networkInit` the first `callback` poll after an active `startScan` reconfigures the radio (RXDIS, TXDIS,
+RXCAL, AGC LBT/CCA threshold, PROTIMER LBT registers at +0x40..+0x54), so its beacon request goes out through the
+hardware listen-before-talk path (PROTIMER LBT plus the sequencer), not through a host write of RAC CMD.TXEN. Idle,
+the main loop only polls UART and LDMA and never reads the sleep timer, so no scan step happens between commands; why the
+firmware does not tick on its own (a wake source the model lacks) is not found yet. A host that hammers the NCP with
+polls every 50 ms loses frames while it calibrates (UART bytes dropped, ASH retransmissions, ERROR 0x06).
+
 Still not there: the RAIL radio is the partial model above, so the NCP cannot form or join a network;
 no other EZSP command has been tried. From the image, the UART is USART0 with routes written as TX = PB1,
 RX = PB0 (decoded with the alphabetical Series 2 `USARTROUTE` layout: CS, CTS, RTS, RX, SCLK, TX; not
