@@ -108,31 +108,28 @@ destination the same RAM byte, linked back to the receive descriptor) every 1.5 
 the byte reaches the receive descriptor it links to. (An earlier version ignored LINKLOAD on enabled channels; that
 made the firmware read phantom bytes forever and kept its main loop from ever running.)
 
-Radio iteration (NCP, EZSP `startScan` driven by `--uart0-send`; `scripts/efr32_trace.py` names the registers):
-the receiver now goes RXWARM (RAC STATUS.STATE 1) to RXSEARCH (2) about 40 us after the RX request, and AGC
-reports a valid RSSI (STATUS1.RSSISTATE nonzero, RSSIINT -100 dBm) in those states. The NCP's `RAIL_GetRssi` waits for
-both. Before that an energy scan hung the NCP in a poll of RAC STATUS (it waits for state 2 or 3). An *active* scan
-(type 1) still does nothing after it enables the receiver: no transmit command, no timer, no IRQ; the stack's next
-step is an event this model does not produce yet. Injecting each RAC SEQ event bit (16..23) after the RX request
-runs the radio IRQ handler but starts no transmit. Observed quirk: the PROTIMER IRQ line is updated only on the
-model's periodic check, so the handler re-enters until then.
+Radio iteration (NCP, EZSP `startScan`; `scripts/efr32_trace.py` names the registers): the receiver goes RXWARM (RAC
+STATUS.STATE 1) to RXSEARCH (2) about 40 us after the RX request, and AGC reports a valid RSSI (STATUS1.RSSISTATE
+nonzero, RSSIINT -100 dBm) in those states. The NCP's `RAIL_GetRssi` waits for both (an energy scan hung on the RAC
+STATUS poll before that).
 
 PROTIMER time base (found through the NCP): PRECNTTOP (+0x30, image value 0x1233) is the prescaler period
 in 1/256 core cycles (integer top in bits 31:8, fraction in 7:0), 19.2 cycles = 2 MHz, and the image's own time
-conversion (constant 0x7FFEAAAB at RAM 0x2000433C) turns a WRAPCNT count into 0.49998 us. The model had taken the register
-as a plain cycle count, 256 times too slow. A compare match is now scheduled at its exact cycle.
+conversion (constant 0x7FFEAAAB at RAM 0x2000433C) turns a WRAPCNT count into 0.49998 us. A compare match is
+scheduled at its exact cycle.
 
-What the NCP does when it runs (from `efr32_trace.py`): the stack advances only while it handles an EZSP command in this
-model: after `networkInit` the first `callback` poll after an active `startScan` reconfigures the radio (RXDIS, TXDIS,
-RXCAL, AGC LBT/CCA threshold, PROTIMER LBT registers at +0x40..+0x54), so its beacon request goes out through the
-hardware listen-before-talk path (PROTIMER LBT plus the sequencer), not through a host write of RAC CMD.TXEN. Idle,
-the main loop only polls UART and LDMA and never reads the sleep timer, so no scan step happens between commands; why the
-firmware does not tick on its own (a wake source the model lacks) is not found yet. A host that hammers the NCP with
-polls every 50 ms loses frames while it calibrates (UART bytes dropped, ASH retransmissions, ERROR 0x06).
+Active scan, end to end (`firmware_efr32mg21_ncp_scan`): RAIL sends the beacon request through the hardware
+listen-before-talk path (AGC LBT/CCA setup, PROTIMER LBT registers at +0x40..+0x54 and +0x74/+0x78, then PROTIMER CMD
+bit 16 and a sequencer command in RAC SR0), not through a host write of RAC CMD.TXEN. INFERRED: the model treats
+PROTIMER CMD bit 16 as "LBT started, channel clear" and sends the frame in BUF0 after a fixed ~200 us, then raises
+FRC TXRAWEVENT like a TXEN transmit. A Telink coordinator on channel 11 answers with a beacon, the RX path delivers it
+and the NCP reports `networkFoundHandler` (EZSP 0x1B) to the host. The sequencer microcode is still not modelled, so
+other RAIL features that depend on it (ACK handling by the sequencer, CSMA backoff timing, TX/RX state timing) are
+approximations. The host must send `hex:` UART scenario events (see docs/system-config.md) or use `--uart0-send`; a
+host that polls `callback` with wrong ASH sequence/ack numbers gets ASH ERROR 0x06.
 
-Still not there: the RAIL radio is the partial model above, so the NCP cannot form or join a network;
-no other EZSP command has been tried. From the image, the UART is USART0 with routes written as TX = PB1,
-RX = PB0 (decoded with the alphabetical Series 2 `USARTROUTE` layout: CS, CTS, RTS, RX, SCLK, TX; not
+Still not there: forming or joining a network (EZSP `formNetwork`, `joinNetwork`) is untried. From the image, the UART is USART0 with routes
+written as TX = PB1, RX = PB0 (decoded with the alphabetical Series 2 `USARTROUTE` layout: CS, CTS, RTS, RX, SCLK, TX; not
 confirmed against a schematic).
 
 ## RAIL registers

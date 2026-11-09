@@ -11,9 +11,20 @@ void UartEndpoint::set(const Value &value) {
     if (const auto *bytes = std::get_if<Bytes>(&value))
         for (const std::uint8_t byte : *bytes)
             rx_pending_.push_back(UartFrame{.data = byte});
-    else if (const auto *text = std::get_if<std::string>(&value))
-        for (const char ch : *text)
-            rx_pending_.push_back(UartFrame{.data = static_cast<std::uint8_t>(ch)});
+    else if (const auto *text = std::get_if<std::string>(&value)) {
+        // "hex:1ac038bc7e" sends raw bytes (a YAML event cannot spell 0x1a in a string).
+        if (text->rfind("hex:", 0) == 0) {
+            const std::string digits = text->substr(4);
+            if (digits.size() % 2 != 0)
+                throw std::invalid_argument("hex: needs an even number of digits");
+            for (std::size_t i = 0; i < digits.size(); i += 2)
+                rx_pending_.push_back(UartFrame{.data = static_cast<std::uint8_t>(
+                                                    std::stoul(digits.substr(i, 2), nullptr, 16))});
+        } else {
+            for (const char ch : *text)
+                rx_pending_.push_back(UartFrame{.data = static_cast<std::uint8_t>(ch)});
+        }
+    }
     else
         throw std::invalid_argument("a UART takes bytes or a string");
 }

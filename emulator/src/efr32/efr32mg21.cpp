@@ -29,6 +29,8 @@ constexpr std::uint64_t RailRxPollCycles = 3840;
 constexpr std::uint64_t AckWaitCycles = 33178;
 // INFERRED: the receiver leaves RXWARM for RXSEARCH after about the 40 us ramp the TX/RX paths use.
 constexpr std::uint64_t RxWarmCycles = 1536;
+constexpr std::uint32_t LbtStart = 1u << 16;
+constexpr std::uint64_t LbtCycles = 8000; // ~200 us: backoff and one CCA window
 constexpr std::uint32_t SeBase = 0x4C000000, SeSize = 0x1000;
 
 // 0x5xxxxxxx (non-secure alias) addresses the same register as 0x4xxxxxxx.
@@ -185,7 +187,7 @@ void Efr32mg21::reset() {
     rtcc_->reset();
     se_mailbox_->reset();
     rail_regs_->reset();
-    tx_done_at_ = ack_timeout_at_ = NoEvent;
+    tx_done_at_ = ack_timeout_at_ = lbt_tx_at_ = NoEvent;
     // short_address_known_ is deliberately kept: the driver's short address and PAN live in RAIL's
     // RAM handle, which the model does not read, so the copy learned from the association response
     // stands in for them. A firmware that resets after joining (the Zephyr ED does, at about 10 s)
@@ -213,6 +215,15 @@ cortexm::RunResult Efr32mg21::run(std::uint64_t until_cycle) {
 // The frame RAIL sent is in the BUF0 buffer RAM (BUF0 ADDR, +0x0C) from the start
 // up to PHR + 1 bytes. The firmware's FIFO writer stores the first bytes through
 // WRITEDATA and copies the rest into the same RAM (see tx_store).
+void Efr32mg21::start_tx() {
+    const auto frame = tx_frame();
+    if (frame.empty())
+        return;
+    const std::uint64_t airtime_ns = radio_->transmit_fifo(frame, rail_channel());
+    tx_done_at_ = core_->cycles() + airtime_ns * 384 / 10000; // 38.4 cycles per us
+    request_service(tx_done_at_);
+}
+
 std::vector<std::uint8_t> Efr32mg21::tx_frame() {
     const std::uint32_t buffer = rail_regs_->peek(Buf0Addr);
     std::uint8_t phr = 0;
@@ -390,6 +401,10 @@ std::uint64_t Efr32mg21::service(std::uint64_t now) {
     }
     // The end of the frame sets FRC TX_PACKET_SENT; the ACK wait then runs out
     // unless an ACK arrives, which the RAIL model does not receive from the air.
+    if (now >= lbt_tx_at_) {
+        lbt_tx_at_ = NoEvent;
+        start_tx();
+    }
     if (now >= tx_done_at_) {
         tx_done_at_ = NoEvent;
         rail_regs_->set_bits(FrcIf, FrcTxPacketSent);
@@ -432,7 +447,7 @@ std::uint64_t Efr32mg21::service(std::uint64_t now) {
         }
         rx_poll = rail_rx_poll_at_;
     }
-    return std::min({radio_->service(now), rtcc_->service(now), next_protimer_, tx_done_at_, ack_timeout_at_, rx_poll, rx_warm_done_at_});
+    return std::min({radio_->service(now), rtcc_->service(now), next_protimer_, tx_done_at_, ack_timeout_at_, rx_poll, rx_warm_done_at_, lbt_tx_at_});
 }
 
 void Efr32mg21::connect_radio(mcuemu::VirtualAir &air, const std::string &node) { radio_->connect(air, node); }
@@ -534,10 +549,15 @@ void Efr32mg21::write(std::uint32_t address, std::uint32_t value, unsigned size)
         if (address == Buf0Cmd && (value & 1u))
             rail_regs_->write(Buf0WriteOffset, 0); // CMD.CLEAR empties the buffer
         rail_regs_->write(address, value, size);
-        if (rail_regs_->take_tx_start()) {
-            const std::uint64_t airtime_ns = radio_->transmit_fifo(tx_frame(), rail_channel());
-            tx_done_at_ = core_->cycles() + airtime_ns * 384 / 10000; // 38.4 cycles per us
-            request_service(tx_done_at_);
+        if (rail_regs_->take_tx_start())
+            start_tx();
+        // INFERRED: PROTIMER CMD bit 16 starts the hardware listen-before-talk that RAIL's CSMA
+        // uses (the NCP writes it, with the LBT setup at +0x74/+0x78, right after the sequencer
+        // command that arms the TX). The sequencer then keys the transmitter once the channel is
+        // found clear; the model does that after a fixed backoff plus CCA time.
+        if (address == ProtimerCmd && (value & LbtStart)) {
+            lbt_tx_at_ = core_->cycles() + LbtCycles;
+            request_service(lbt_tx_at_);
         }
         return;
     }

@@ -354,7 +354,7 @@ use `stdout`, `text` or `hex`.
 
 | endpoint | kind | events | `set` |
 |---|---|---|---|
-| `device.mcu.uartN` | `uart` | bytes the UART transmitted | bytes/string to receive (queued until the FIFO has room) |
+| `device.mcu.uartN` | `uart` | bytes the UART transmitted | bytes/string to receive (queued until the FIFO has room); a string `hex:1ac038bc7e` sends those raw bytes (for a YAML scenario event) |
 | `device.mcu.uartN.frames` (`cc2530f256` only) | `uart-frames` | the frames the UART transmitted, as frame tokens (a string); only while subscribed | frame tokens (a string), a byte 0..255 or bytes (plain frames); same queue as `uartN` |
 | `device.mcu.rtt`, `rttN` | `rtt` | bytes the firmware wrote to up buffer N | bytes/string for down buffer N |
 | `device.net`, world nets | `net` | level changes (true = high) | - |

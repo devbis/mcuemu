@@ -145,6 +145,8 @@ private:
     static constexpr std::uint64_t NoEvent = ~std::uint64_t{0};
     std::uint64_t tx_done_at_{NoEvent}, ack_timeout_at_{NoEvent};
     std::vector<std::uint8_t> tx_frame();
+    void start_tx();
+    std::uint64_t lbt_tx_at_{~std::uint64_t{0}};
     void tx_store(std::uint8_t byte);
     std::uint8_t rail_channel() const;
     void deliver_rail_rx(const std::vector<std::uint8_t> &fifo);

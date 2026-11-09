@@ -693,6 +693,20 @@ if(MCUEMU_BUILD_TESTS)
                 TIMEOUT 180
                 LABELS "firmware"
             )
+            if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/firmware/telink-gw-ch11.bin")
+                # Active scan against a channel-11 Telink coordinator on a shared air.
+                add_test(
+                    NAME firmware_efr32mg21_ncp_scan
+                    COMMAND "${Python3_EXECUTABLE}"
+                            "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_efr32mg21_ncp_scan.py"
+                            "$<TARGET_FILE:mcuemu>"
+                            "${CMAKE_CURRENT_SOURCE_DIR}/firmware/zbdonglee-ncp.bin"
+                            "${CMAKE_CURRENT_SOURCE_DIR}/firmware/telink-gw-ch11.bin")
+                set_tests_properties(firmware_efr32mg21_ncp_scan PROPERTIES
+                    TIMEOUT 300
+                    LABELS "firmware"
+                )
+            endif()
         endif()
     endif()
 
