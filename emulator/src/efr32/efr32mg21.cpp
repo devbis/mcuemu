@@ -14,7 +14,7 @@ namespace {
 
 constexpr std::uint32_t RadioBase = 0x40090000, RadioEnd = 0x40096000;
 // Peripheral blocks are 16 KiB apart; slot = (offset from 0x40000000) / 0x4000.
-constexpr unsigned EmuSlot = 1, CmuSlot = 2, HfxoSlot = 3, DpllSlot = 7, UsartSlot = 22, MscSlot = 12, GpioSlot = 15;
+constexpr unsigned EmuSlot = 1, CmuSlot = 2, HfxoSlot = 3, DpllSlot = 7, UsartSlot = 22, MscSlot = 12, LdmaSlot = 16, GpioSlot = 15;
 constexpr std::uint32_t RtccBase = 0x48000000, RtccSize = 0x4000;
 constexpr unsigned ProtimerIrq = 36; // PROTIMER_IRQn
 constexpr unsigned FrcIrq = 34, RacSeqIrq = 38; // FRC_IRQn, RAC_SEQ_IRQn
@@ -105,6 +105,9 @@ Efr32mg21::Efr32mg21() {
     blocks_[DpllSlot] = std::make_unique<Dpll>(*this);
     blocks_[UsartSlot] = std::make_unique<Usart>(*this);
     blocks_[MscSlot] = std::make_unique<Msc>(*this);
+    auto ldma = std::make_unique<Ldma>(*this);
+    ldma_ = ldma.get();
+    blocks_[LdmaSlot] = std::move(ldma);
     auto gpio = std::make_unique<Gpio>(*this);
     gpio_ = gpio.get();
     blocks_[GpioSlot] = std::move(gpio);
@@ -145,6 +148,8 @@ void Efr32mg21::set_device_id(std::uint64_t id) {
     for (unsigned i = 0; i < 8; ++i)
         devinfo_[0x48 + i] = static_cast<std::uint8_t>(id >> (8 * i));
 }
+
+bool Efr32mg21::uart0_rx(std::uint8_t byte) { return ldma_->usart0_rx(byte); }
 
 Block &Efr32mg21::block_at(std::uint32_t slot) {
     if (!blocks_[slot])

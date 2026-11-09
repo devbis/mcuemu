@@ -18,6 +18,7 @@ class Cmu;
 class Gpio;
 class Radio;
 class Rtcc;
+class Ldma;
 class SeMailbox;
 class RailRegs;
 
@@ -95,6 +96,10 @@ public:
     // True while reset() runs for a reset the firmware requested (SYSRESETREQ) rather than a power-up.
     bool soft_reset() const noexcept { return soft_reset_; }
 
+    // A byte from the host on USART0's receive line. True when a DMA channel took it; false when
+    // nothing is listening yet (the caller retries).
+    bool uart0_rx(std::uint8_t byte);
+
     // Connects the RADIO to a shared medium under the node name `node`.
     void connect_radio(mcuemu::VirtualAir &air, const std::string &node);
 
@@ -133,6 +138,7 @@ private:
     std::unique_ptr<Radio> radio_;
     std::string uart0_output_;
     std::unique_ptr<Rtcc> rtcc_;
+    Ldma *ldma_{nullptr};
     std::unique_ptr<SeMailbox> se_mailbox_;
     std::unique_ptr<RailRegs> rail_regs_;
     // Core cycle of the end of the frame in flight, and of the ACK timeout after it.

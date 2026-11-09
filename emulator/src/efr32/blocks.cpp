@@ -17,6 +17,102 @@ void Block::set_irq_level(unsigned irq, bool level) { chip_.core().set_irq_line(
 
 // ---- CMU, HFXO -----------------------------------------------------------------
 
+namespace {
+constexpr std::uint32_t LdmaChen = 0x24, LdmaChdis = 0x28, LdmaChstatus = 0x2c, LdmaChdone = 0x34,
+                        LdmaLinkload = 0x48, LdmaIf = 0x50, LdmaIen = 0x54;
+constexpr std::uint32_t ChCtrl = 0x08, ChSrc = 0x0c, ChDst = 0x10, ChLink = 0x14;
+// RXDATA (+0x24) and RXDATAX (+0x20) of USART0 in the non-secure and secure views.
+bool is_usart0_rxdata(std::uint32_t address) {
+    const std::uint32_t reg = address & 0xfffu;
+    return (address & ~0xfffu) % 0x10000000u == 0x58000u && (reg == 0x24 || reg == 0x20);
+}
+} // namespace
+
+void Ldma::reset() {
+    RegBlock::reset();
+    enabled_ = 0;
+    update_irq();
+}
+
+std::uint32_t Ldma::read(std::uint32_t reg) {
+    if (reg == LdmaChstatus)
+        return enabled_;
+    return RegBlock::read(reg);
+}
+
+void Ldma::update_irq() { set_irq_level(Irq, (regs_[LdmaIf >> 2] & regs_[LdmaIen >> 2]) != 0); }
+
+void Ldma::load_descriptor(unsigned ch) {
+    const std::uint32_t address = channel_reg(ch, ChLink) & ~3u;
+    std::uint32_t words[4] = {0, 0, 0, 0};
+    if (!chip().core().read_memory(address, words, sizeof words))
+        return;
+    set_channel_reg(ch, ChCtrl, words[0]);
+    set_channel_reg(ch, ChSrc, words[1]);
+    set_channel_reg(ch, ChDst, words[2]);
+    set_channel_reg(ch, ChLink, words[3]);
+}
+
+void Ldma::write(std::uint32_t reg, std::uint32_t value) {
+    if (reg == LdmaChdis) {
+        enabled_ &= ~value;
+        return;
+    }
+    if (reg == LdmaChen) {
+        enabled_ |= value;
+        return;
+    }
+    if (reg == LdmaLinkload) {
+        for (unsigned ch = 0; ch < Channels; ++ch) {
+            if (!(value & (1u << ch)))
+                continue;
+            // INFERRED: a link load for a channel that is enabled and still has a transfer in
+            // progress does not replace it. The NCP's UART driver starts the receive descriptor and
+            // 0.4 us later a "no receive pending" descriptor (source and destination both the same
+            // RAM byte) on the same channel, and re-issues the latter every 1.5 ms; honouring them
+            // would drop every byte the host sends.
+            if (enabled_ & (1u << ch))
+                continue;
+            load_descriptor(ch);
+            enabled_ |= 1u << ch;
+        }
+        return;
+    }
+    RegBlock::write(reg, value);
+    if (reg == LdmaIf || reg == LdmaIen)
+        update_irq();
+}
+
+bool Ldma::usart0_rx(std::uint8_t byte) {
+    for (unsigned ch = 0; ch < Channels; ++ch) {
+        if (!(enabled_ & (1u << ch)) || !is_usart0_rxdata(channel_reg(ch, ChSrc)))
+            continue;
+        std::uint32_t ctrl = channel_reg(ch, ChCtrl);
+        std::uint32_t dst = channel_reg(ch, ChDst);
+        chip().core().write_memory(dst, &byte, 1);
+        if (((ctrl >> 28) & 3u) == 0) // DSTINC: one byte
+            set_channel_reg(ch, ChDst, dst + 1);
+        const std::uint32_t count = (ctrl >> 4) & 0x7ffu;
+        if (count != 0) {
+            ctrl = (ctrl & ~(0x7ffu << 4)) | ((count - 1) << 4);
+            set_channel_reg(ch, ChCtrl, ctrl);
+            return true;
+        }
+        // The descriptor is complete.
+        regs_[LdmaChdone >> 2] |= 1u << ch;
+        if (ctrl & (1u << 20))
+            regs_[LdmaIf >> 2] |= 1u << ch;
+        if (channel_reg(ch, ChLink) & 1u) {
+            load_descriptor(ch);
+        } else {
+            enabled_ &= ~(1u << ch);
+        }
+        update_irq();
+        return true;
+    }
+    return false;
+}
+
 void Emu::reset() {
     RegBlock::reset();
     regs_[Rstcause >> 2] = chip().soft_reset() ? SystemRequestReset : PowerOnReset;

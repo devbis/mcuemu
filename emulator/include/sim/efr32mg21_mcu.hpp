@@ -34,6 +34,9 @@ public:
     // The console (USART0) is the only UART; its output is taken (and dropped from the chip) as it grows.
     unsigned uart_count() const override { return 1; }
     std::vector<std::uint8_t> uart_take_tx(unsigned index) override;
+    // Bytes reach the firmware only through an LDMA channel it set up for USART0 reception.
+    bool uart_can_receive(unsigned index) const override { return index == 0; }
+    bool uart_rx(unsigned index, std::uint8_t byte) override { return index == 0 && chip_.uart0_rx(byte); }
 
     efr32emu::Efr32mg21 &chip() noexcept { return chip_; }
 

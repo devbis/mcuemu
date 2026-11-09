@@ -58,16 +58,44 @@ protected:
 
 // EMU (0x40004000): only RSTCAUSE (+0x94) is modelled; the rest reads back what was written. The
 // register is INFERRED from the Silicon Labs Zigbee NCP's start-up (halInternalClassifyReset reads
-// EMU+0x94 and treats bit 0 as a power-on reset, bit 10 as a system-request reset). Without it
+// EMU+0x94 and treats bit 0 as a power-on reset, bit 6 as a system-request reset: the image's table for the lowest set bit maps bit 6 to the
+// "software reset, look at the reset marker in RAM" case). Without it
 // the NCP reports "unknown reset" and sends an ASH ERROR frame instead of RSTACK.
 class Emu final : public RegBlock {
 public:
     static constexpr std::uint32_t Rstcause = 0x094;
-    static constexpr std::uint32_t PowerOnReset = 1u << 0, SystemRequestReset = 1u << 10;
+    static constexpr std::uint32_t PowerOnReset = 1u << 0, SystemRequestReset = 1u << 6;
     explicit Emu(Efr32mg21 &chip) : RegBlock(chip) { regs_[Rstcause >> 2] = PowerOnReset; }
     // A reset the core asked for (SYSRESETREQ) is a system-request reset; any other reset is a
     // power-up.
     void reset() override;
+};
+
+// LDMA (0x40040000), as much as the Silicon Labs NCP's UART receive needs. INFERRED from that
+// image's register accesses and the Series 2 layout: CHEN/CHDIS/CHSTATUS/CHDONE at +0x24..+0x34,
+// LINKLOAD +0x48, IF/IEN +0x50/+0x54, then per channel (stride 0x20) CFG +0x5C, LOOP +0x60,
+// CTRL +0x64, SRC +0x68, DST +0x6C, LINK +0x70; a descriptor is {CTRL, SRC, DST, LINK} in RAM.
+// Only transfers from the USART0 receive data register run: each received byte goes to DST
+// (byte size), XFERCNT (CTRL bits 14:4, count - 1) counts down, and the end sets CHDONE and, with
+// DONEIEN (CTRL bit 20), IF and IRQ 21. Other requests (peripheral request selection, memory
+// to memory, the TX side) are not modelled.
+class Ldma final : public RegBlock {
+public:
+    static constexpr unsigned Irq = 21;
+    static constexpr unsigned Channels = 8;
+    using RegBlock::RegBlock;
+    std::uint32_t read(std::uint32_t reg) override;
+    void write(std::uint32_t reg, std::uint32_t value) override;
+    void reset() override;
+    // A byte received on USART0; true when a channel took it.
+    bool usart0_rx(std::uint8_t byte);
+
+private:
+    std::uint32_t channel_reg(unsigned ch, std::uint32_t off) const { return regs_[(0x5c + ch * 0x20 + off) >> 2]; }
+    void set_channel_reg(unsigned ch, std::uint32_t off, std::uint32_t v) { regs_[(0x5c + ch * 0x20 + off) >> 2] = v; }
+    void load_descriptor(unsigned ch);
+    void update_irq();
+    std::uint32_t enabled_{0};
 };
 
 // CMU (0x40008000). Only the system clock selection is observable.

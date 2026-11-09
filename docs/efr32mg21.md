@@ -87,11 +87,28 @@ What it needed beyond the zigbee-rs and Zephyr images (all in the source with th
 - RAIL init polls FRC IF bit 14 and FRC+0x08 bit 8 after a calibration the sequencer would run; both
   read as set (`RailRegs::read`).
 
-Not there: USART RX and the LDMA. The NCP receives through an LDMA ring (it polls LDMA `+0x2C`,
-`+0x34`, `+0x6C`, `+0x70` in its main loop) so a host cannot send it ASH/EZSP frames yet, and the
-RAIL radio is the partial model above, so network formation would not work either. From the image,
-the UART is USART0 with routes written as TX = PB1, RX = PB0 (decoded with the alphabetical Series 2
-`USARTROUTE` layout: CS, CTS, RTS, RX, SCLK, TX; not confirmed against a schematic).
+Host to NCP: `mcuemu run ... --uart0-send HEX@TIME` (repeatable) writes bytes to USART0 at that virtual
+time, and in `sim` the chip's UART is a normal endpoint (`uart_rx`). The NCP receives through an LDMA
+ring (UARTDRV/iostream), so the model has a minimal `Ldma` (`blocks.cpp`): channel registers at `+0x5C +
+0x30*n` (CFG, LOOP, CTRL, SRC, DST, LINK), descriptor load by LINKLOAD, and transfers from USART0 RXDATA,
+which advance DST, count XFERCNT down and raise CHDONE/IF/IRQ 21. `scripts/ash_frame.py` builds and parses
+ASH frames. Verified exchange (`firmware_efr32mg21_ncp_rstack`): RST (`1A C0 38 BC 7E`) makes the NCP
+reboot and answer `C1 02 0B 0A 52 7E` (reset code 0x0B), and the EZSP `version` command returns protocol
+0x12, stack 0x8220, i.e. EmberZNet 8.2.2. The NCP's ASH decoder drops bytes until it sees a flag or cancel
+byte, so a host must send `1A` (or `7E`) before its first frame after a reset (the firmware's behaviour, not
+the model's).
+
+Two inferences the NCP forced: (1) EMU RSTCAUSE bit 6 is a system-request reset (the image's table maps it
+to "software reset, read the reset marker in RAM"), which makes the answer to RST a plain RSTACK 0x0B;
+(2) a LINKLOAD for an enabled channel with a transfer in progress is ignored. The NCP's driver starts the
+receive descriptor and 0.4 us later a "nothing pending" descriptor (source and destination the same RAM
+byte) on the same channel, and re-issues it every 1.5 ms; replacing the receive transfer drops every byte.
+That is the model matching the observed driver, not the silicon rule.
+
+Still not there: the RAIL radio is the partial model above, so the NCP cannot form or join a network;
+no other EZSP command has been tried. From the image, the UART is USART0 with routes written as TX = PB1,
+RX = PB0 (decoded with the alphabetical Series 2 `USARTROUTE` layout: CS, CTS, RTS, RX, SCLK, TX; not
+confirmed against a schematic).
 
 ## RAIL registers
 

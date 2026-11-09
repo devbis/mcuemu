@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "efr32emu/run_command.hpp"
 
 #include "efr32emu/efr32mg21.hpp"
@@ -26,7 +27,9 @@ void usage(std::ostream &out) {
            "--steps and --for the run lasts 1 s of virtual time. DURATION is a number with\n"
            "ns, us, ms or s. --trace-mmio logs every peripheral register access to stderr.\n"
            "--dump-memory ADDRESS:COUNT prints COUNT bytes from the end of the run.\n"
-           "--trace-pc-range START:END prints each instruction executed in that address range.\n";
+           "--trace-pc-range START:END prints each instruction executed in that address range.\n"
+           "--uart0-send HEX@DURATION sends the bytes to USART0 at that virtual time (repeatable;\n"
+           "the UART0 output is also printed as hex).\n";
 }
 
 std::uint64_t parse_number(const std::string &text, const char *what) {
@@ -63,6 +66,7 @@ int run_command(int argc, char **argv) {
     std::vector<std::string> dumps;
     std::uint32_t pc_first = 0, pc_last = 0;
     bool trace_pc = false, trace_pc_regs = false;
+    std::vector<std::pair<std::uint64_t, std::vector<std::uint8_t>>> sends;
     for (int i = 2; i < argc; ++i) {
         const std::string option = argv[i];
         if (option == "--firmware" && i + 1 < argc)
@@ -75,6 +79,16 @@ int run_command(int argc, char **argv) {
             duration_ns = parse_duration_ns(argv[++i]);
         else if (option == "--trace-mmio")
             trace_mmio = true;
+        else if (option == "--uart0-send" && i + 1 < argc) {
+            const std::string spec = argv[++i];
+            const std::size_t at = spec.find('@');
+            if (at == std::string::npos || at % 2 != 0)
+                throw std::invalid_argument("--uart0-send expects HEX@DURATION: " + spec);
+            std::vector<std::uint8_t> bytes;
+            for (std::size_t k = 0; k < at; k += 2)
+                bytes.push_back(static_cast<std::uint8_t>(std::stoul(spec.substr(k, 2), nullptr, 16)));
+            sends.emplace_back(parse_duration_ns(spec.substr(at + 1)), std::move(bytes));
+        }
         else if (option == "--dump-memory" && i + 1 < argc)
             dumps.push_back(argv[++i]);
         else if (option == "--trace-pc-regs")
@@ -116,7 +130,23 @@ int run_command(int argc, char **argv) {
     if (steps != 0)
         chip.core().set_instruction_limit(steps);
     const std::uint64_t until = duration_ns != 0 ? chip.core().ns_to_cycles(duration_ns) : ~std::uint64_t{0} >> 1;
-    const cortexm::RunResult result = chip.run(until);
+    std::sort(sends.begin(), sends.end(),
+              [](const auto &a, const auto &b) { return a.first < b.first; });
+    cortexm::RunResult result{};
+    for (const auto &[at_ns, bytes] : sends) {
+        const std::uint64_t at = chip.core().ns_to_cycles(at_ns);
+        if (at >= until)
+            break;
+        result = chip.run(at);
+        if (result.reason != cortexm::StopReason::Deadline)
+            break;
+        for (std::uint8_t byte : bytes) {
+            // Nothing listens before the firmware has set its DMA up: try again every millisecond.
+            for (unsigned tries = 0; !chip.uart0_rx(byte) && tries != 3000; ++tries)
+                chip.run(chip.core().cycles() + chip.core().ns_to_cycles(1000000));
+        }
+    }
+    result = chip.run(until);
 
     cortexm::Core &core = chip.core();
     std::cout << "model: EFR32MG21\n"
@@ -131,7 +161,10 @@ int run_command(int argc, char **argv) {
     if (!chip.uart0_output().empty()) {
         std::cout << "UART0 output (" << chip.uart0_output().size() << " bytes):\n";
         std::cout.write(chip.uart0_output().data(), static_cast<std::streamsize>(chip.uart0_output().size()));
-        std::cout << '\n';
+        std::cout << "\nUART0 hex:";
+        for (char c : chip.uart0_output())
+            std::cout << ' ' << std::hex << std::setw(2) << std::setfill('0') << (static_cast<unsigned>(c) & 0xffu);
+        std::cout << std::dec << std::setfill(' ') << '\n';
     }
     for (const std::string &dump : dumps) {
         const std::size_t colon = dump.find(':');
