@@ -128,6 +128,25 @@ other RAIL features that depend on it (ACK handling by the sequencer, CSMA backo
 approximations. The host must send `hex:` UART scenario events (see docs/system-config.md) or use `--uart0-send`; a
 host that polls `callback` with wrong ASH sequence/ack numbers gets ASH ERROR 0x06.
 
+Forming a network and joining devices (`scripts/ncp_host.py`, a reactive EZSP/ASH host over `mcuemu serve`; `scripts/ncp_drive.py`
+is the older scenario-based one): the host sends `setConfigurationValue` (stack profile 2, security level 5), `networkInit`,
+`setInitialSecurityState` (note the order: bitmask, *pre-configured TC link key*, then network key), `formNetwork` and
+`permitJoining`. The NCP then forms a network, answers beacon requests, and a Zephyr end device (TLSR8258) and the zigbee-rs
+sensor associate with it: association request ACKed, data request ACKed with Frame Pending, association response, APS
+Transport-Key. What made that work in the model:
+- UART RX is paced at 115200 baud (a zero-time burst overran the 128-byte ring) and LDMA REQDIS is honoured.
+- The ACK logic also reads the PAN and short address RAIL keeps in sequencer RAM (0xA0001EE0..EEC, one byte per word in bits 15:8).
+- A MAC data request raises RAC IF bit 19 with the requester's address staged in BUF1 and SEQRAM 0xB0001EB4 (RAC SR1 bits 7:6
+  = address mode); the stack's `RAIL_IEEE802154_SetFramePending` toggles RAC SR2 bit 4, which the ACK carries. RAC STATE reads
+  RXFRAME while the event is open. RAIL's packet filterMask (BUF2 descriptor byte 3) is set for frames addressed to the NCP.
+- The Secure Engine mailbox now executes AES-128 ECB (command 0x04000100): the stack builds its CCM* and key hashing on it, and
+  the transport key decrypts correctly with the key-transport key.
+
+Open: the NCP stops answering about 11.6 s into a run and sends ASH ERROR 0x06 at 12.67 s, even with no device on the air and a
+host that is in step: after a normal reply it re-sends seven of its older frames as new ones. It reproduces with this host
+alone, so it is a timing or state problem in the model, not the join. Until it is found the join cannot be run to its end (the
+device never gets the network key before the NCP dies). `MCUEMU_EFR32_TRACE=FILE` logs a sim chip's MMIO.
+
 Still not there: forming or joining a network (EZSP `formNetwork`, `joinNetwork`) is untried. From the image, the UART is USART0 with routes
 written as TX = PB1, RX = PB0 (decoded with the alphabetical Series 2 `USARTROUTE` layout: CS, CTS, RTS, RX, SCLK, TX; not
 confirmed against a schematic).

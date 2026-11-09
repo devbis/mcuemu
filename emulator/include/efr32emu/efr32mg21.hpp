@@ -151,6 +151,7 @@ private:
     std::uint64_t pending_ack_at_{~std::uint64_t{0}};
     std::uint8_t pending_ack_seq_{0};
     std::uint64_t pending_rx_at_{~std::uint64_t{0}};
+    std::uint64_t data_request_deadline_{0};
     std::vector<std::uint8_t> pending_rx_;
     std::uint8_t rx_filter_mask_{0}, pending_filter_mask_{0};
     void tx_store(std::uint8_t byte);

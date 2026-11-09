@@ -4,6 +4,8 @@
 // settle is marked "inferred".
 
 #include "efr32/blocks.hpp"
+#include "crypto/aes128.hpp"
+#include <algorithm>
 #include "efr32/rail_map.hpp"
 
 #include <algorithm>
@@ -219,18 +221,69 @@ std::uint32_t SeMailbox::read(std::uint32_t reg) {
 void SeMailbox::write(std::uint32_t reg, std::uint32_t value) {
     if (reg == SeFifo) {
         const std::uint32_t words = regs_[SeTxHeader >> 2] / 4;
+        fifo_.push_back(value);
         // The header counts the command's words, including one that is not
         // stored (the handle word), so the command is complete one word early.
         if (++words_ >= (words > 1 ? words - 1 : 1)) {
             words_ = 0;
+            execute();
+            fifo_.clear();
             regs_[SeRxHeader >> 2] = 0; // SLI_SE_RESPONSE_OK
             regs_[SeRxStatus >> 2] |= SeRxint;
         }
         return;
     }
-    if (reg == SeTxHeader)
+    if (reg == SeTxHeader) {
         words_ = 0;
+        fifo_.clear();
+    }
     RegBlock::write(reg, value);
+}
+
+// The command stream is [command, data_in chain, data_out chain, parameters...] (sli_se_manager_mailbox.c).
+// A chain element is {address, next, length}; next == 1 ends it (SLI_SE_DATATRANSFER_STOP, inferred from the
+// NCP's descriptors) and the length word carries flag bits above bit 27. AES-ECB (0x04000100 encrypt, 0x04010100 decrypt, inferred from the NCP) takes
+// the plain key as the first input element and the data as the last, and writes the result to the output.
+void SeMailbox::execute() {
+    if (fifo_.size() < 3 || (fifo_[0] != 0x04000100u))
+        return; // only AES-ECB encryption is modelled; other commands just succeed
+    struct Element {
+        std::uint32_t address, length;
+    };
+    auto chain = [&](std::uint32_t head) {
+        std::vector<Element> elements;
+        for (unsigned guard = 0; guard < 6 && head != 0; ++guard) {
+            std::uint32_t d[3] = {};
+            if (!chip().core().read_memory(head, d, sizeof d))
+                break;
+            elements.push_back({d[0], d[2] & 0x0fffffffu});
+            if ((d[1] & 1u) != 0 || d[1] == 0) // next == 1 is SLI_SE_DATATRANSFER_STOP
+                break;
+            head = d[1];
+        }
+        return elements;
+    };
+    const auto in = chain(fifo_[1]);
+    const auto out = chain(fifo_[2]);
+    if (in.size() < 2 || out.empty() || in.back().length == 0 || in.back().length % 16 != 0)
+        return;
+    const Element &key = in[in.size() - 2];
+    if (key.length != 16)
+        return;
+    std::uint8_t key_bytes[16];
+    std::vector<std::uint8_t> data(in.back().length);
+    if (!chip().core().read_memory(key.address, key_bytes, 16) ||
+        !chip().core().read_memory(in.back().address, data.data(), data.size()))
+        return;
+    crypto::Block k;
+    std::copy(key_bytes, key_bytes + 16, k.begin());
+    for (std::size_t offset = 0; offset < data.size(); offset += 16) {
+        crypto::Block block;
+        std::copy(data.begin() + offset, data.begin() + offset + 16, block.begin());
+        const crypto::Block encrypted = crypto::aes128_encrypt(k, block);
+        std::copy(encrypted.begin(), encrypted.end(), data.begin() + offset);
+    }
+    chip().core().write_memory(out[0].address, data.data(), std::min<std::size_t>(data.size(), out[0].length));
 }
 
 void SeMailbox::reset() {
@@ -280,8 +333,8 @@ std::uint32_t RailRegs::read(std::uint32_t address) {
         value |= 3u << 15;
     if (base == rail::AgcRssi)
         value = (rx_ready_ || rx_frame_) ? (0x9cu << 8) : (0x80u << 8);
-    if (base == RacStatus && rx_enabled())
-        value = (value & ~(0xfu << 24)) | ((rx_frame_ ? 3u : rx_ready_ ? 2u : 1u) << 24);
+    if (base == RacStatus && (rx_enabled() || rx_frame_hold_))
+        value = (value & ~(0xfu << 24)) | (((rx_frame_ || rx_frame_hold_) ? 3u : rx_ready_ ? 2u : 1u) << 24);
     return value;
 }
 

@@ -31,6 +31,7 @@ constexpr std::uint64_t AckWaitCycles = 33178;
 constexpr std::uint64_t RxWarmCycles = 1536;
 constexpr std::uint32_t LbtStart = 1u << 16;
 constexpr std::uint64_t DataRequestDeliverCycles = 1900; // ~50 us after the event
+constexpr std::uint64_t DataRequestWaitCycles = 76800; // 2 ms
 constexpr std::uint64_t DataRequestAckCycles = 7400; // ~192 us: the stack answers the data request event first
 constexpr std::uint64_t LbtCycles = 8000; // ~200 us: backoff and one CCA window
 constexpr std::uint32_t SeBase = 0x4C000000, SeSize = 0x1000;
@@ -415,9 +416,11 @@ bool Efr32mg21::acknowledge(const std::vector<std::uint8_t> &fifo) {
             // The event comes while the frame is still being received (RXFRAME); the packet reaches the
             // driver a little later. The event's handler checks RAC STATE == RXFRAME.
             rail_regs_->set_rx_frame(true);
+            rail_regs_->hold_rx_frame(true);
             pending_rx_ = fifo;
             pending_filter_mask_ = rx_filter_mask_;
             pending_rx_at_ = core_->cycles() + DataRequestDeliverCycles;
+            data_request_deadline_ = core_->cycles() + DataRequestWaitCycles;
             request_service(pending_ack_at_);
             return true;
         }
@@ -467,12 +470,16 @@ std::uint64_t Efr32mg21::service(std::uint64_t now) {
     }
     // The end of the frame sets FRC TX_PACKET_SENT; the ACK wait then runs out
     // unless an ACK arrives, which the RAIL model does not receive from the air.
-    if (now >= pending_rx_at_) {
+    // The data request event is handled when the firmware clears RAC IF bit 19; the ACK and the packet wait for
+    // that (up to DataRequestWaitCycles: the interrupt can be held off by a critical section).
+    const bool data_request_open = (rail_regs_->peek(RacIf) & (1u << 19)) != 0 && now < data_request_deadline_;
+    if (now >= pending_rx_at_ && !data_request_open) {
         pending_rx_at_ = NoEvent;
         rx_filter_mask_ = pending_filter_mask_;
         deliver_rail_rx(pending_rx_);
+        rail_regs_->hold_rx_frame(false);
     }
-    if (now >= pending_ack_at_) {
+    if (now >= pending_ack_at_ && !data_request_open) {
         pending_ack_at_ = NoEvent;
         const std::uint32_t sr2 = rail::RacBase + 0x78;
         const bool frame_pending = (rail_regs_->peek(sr2) & 0x10u) != 0;

@@ -77,19 +77,28 @@ def main():
             fixed.append((t, bytes([ez & 255, 0, 1, 6, 0]))); ez += 1
         else:
             fixed.append((t, e))
-    ncp_data = []
-    for _ in range(8):
+    ncp_data, observed = [], None
+    for _ in range(30):
         with open(a.out, "w") as f:
             f.write(build(base, fixed, ncp_data, a.event))
         text = subprocess.run([a.mcuemu, "sim", a.out, "--for", a.duration], capture_output=True, timeout=900).stdout.decode(errors="replace")
         frames = ncp_frames(text)
-        seen, new = set(), []
-        for t, kind, detail in frames:
-            if kind == "DATA" and " retx 0" in detail:
-                new.append((t, int(detail.split()[1])))
-        if new == ncp_data:
+        new = [(t, int(detail.split()[1])) for t, kind, detail in frames if kind == "DATA" and " retx 0" in detail]
+        if new == observed and not any(k == 'ERROR' for _t, k, _d in frames):
             break
-        ncp_data = new
+        if new == observed:
+            print('ASH ERROR in the final pass: the host acks are not consistent', file=sys.stderr)
+            break
+        observed = new
+        # Beyond the last frame seen, assume the usual one NCP frame per host frame, so a pass fixes
+        # the acks of everything after its first surprise instead of just the next frame.
+        ncp_data = list(new)
+        last_t = new[-1][0] if new else 0.0
+        seq = (new[-1][1] + 1) & 7 if new else 0
+        for t, _e in fixed[1:]:
+            if t > last_t:
+                ncp_data.append((t + 0.001, seq)); seq = (seq + 1) & 7
+        print(f"pass: {len(new)} NCP frames seen", file=sys.stderr)
     for t, kind, detail in frames:
         if kind == "DATA" and detail.endswith("07 00") and " retx 0" in detail:
             continue

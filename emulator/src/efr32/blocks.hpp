@@ -182,7 +182,10 @@ public:
     void reset() override;
 
 private:
+    // Runs the command in fifo_: AES-ECB encryption (the stack builds its CCM* and key hashing on it).
+    void execute();
     unsigned words_{0};
+    std::vector<std::uint32_t> fifo_;
 };
 
 // Radio blocks RAIL drives directly, outside the zigbee-rs register map: the
@@ -210,6 +213,9 @@ public:
     // acknowledges it (BUFC IF bit 18 cleared). RAIL's helper reads this state to
     // decide the frame is being received (sets its gate flag B).
     void set_rx_frame(bool on) { rx_frame_ = on; }
+    // A frame is being received (a data request event is pending): RAC reports RXFRAME regardless of
+    // the BUF2 acknowledgements of earlier frames.
+    void hold_rx_frame(bool on) { rx_frame_hold_ = on; }
     // RXSEARCH (2) once the receiver has warmed up after the RX request; before that RXWARM (1).
     void set_rx_ready(bool on) { rx_ready_ = on; }
     bool rx_frame() const { return rx_frame_; }
@@ -218,6 +224,7 @@ private:
     std::unordered_map<std::uint32_t, std::uint32_t> words_;
     bool tx_started_{false};
     bool rx_frame_{false};
+    bool rx_frame_hold_{false};
     bool rx_ready_{false};
 };
 
