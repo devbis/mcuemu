@@ -36,7 +36,7 @@ std::string instruction_text(std::uint32_t pc, std::uint16_t instruction) {
 
 } // namespace
 
-Cpu::Cpu(Tlsr8258 &device) : device_(device) {
+Cpu::Cpu(Tc32Device &device) : device_(device) {
     uc_engine *engine = nullptr;
     const uc_err open_error = uc_open(UC_ARCH_TC32, UC_MODE_LITTLE_ENDIAN, &engine);
     if (open_error != UC_ERR_OK)
@@ -45,27 +45,29 @@ Cpu::Cpu(Tlsr8258 &device) : device_(device) {
     uc_ = reinterpret_cast<uc_struct *>(engine);
 
     try {
-        mmio_bindings_[0] = {this, Tlsr8258::RegisterBase};
-        mmio_bindings_[1] = {this, Tlsr8258::VendorRegisterAliasBase};
+        const Tc32Layout map = device_.layout();
+        mmio_bindings_[0] = {this, map.register_base};
+        mmio_bindings_[1] = {this, map.register_alias_base};
         check_error(uc_mem_map(engine, 0, device_.flash_size(),
                                UC_PROT_READ | UC_PROT_EXEC),
                     "map flash");
-        check_error(uc_mem_map_ptr(engine, Tlsr8258::RetainedSramBase,
-                                   Tlsr8258::SramSize, UC_PROT_ALL,
+        check_error(uc_mem_map_ptr(engine, map.sram_base,
+                                   map.sram_size, UC_PROT_ALL,
                                    device_.sram_data()),
                     "map SRAM");
-        check_error(uc_mmio_map(engine, Tlsr8258::RegisterBase,
-                                Tlsr8258::RegisterSize, mmio_read,
+        check_error(uc_mmio_map(engine, map.register_base,
+                                map.register_size, mmio_read,
                                 &mmio_bindings_[0], mmio_write,
                                 &mmio_bindings_[0]),
                     "map MMIO");
-        check_error(uc_mmio_map(engine, Tlsr8258::VendorRegisterAliasBase,
-                                Tlsr8258::RegisterSize, mmio_read,
-                                &mmio_bindings_[1], mmio_write,
-                                &mmio_bindings_[1]),
-                    "map vendor register alias");
+        if (map.register_alias_base != 0)
+            check_error(uc_mmio_map(engine, map.register_alias_base,
+                                    map.register_size, mmio_read,
+                                    &mmio_bindings_[1], mmio_write,
+                                    &mmio_bindings_[1]),
+                        "map vendor register alias");
         check_error(uc_tc32_set_fetch_alias(engine,
-                                            Tlsr8258::RetainedSramBase,
+                                            map.sram_base,
                                             device_.flash_size(), 0),
                     "set TC32 flash fetch alias");
         check_error(uc_hook_add(engine, reinterpret_cast<uc_hook *>(&code_hook_),
@@ -115,7 +117,7 @@ std::uint32_t Cpu::read_boot_head_size() const {
     if (word(boot_signature_offset) != boot_signature)
         return 0;
     const std::uint32_t size = (word(boot_signature_offset + 4) & 0xffffu) * boot_head_unit;
-    if (size == 0 || size > Tlsr8258::SramSize / 2 || size > flash.size())
+    if (size == 0 || size > device_.layout().sram_size / 2 || size > flash.size())
         return 0;
     return size;
 }
@@ -449,8 +451,8 @@ void Cpu::code_hook(uc_struct *opaque, std::uint64_t address,
         // have replaced since the CPU last ran there.
         const bool in_head =
             address < self->boot_head_size_ ||
-            (address >= Tlsr8258::RetainedSramBase &&
-             address - Tlsr8258::RetainedSramBase < self->boot_head_size_);
+            (address >= self->device_.layout().sram_base &&
+             address - self->device_.layout().sram_base < self->boot_head_size_);
         if (in_head && !self->in_boot_head_) {
             self->in_boot_head_ = true;
             if (!std::equal(self->boot_head_.begin(), self->boot_head_.end(),
@@ -546,9 +548,9 @@ void Cpu::code_hook(uc_struct *opaque, std::uint64_t address,
     std::array<std::uint8_t, 2> bytes{};
     bool have_instruction = false;
     const std::uint64_t flash_offset =
-        address >= Tlsr8258::RetainedSramBase
+        address >= self->device_.layout().sram_base
             ? static_cast<std::uint64_t>(address) -
-                  Tlsr8258::RetainedSramBase
+                  self->device_.layout().sram_base
             : UINT64_MAX;
     const auto &flash = self->device_.flash();
     const std::uint64_t head_offset =
@@ -571,10 +573,11 @@ void Cpu::code_hook(uc_struct *opaque, std::uint64_t address,
         bytes[0] = flash[static_cast<std::size_t>(address)];
         bytes[1] = flash[static_cast<std::size_t>(address + 1)];
         have_instruction = true;
-    } else if (size >= bytes.size() && address >= Tlsr8258::RetainedSramBase &&
-               address - Tlsr8258::RetainedSramBase <= Tlsr8258::SramSize - bytes.size()) {
+    } else if (size >= bytes.size() && address >= self->device_.layout().sram_base &&
+               address - self->device_.layout().sram_base <=
+                   self->device_.layout().sram_size - bytes.size()) {
         const std::uint8_t *sram = self->device_.sram_data();
-        const std::size_t offset = static_cast<std::size_t>(address - Tlsr8258::RetainedSramBase);
+        const std::size_t offset = static_cast<std::size_t>(address - self->device_.layout().sram_base);
         bytes[0] = sram[offset];
         bytes[1] = sram[offset + 1];
         have_instruction = true;

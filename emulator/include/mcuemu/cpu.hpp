@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mcuemu/bus.hpp"
+#include "mcuemu/tc32_device.hpp"
 
 #include <array>
 #include <cstddef>
@@ -51,7 +52,7 @@ public:
     static constexpr std::uint32_t FlagC = 1u << 29;
     static constexpr std::uint32_t FlagV = 1u << 28;
 
-    explicit Cpu(Tlsr8258 &device);
+    explicit Cpu(Tc32Device &device);
     ~Cpu();
     Cpu(const Cpu &) = delete;
     Cpu &operator=(const Cpu &) = delete;
@@ -132,7 +133,7 @@ private:
                     std::size_t &event_count, bool &limit_reported,
                     std::uint32_t address, const std::string &message);
 
-    Tlsr8258 &device_;
+    Tc32Device &device_;
     uc_struct *uc_{nullptr};
     std::array<MmioBinding, 2> mmio_bindings_{};
     std::size_t code_hook_{0};

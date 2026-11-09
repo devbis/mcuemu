@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mcuemu/bus.hpp"
+#include "mcuemu/tc32_device.hpp"
 
 #include <array>
 #include <cstddef>
@@ -18,12 +19,6 @@ class VirtualAir;
 enum class Tlsr8258Model {
     F512,
     F1K,
-};
-
-enum class Tlsr8258PowerState {
-    Awake,
-    Suspend,
-    DeepSleep,
 };
 
 struct OutputEvent {
@@ -65,7 +60,7 @@ struct I2cPads {
     bool valid() const noexcept { return sda_port >= 0; }
 };
 
-class Tlsr8258 final : public Bus {
+class Tlsr8258 final : public Tc32Device {
 public:
     static constexpr std::uint32_t RegisterBase = 0x800000;
     static constexpr std::uint32_t RegisterSize = 0x40000;
@@ -158,6 +153,12 @@ public:
     static constexpr std::uint32_t UartStatus1 = 0x80009e;
     static constexpr std::uint32_t UartState = 0x80009f;
 
+    const Tc32Layout &layout() const noexcept override {
+        static constexpr Tc32Layout map{RetainedSramBase, SramSize, RegisterBase, RegisterSize,
+                                        VendorRegisterAliasBase};
+        return map;
+    }
+
     explicit Tlsr8258(Tlsr8258Model model = Tlsr8258Model::F512,
                      std::uint32_t clock_hz = 48000000);
     void set_rc32k_characteristics(std::uint32_t frequency_hz,
@@ -172,19 +173,19 @@ public:
     // Ticking the whole span at once, no later than this many cycles from now,
     // gives the same result as ticking it cycle by cycle. Register accesses
     // must tick first (the wrapper does so before every MMIO access).
-    std::uint64_t cycles_until_event() const noexcept;
+    std::uint64_t cycles_until_event() const noexcept override;
     bool interrupt_pending() const noexcept override;
-    Tlsr8258PowerState power_state() const noexcept { return power_state_; }
+    Tlsr8258PowerState power_state() const noexcept override { return power_state_; }
     bool wake_gate_open() const noexcept;
-    bool advance_sleep_to_wakeup();
-    bool consume_deep_sleep_wakeup() noexcept;
+    bool advance_sleep_to_wakeup() override;
+    bool consume_deep_sleep_wakeup() noexcept override;
 
     void load_firmware(const std::vector<std::uint8_t> &image,
                        std::uint32_t offset = 0);
-    std::uint32_t flash_size() const noexcept;
+    std::uint32_t flash_size() const noexcept override;
     std::uint64_t time_ns() const noexcept { return time_ns_; }
-    std::uint32_t clock_hz() const noexcept { return clock_hz_; }
-    std::uint8_t *sram_data() noexcept { return sram_.data(); }
+    std::uint32_t clock_hz() const noexcept override { return clock_hz_; }
+    std::uint8_t *sram_data() noexcept override { return sram_.data(); }
     void set_gpio_input(unsigned port, std::uint8_t value);
     std::uint8_t gpio_output(unsigned port) const;
     // Pad-level view for external wiring: called whenever the output latch
@@ -257,7 +258,7 @@ public:
     void set_radio_time_offset(std::uint64_t offset_ns) noexcept {
         radio_time_offset_ns_ = offset_ns;
     }
-    std::uint64_t network_time_ns() const noexcept {
+    std::uint64_t network_time_ns() const noexcept override {
         if (radio_time_offset_ns_ >
             std::numeric_limits<std::uint64_t>::max() - time_ns_)
             return std::numeric_limits<std::uint64_t>::max();
@@ -266,18 +267,18 @@ public:
     void set_radio_channel(std::uint8_t zigbee_channel);
     bool inject_uart_rx(std::uint8_t value);
     std::vector<std::uint8_t> take_uart_transmitted();
-    const std::vector<std::uint8_t> &flash() const noexcept { return flash_; }
+    const std::vector<std::uint8_t> &flash() const noexcept override { return flash_; }
     // Bytes at the bottom of the code address space that the CPU fetches from
     // SRAM instead of flash: the SDK startup copies `.vectors` and `.ram_code`
     // there and writes their size (rounded up to 256) divided by 256 to 0x60c
     // (the start of the instruction-cache tag RAM, which follows the RAM code).
     // Inferred: the CPU treats everything below that tag start as SRAM.
-    std::uint32_t ram_code_bytes() const noexcept {
+    std::uint32_t ram_code_bytes() const noexcept override {
         return static_cast<std::uint32_t>(registers_[0x60c]) << 8;
     }
     // Flash bytes changed through the MSPI program/erase commands since the
     // last call; the CPU wrapper mirrors them into the engine's flash mapping.
-    bool take_flash_dirty(std::uint32_t &begin, std::uint32_t &end) noexcept;
+    bool take_flash_dirty(std::uint32_t &begin, std::uint32_t &end) noexcept override;
 
 private:
     std::uint32_t clock_hz_;
