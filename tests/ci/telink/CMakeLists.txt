@@ -11,7 +11,7 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 3.10)
 
 if(NOT APP)
-    message(FATAL_ERROR "APP must be sampleGW or sampleLight")
+    message(FATAL_ERROR "APP must be sampleGW, sampleLight or sampleSwitch")
 endif()
 SET(CMAKE_BUILD_TYPE Release)
 include(${CMAKE_CURRENT_LIST_DIR}/TelinkSDK.cmake)
@@ -27,10 +27,17 @@ if(APP STREQUAL "sampleGW")
 elseif(APP STREQUAL "sampleLight")
     ADD_DEFINITIONS(-DROUTER=1 -D__PROJECT_TL_DIMMABLE_LIGHT__=1)
     SET(ZB_LIB zb_router)
+elseif(APP STREQUAL "sampleSwitch")
+    ADD_DEFINITIONS(-DEND_DEVICE=1 -D__PROJECT_TL_SWITCH__=1)
+    SET(ZB_LIB zb_ed)
 else()
     message(FATAL_ERROR "unsupported APP ${APP}")
 endif()
 ADD_DEFINITIONS(-DMCU_CORE_${TELINK_PLATFORM}=1 -DMCU_STARTUP_${TELINK_PLATFORM}=1)
+if(TELINK_PLATFORM STREQUAL "826x")
+    ADD_DEFINITIONS(-DCHIP_8269=1)
+    SET(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -DMCU_CORE_826x -DCHIP_8269")
+endif()
 
 # The samples default to the dongle board; the tests use the EVK v1.2 layout.
 # The application is copied so the SDK checkout stays untouched.

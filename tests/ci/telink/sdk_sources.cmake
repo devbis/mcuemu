@@ -7,17 +7,6 @@ SET(ZIGBEE_SRC
     ${SDK_PREFIX}/platform/services/b85m/irq_handler.c
     ${SDK_PREFIX}/platform/tc32/div_mod.S
     ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash.c
-    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/adc.c
-    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash/flash_common.c
-    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash/flash_mid011460c8.c
-    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash/flash_mid1060c8.c
-    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash/flash_mid13325e.c
-    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash/flash_mid134051.c
-    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash/flash_mid136085.c
-    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash/flash_mid1360c8.c
-    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash/flash_mid1360eb.c
-    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash/flash_mid14325e.c
-    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash/flash_mid1460c8.c
     ${SDK_PREFIX}/zigbee/bdb/bdb.c
     ${SDK_PREFIX}/zigbee/aps/aps_group.c
     ${SDK_PREFIX}/zigbee/gp/gp_proxy.c
@@ -147,3 +136,20 @@ SET(ZIGBEE_SRC
     ${SDK_PREFIX}/proj/os/ev_rtc.c
     ${SDK_PREFIX}/proj/os/ev_timer.c
 )
+
+# The 8258 SDK ships its ADC and flash-type sources; the 826x keeps them in libdrivers_826x.a.
+if(TELINK_PLATFORM STREQUAL "8258")
+    list(APPEND ZIGBEE_SRC
+        ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/adc.c
+    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash/flash_common.c
+    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash/flash_mid011460c8.c
+    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash/flash_mid1060c8.c
+    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash/flash_mid13325e.c
+    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash/flash_mid134051.c
+    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash/flash_mid136085.c
+    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash/flash_mid1360c8.c
+    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash/flash_mid1360eb.c
+    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash/flash_mid14325e.c
+    ${SDK_PREFIX}/platform/chip_${TELINK_PLATFORM}/flash/flash_mid1460c8.c
+    )
+endif()

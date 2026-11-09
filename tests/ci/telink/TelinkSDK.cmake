@@ -18,7 +18,10 @@ IF(NOT CMAKE_C_COMPILER)
         SET(CMAKE_C_COMPILER ${TOOLCHAIN_BIN_DIR}/${TARGET_PREFIX}-gcc${TOOL_EXECUTABLE_SUFFIX})
 ENDIF()
 
-set(TELINK_PLATFORM "8258")
+# "8258" (default) or "826x" (TLSR8269 build of the SDK samples).
+if(NOT TELINK_PLATFORM)
+    set(TELINK_PLATFORM "8258")
+endif()
 
 SET(CMAKE_C_FLAGS "-O2 -ffunction-sections -fdata-sections -Wall -fpack-struct -fshort-enums -finline-small-functions -std=gnu99 -fshort-wchar -fms-extensions -nostdlib" CACHE INTERNAL "c compiler flags")
 SET(CMAKE_ASM_FLAGS "-fomit-frame-pointer -fshort-enums -Wall -Wpacked -Wcast-align -fdata-sections -ffunction-sections -fno-use-cxa-atexit -fno-threadsafe-statics" CACHE INTERNAL "asm compiler flags")
