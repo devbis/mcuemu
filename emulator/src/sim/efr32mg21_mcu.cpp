@@ -1,5 +1,6 @@
 #include "sim/efr32mg21_mcu.hpp"
 
+#include <cstdlib>
 #include <fstream>
 #include <iterator>
 #include <stdexcept>
@@ -22,6 +23,12 @@ Drive to_drive(efr32emu::PadDrive drive) {
 
 Efr32mg21Mcu::Efr32mg21Mcu(std::string name) : Mcu(std::move(name)) {
     chip_.set_pad_observer([this](unsigned pad) { drive_pad(pad); });
+    // Debug aid: MCUEMU_EFR32_TRACE=FILE logs this chip's peripheral accesses (scripts/efr32_trace.py reads it);
+    // with several EFR32 chips in one system the name is appended to the file name.
+    if (const char *trace = std::getenv("MCUEMU_EFR32_TRACE")) {
+        trace_file_ = std::make_unique<std::ofstream>(std::string(trace) + "." + this->name());
+        chip_.set_trace(trace_file_.get());
+    }
 }
 
 void Efr32mg21Mcu::load_firmware(const std::string &path) { load_images({{path, 0}}); }

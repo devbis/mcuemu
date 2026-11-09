@@ -3,6 +3,8 @@
 #include "efr32emu/efr32mg21.hpp"
 #include "sim/mcu.hpp"
 
+#include <fstream>
+#include <memory>
 #include <array>
 #include <cstdint>
 #include <string>
@@ -44,6 +46,7 @@ private:
     void drive_pad(unsigned pad);
 
     efr32emu::Efr32mg21 chip_;
+    std::unique_ptr<std::ofstream> trace_file_;
     McuState state_{McuState::Running};
     std::string fault_;
     std::array<Pin *, efr32emu::Efr32mg21::PadCount> pins_{};

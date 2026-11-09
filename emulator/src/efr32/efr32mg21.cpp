@@ -30,6 +30,8 @@ constexpr std::uint64_t AckWaitCycles = 33178;
 // INFERRED: the receiver leaves RXWARM for RXSEARCH after about the 40 us ramp the TX/RX paths use.
 constexpr std::uint64_t RxWarmCycles = 1536;
 constexpr std::uint32_t LbtStart = 1u << 16;
+constexpr std::uint64_t DataRequestDeliverCycles = 1900; // ~50 us after the event
+constexpr std::uint64_t DataRequestAckCycles = 7400; // ~192 us: the stack answers the data request event first
 constexpr std::uint64_t LbtCycles = 8000; // ~200 us: backoff and one CCA window
 constexpr std::uint32_t SeBase = 0x4C000000, SeSize = 0x1000;
 
@@ -153,7 +155,17 @@ void Efr32mg21::set_device_id(std::uint64_t id) {
         devinfo_[0x48 + i] = static_cast<std::uint8_t>(id >> (8 * i));
 }
 
-bool Efr32mg21::uart0_rx(std::uint8_t byte) { return ldma_->usart0_rx(byte); }
+// A byte takes 10 bit times on the wire. INFERRED 115200 baud (the Silicon Labs NCP images and
+// zigbee2mqtt use it): the baud rate is not read from USART0. Without the pacing a host frame lands in
+// zero time and overruns the NCP's 128-byte receive ring before its main loop can move the write window.
+bool Efr32mg21::uart0_rx(std::uint8_t byte) {
+    if (core_->cycles() < uart_rx_ready_at_)
+        return false;
+    if (!ldma_->usart0_rx(byte))
+        return false;
+    uart_rx_ready_at_ = core_->cycles() + ClockHz / 115200 * 10;
+    return true;
+}
 
 Block &Efr32mg21::block_at(std::uint32_t slot) {
     if (!blocks_[slot])
@@ -187,7 +199,7 @@ void Efr32mg21::reset() {
     rtcc_->reset();
     se_mailbox_->reset();
     rail_regs_->reset();
-    tx_done_at_ = ack_timeout_at_ = lbt_tx_at_ = NoEvent;
+    tx_done_at_ = ack_timeout_at_ = lbt_tx_at_ = pending_ack_at_ = pending_rx_at_ = NoEvent;
     // short_address_known_ is deliberately kept: the driver's short address and PAN live in RAIL's
     // RAM handle, which the model does not read, so the copy learned from the association response
     // stands in for them. A firmware that resets after joining (the Zephyr ED does, at about 10 s)
@@ -316,8 +328,10 @@ void Efr32mg21::deliver_rail_rx(const std::vector<std::uint8_t> &fifo) {
     // a short frame against its pending transmit when that flag is set, so an ACK (frame type
     // 2 in the FC byte after the PHR) must carry it or it is dropped as a 3-byte frame.
     const bool ack = fifo.size() >= 2 && (fifo[1] & 7u) == 2u;
+    // Byte 3 is RAIL's filterMask: which address filter accepted the frame (INFERRED: bit 0 = the first
+    // filter, which holds the device's own PAN and address; the stack drops unicast frames without it).
     std::uint8_t descriptor[8] = {static_cast<std::uint8_t>(end), static_cast<std::uint8_t>(end >> 8),
-                                  static_cast<std::uint8_t>(7u | (ack ? 0x10u : 0u)), 0, 0, 0, 0, 0};
+                                  static_cast<std::uint8_t>(7u | (ack ? 0x10u : 0u)), rx_filter_mask_, 0, 0, 0, 0};
     if (!core_->write_memory(base + position, descriptor, sizeof(descriptor)))
         return;
     rail_regs_->write(Buf2Status, 8);
@@ -325,44 +339,96 @@ void Efr32mg21::deliver_rail_rx(const std::vector<std::uint8_t> &fifo) {
     rail_regs_->set_rx_frame(true);
 }
 
-void Efr32mg21::acknowledge(const std::vector<std::uint8_t> &fifo) {
+// True when the frame's delivery to the driver is deferred (a data request, see below).
+bool Efr32mg21::acknowledge(const std::vector<std::uint8_t> &fifo) {
     // fifo is the PHR followed by the frame: FC (2 bytes), sequence, then the destination PAN
     // (2 bytes, the only one with PAN compression) and the destination address. The hardware
     // sends the ACK about 12 symbols after the frame; the model sends it when the frame is
     // delivered. The stack's extended address is the unique id (DEVINFO +0x48, see
     // set_device_id), not the EUI-64 at +0x1A0.
-    if (fifo.size() < 14)
-        return;
+    rx_filter_mask_ = 0;
+    if (fifo.size() < 8) // PHR, FC, sequence, PAN and a short destination address at least
+        return false;
     const std::uint8_t fc0 = fifo[1], fc1 = fifo[2];
     if ((fc0 & 7u) == 2u)
-        return; // an ACK is never acknowledged
+        return false; // an ACK is never acknowledged
     const std::uint8_t dst_mode = (fc1 >> 2) & 3u, src_mode = (fc1 >> 6) & 3u;
-    // Only PAN-compressed frames are handled: the offsets below assume a single PAN ID.
-    if ((fc0 & 0x40u) == 0)
-        return;
+    // The destination PAN and address sit at the same offsets with or without PAN compression
+    // (an association request is not compressed); the association-response parse below needs it.
     bool mine = false;
     if (dst_mode == 3u)
         mine = std::memcmp(fifo.data() + 6, devinfo_ + 0x48, 8) == 0;
     else if (dst_mode == 2u && short_address_known_)
         mine = fifo[4] == pan_id_[0] && fifo[5] == pan_id_[1] && fifo[6] == short_address_[0] &&
                fifo[7] == short_address_[1];
+    // A coordinator (the Silicon Labs NCP) keeps its filter in sequencer RAM: RAIL stores one byte per
+    // word in bits 15:8, PAN ID 0 at 0xA0001EE0/EE4 and short address 0 at EE8/EEC (0xFFFE = none), written by
+    // RAIL_IEEE802154_SetPanId / SetShortAddress (observed in the NCP's formNetwork trace).
+    if (!mine && dst_mode == 2u) {
+        auto filter_byte = [&](std::uint32_t address) { return (rail_regs_->peek(address) >> 8) & 0xffu; };
+        const std::uint8_t pan[2] = {static_cast<std::uint8_t>(filter_byte(0xA0001EE0)),
+                                     static_cast<std::uint8_t>(filter_byte(0xA0001EE4))};
+        const std::uint8_t shrt[2] = {static_cast<std::uint8_t>(filter_byte(0xA0001EE8)),
+                                      static_cast<std::uint8_t>(filter_byte(0xA0001EEC))};
+        const bool has_short = !(shrt[0] == 0xff && (shrt[1] == 0xff || shrt[1] == 0xfe)) &&
+                               !(shrt[0] == 0xfe && shrt[1] == 0xff);
+        mine = has_short && fifo[4] == pan[0] && fifo[5] == pan[1] && fifo[6] == shrt[0] && fifo[7] == shrt[1];
+    }
     // A command frame in the association response (command 0x02): it carries the short
     // address the coordinator assigns, after the 8-byte source address.
-    if (mine && (fc0 & 7u) == 3u && dst_mode == 3u && src_mode == 3u && fifo.size() >= 26 && fifo[22] == 0x02u) {
+    if (mine && (fc0 & 0x40u) && (fc0 & 7u) == 3u && dst_mode == 3u && src_mode == 3u && fifo.size() >= 26 &&
+        fifo[22] == 0x02u) {
         pan_id_[0] = fifo[4];
         pan_id_[1] = fifo[5];
         short_address_[0] = fifo[23];
         short_address_[1] = fifo[24];
         short_address_known_ = true;
     }
+    if (mine)
+        rx_filter_mask_ = 1;
     if ((fc0 & 0x20u) == 0 || !mine)
-        return;
+        return false;
+    // A MAC data request (command 0x04) addressed to us: the sequencer raises RAC IF bit 19 (the library's
+    // RAIL_IEEE802154_SetFramePending only works while it is set, and the FRC handler turns it into
+    // RAIL_EVENT_IEEE802154_DATA_REQUEST_COMMAND) and sends the ACK only after the stack had its say: it
+    // toggles RAC SR2 bit 4, which the ACK then carries as Frame Pending. INFERRED from the library code.
+    if ((fc0 & 7u) == 3u) {
+        std::size_t offset = 4;
+        if (dst_mode != 0)
+            offset += 2u + (dst_mode == 2u ? 2u : 8u);
+        if (src_mode != 0)
+            offset += ((fc0 & 0x40u) ? 0u : 2u) + (src_mode == 2u ? 2u : 8u);
+        if (offset < fifo.size() && fifo[offset] == 0x04u) {
+            // RAIL_IEEE802154_GetAddress (the stack's pending-frame lookup) reads the requester's source
+            // address out of BUF1: SEQRAM word 0xB0001EB4 is the BUF1 offset just after it, and RAC SR1
+            // bits 7:6 hold its mode (3 extended, 2 short). The frame is staged in BUF1 ahead of its delivery.
+            const std::uint32_t source_end = static_cast<std::uint32_t>(offset) - 1u; // before the command id
+            const std::uint32_t frame_at = rail_regs_->peek(Buf1WriteOffset);
+            std::vector<std::uint8_t> stored = fifo;
+            stored.insert(stored.end(), 8, 0x00);
+            core_->write_memory(rail_regs_->peek(Buf1Addr) + frame_at, stored.data(), stored.size());
+            rail_regs_->write(0xA0001EB4u, frame_at + source_end + 1u);
+            rail_regs_->write(RacBase + 0x74, (rail_regs_->peek(RacBase + 0x74) & ~0xC0u) | (static_cast<std::uint32_t>(src_mode) << 6));
+            rail_regs_->set_bits(RacIf, 1u << 19);
+            pending_ack_seq_ = fifo[3];
+            pending_ack_at_ = core_->cycles() + DataRequestAckCycles;
+            // The event comes while the frame is still being received (RXFRAME); the packet reaches the
+            // driver a little later. The event's handler checks RAC STATE == RXFRAME.
+            rail_regs_->set_rx_frame(true);
+            pending_rx_ = fifo;
+            pending_filter_mask_ = rx_filter_mask_;
+            pending_rx_at_ = core_->cycles() + DataRequestDeliverCycles;
+            request_service(pending_ack_at_);
+            return true;
+        }
+    }
     const std::vector<std::uint8_t> ack = {5, 0x02, 0x00, fifo[3]};
     radio_->transmit_fifo(ack, rail_channel());
     // The sequencer ends the ACK with TXAFTERFRAMEDONE (FRC IF bit 1, enabled in the RAIL
     // image). The FRC handler reports it as TXACK_PACKET_SENT (SDK bit 25, 0x2000000) when
     // RAC SR0 bits 13..15 are clear; the driver clears its ack_tx state on that event.
     rail_regs_->set_bits(FrcIf, 1u << 1);
+    return false;
 }
 
 // PROTIMER (IRQ 36), layout from recovery/reconstructed.c (the image's, not the
@@ -401,6 +467,21 @@ std::uint64_t Efr32mg21::service(std::uint64_t now) {
     }
     // The end of the frame sets FRC TX_PACKET_SENT; the ACK wait then runs out
     // unless an ACK arrives, which the RAIL model does not receive from the air.
+    if (now >= pending_rx_at_) {
+        pending_rx_at_ = NoEvent;
+        rx_filter_mask_ = pending_filter_mask_;
+        deliver_rail_rx(pending_rx_);
+    }
+    if (now >= pending_ack_at_) {
+        pending_ack_at_ = NoEvent;
+        const std::uint32_t sr2 = rail::RacBase + 0x78;
+        const bool frame_pending = (rail_regs_->peek(sr2) & 0x10u) != 0;
+        const std::vector<std::uint8_t> ack = {5, static_cast<std::uint8_t>(0x02 | (frame_pending ? 0x10 : 0)), 0x00,
+                                               pending_ack_seq_};
+        radio_->transmit_fifo(ack, rail_channel());
+        rail_regs_->clear_bits(sr2, 0x10u);
+        rail_regs_->set_bits(FrcIf, 1u << 1);
+    }
     if (now >= lbt_tx_at_) {
         lbt_tx_at_ = NoEvent;
         start_tx();
@@ -441,13 +522,13 @@ std::uint64_t Efr32mg21::service(std::uint64_t now) {
         if (now >= rail_rx_poll_at_) {
             rail_rx_poll_at_ = now + RailRxPollCycles;
             for (const auto &fifo : radio_->receive_fifo(rail_channel(), core_->cycles_to_ns(now))) {
-                deliver_rail_rx(fifo);
-                acknowledge(fifo);
+                if (!acknowledge(fifo))
+                    deliver_rail_rx(fifo);
             }
         }
         rx_poll = rail_rx_poll_at_;
     }
-    return std::min({radio_->service(now), rtcc_->service(now), next_protimer_, tx_done_at_, ack_timeout_at_, rx_poll, rx_warm_done_at_, lbt_tx_at_});
+    return std::min({radio_->service(now), rtcc_->service(now), next_protimer_, tx_done_at_, ack_timeout_at_, rx_poll, rx_warm_done_at_, lbt_tx_at_, pending_ack_at_, pending_rx_at_});
 }
 
 void Efr32mg21::connect_radio(mcuemu::VirtualAir &air, const std::string &node) { radio_->connect(air, node); }

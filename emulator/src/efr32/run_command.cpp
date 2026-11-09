@@ -142,8 +142,8 @@ int run_command(int argc, char **argv) {
             break;
         for (std::uint8_t byte : bytes) {
             // Nothing listens before the firmware has set its DMA up: try again every millisecond.
-            for (unsigned tries = 0; !chip.uart0_rx(byte) && tries != 3000; ++tries)
-                chip.run(chip.core().cycles() + chip.core().ns_to_cycles(1000000));
+            for (unsigned tries = 0; !chip.uart0_rx(byte) && tries != 60000; ++tries)
+                chip.run(chip.core().cycles() + chip.core().ns_to_cycles(50000));
         }
     }
     result = chip.run(until);

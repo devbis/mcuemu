@@ -127,6 +127,7 @@ private:
     std::uint8_t *ram_{nullptr};
     std::uint8_t *devinfo_{nullptr};
     bool soft_reset_{false};
+    std::uint64_t uart_rx_ready_at_{0};
     std::uint8_t *userdata_{nullptr};
     std::ostream *trace_{nullptr};
     std::uint32_t code_end_{0};
@@ -147,13 +148,18 @@ private:
     std::vector<std::uint8_t> tx_frame();
     void start_tx();
     std::uint64_t lbt_tx_at_{~std::uint64_t{0}};
+    std::uint64_t pending_ack_at_{~std::uint64_t{0}};
+    std::uint8_t pending_ack_seq_{0};
+    std::uint64_t pending_rx_at_{~std::uint64_t{0}};
+    std::vector<std::uint8_t> pending_rx_;
+    std::uint8_t rx_filter_mask_{0}, pending_filter_mask_{0};
     void tx_store(std::uint8_t byte);
     std::uint8_t rail_channel() const;
     void deliver_rail_rx(const std::vector<std::uint8_t> &fifo);
     // The radio acknowledges a received frame that requests it and is addressed to this
     // device: by its unique id (extended address) or, after an association response it
     // acknowledged, by the short address and PAN that response assigned.
-    void acknowledge(const std::vector<std::uint8_t> &fifo);
+    bool acknowledge(const std::vector<std::uint8_t> &fifo);
     // Short address and PAN ID taken from the association response (little-endian as sent).
     bool short_address_known_{false};
     std::uint8_t short_address_[2]{}, pan_id_[2]{};

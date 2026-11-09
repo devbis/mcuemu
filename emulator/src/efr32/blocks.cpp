@@ -19,7 +19,7 @@ void Block::set_irq_level(unsigned irq, bool level) { chip_.core().set_irq_line(
 
 namespace {
 constexpr std::uint32_t LdmaChen = 0x24, LdmaChdis = 0x28, LdmaChstatus = 0x2c, LdmaChdone = 0x34,
-                        LdmaLinkload = 0x48, LdmaIf = 0x50, LdmaIen = 0x54;
+                        LdmaReqdis = 0x40, LdmaLinkload = 0x48, LdmaIf = 0x50, LdmaIen = 0x54;
 constexpr std::uint32_t ChCtrl = 0x08, ChSrc = 0x0c, ChDst = 0x10, ChLink = 0x14;
 // RXDATA (+0x24) and RXDATAX (+0x20) of USART0 in the non-secure and secure views.
 bool is_usart0_rxdata(std::uint32_t address) {
@@ -106,7 +106,9 @@ void Ldma::transfer_done(unsigned ch) {
 
 bool Ldma::usart0_rx(std::uint8_t byte) {
     for (unsigned ch = 0; ch < Channels; ++ch) {
-        if (!(enabled_ & (1u << ch)))
+        // REQDIS masks a channel's peripheral requests: the NCP's driver sets it around its
+        // read-pointer snapshot, and the byte waits in the USART until it is cleared again.
+        if (!(enabled_ & (1u << ch)) || (regs_[LdmaReqdis >> 2] & (1u << ch)))
             continue;
         // A memory-to-memory no-op descriptor (the parking one) takes the request without
         // touching RXDATA; the byte stays pending for the descriptor it links to.
