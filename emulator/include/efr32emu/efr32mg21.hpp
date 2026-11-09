@@ -156,6 +156,9 @@ private:
     bool short_address_known_{false};
     std::uint8_t short_address_[2]{}, pan_id_[2]{};
     std::uint64_t rail_rx_poll_at_{0};
+    // Core cycle at which a requested receiver finishes warming up (RXWARM -> RXSEARCH).
+    std::uint64_t rx_warm_done_at_{~std::uint64_t{0}};
+    bool rx_was_enabled_{false};
     std::uint32_t rx_context();
     std::uint32_t rx_context_{0};
     // PROTIMER compare check: next due cycle and the WRAPCNT seen at the previous check, per channel.

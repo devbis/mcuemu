@@ -256,8 +256,16 @@ std::uint32_t RailRegs::read(std::uint32_t address) {
     if (address == 0xA8004008)
         value |= 0x100;
     // RAC STATUS.STATE (bits 27:24): code 1 is RX (RAIL state 2), 0 is idle.
+    // INFERRED from the NCP's RAIL_GetRssi (energy scan, scan RX): once the receiver is in RXSEARCH or
+    // RXFRAME it waits for a nonzero AGC STATUS1.RSSISTATE (bits 17:15) and then reads AGC RSSI
+    // (RSSIINT bits 15:8, signed dBm). The model reports a valid state (3 is a guess; any nonzero
+    // passes the test) and a quiet -100 dBm channel.
+    if (base == rail::AgcStatus1 && (rx_ready_ || rx_frame_))
+        value |= 3u << 15;
+    if (base == rail::AgcRssi)
+        value = (rx_ready_ || rx_frame_) ? (0x9cu << 8) : (0x80u << 8);
     if (base == RacStatus && rx_enabled())
-        value = (value & ~(0xfu << 24)) | ((rx_frame_ ? 3u : 1u) << 24);
+        value = (value & ~(0xfu << 24)) | ((rx_frame_ ? 3u : rx_ready_ ? 2u : 1u) << 24);
     return value;
 }
 

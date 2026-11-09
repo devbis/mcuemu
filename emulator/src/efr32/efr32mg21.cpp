@@ -27,6 +27,8 @@ using namespace rail;
 constexpr std::uint64_t RailRxPollCycles = 3840;
 // Inferred: the 802.15.4 ACK wait of 54 symbols (864 us).
 constexpr std::uint64_t AckWaitCycles = 33178;
+// INFERRED: the receiver leaves RXWARM for RXSEARCH after about the 40 us ramp the TX/RX paths use.
+constexpr std::uint64_t RxWarmCycles = 1536;
 constexpr std::uint32_t SeBase = 0x4C000000, SeSize = 0x1000;
 
 // 0x5xxxxxxx (non-secure alias) addresses the same register as 0x4xxxxxxx.
@@ -189,6 +191,8 @@ void Efr32mg21::reset() {
     // stands in for them. A firmware that resets after joining (the Zephyr ED does, at about 10 s)
     // restores its address from non-volatile storage and would otherwise lose every ACK.
     rail_rx_poll_at_ = 0;
+    rx_warm_done_at_ = NoEvent;
+    rx_was_enabled_ = false;
     rx_context_ = 0;
     next_protimer_ = 0;
     std::fill(std::begin(protimer_last_wrap_), std::end(protimer_last_wrap_), 0);
@@ -393,6 +397,22 @@ std::uint64_t Efr32mg21::service(std::uint64_t now) {
     core_->set_irq_line(FrcIrq, (rail_regs_->peek(FrcIf) & rail_regs_->peek(FrcIen)) != 0);
     core_->set_irq_line(RacSeqIrq, (rail_regs_->peek(RacIf) & rail_regs_->peek(RacIen)) != 0);
     core_->set_irq_line(BufcIrq, (rail_regs_->peek(BufcIf) & rail_regs_->peek(BufcIen)) != 0);
+    // RAC STATUS.STATE: RXWARM (1) after the RX request, RXSEARCH (2) once warmed up. The NCP's RAIL
+    // waits for state 2 or 3 after its RX request (energy scan, scan RX).
+    if (rail_regs_->rx_enabled()) {
+        if (!rx_was_enabled_) {
+            rx_was_enabled_ = true;
+            rx_warm_done_at_ = now + RxWarmCycles;
+        }
+        if (now >= rx_warm_done_at_) {
+            rail_regs_->set_rx_ready(true);
+            rx_warm_done_at_ = NoEvent;
+        }
+    } else if (rx_was_enabled_) {
+        rx_was_enabled_ = false;
+        rx_warm_done_at_ = NoEvent;
+        rail_regs_->set_rx_ready(false);
+    }
     std::uint64_t rx_poll = NoEvent;
     if (rail_regs_->rx_enabled()) {
         if (now >= rail_rx_poll_at_) {
@@ -404,7 +424,7 @@ std::uint64_t Efr32mg21::service(std::uint64_t now) {
         }
         rx_poll = rail_rx_poll_at_;
     }
-    return std::min({radio_->service(now), rtcc_->service(now), next_protimer_, tx_done_at_, ack_timeout_at_, rx_poll});
+    return std::min({radio_->service(now), rtcc_->service(now), next_protimer_, tx_done_at_, ack_timeout_at_, rx_poll, rx_warm_done_at_});
 }
 
 void Efr32mg21::connect_radio(mcuemu::VirtualAir &air, const std::string &node) { radio_->connect(air, node); }

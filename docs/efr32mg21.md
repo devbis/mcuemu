@@ -105,6 +105,15 @@ receive descriptor and 0.4 us later a "nothing pending" descriptor (source and d
 byte) on the same channel, and re-issues it every 1.5 ms; replacing the receive transfer drops every byte.
 That is the model matching the observed driver, not the silicon rule.
 
+Radio iteration (NCP, EZSP `startScan` driven by `--uart0-send`; `scripts/efr32_trace.py` names the registers):
+the receiver now goes RXWARM (RAC STATUS.STATE 1) to RXSEARCH (2) about 40 us after the RX request, and AGC
+reports a valid RSSI (STATUS1.RSSISTATE nonzero, RSSIINT -100 dBm) in those states. The NCP's `RAIL_GetRssi` waits for
+both. Before that an energy scan hung the NCP in a poll of RAC STATUS (it waits for state 2 or 3). An *active* scan
+(type 1) still does nothing after it enables the receiver: no transmit command, no timer, no IRQ; the stack's next
+step is an event this model does not produce yet. Injecting each RAC SEQ event bit (16..23) after the RX request
+runs the radio IRQ handler but starts no transmit. Observed quirk: the PROTIMER IRQ line is updated only on the
+model's periodic check, so the handler re-enters until then.
+
 Still not there: the RAIL radio is the partial model above, so the NCP cannot form or join a network;
 no other EZSP command has been tried. From the image, the UART is USART0 with routes written as TX = PB1,
 RX = PB0 (decoded with the alphabetical Series 2 `USARTROUTE` layout: CS, CTS, RTS, RX, SCLK, TX; not

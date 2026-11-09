@@ -26,6 +26,8 @@ constexpr std::uint32_t RacRxEnable = RacBase + 0x008, RacStatus = RacBase + 0x0
 constexpr std::uint32_t RacRxenRequest = 1u << 1;
 
 // FRC.
+// AGC (non-secure 0xB800C000, secure view 0xA800C000): STATUS1 (+0x0C), RSSI (+0x10).
+constexpr std::uint32_t AgcStatus1 = 0xA800C00Cu, AgcRssi = 0xA800C010u;
 constexpr std::uint32_t FrcIf = 0xA8004068u, FrcIen = 0xA800406Cu;
 
 // SYNTH channel number.

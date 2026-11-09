@@ -208,12 +208,15 @@ public:
     // acknowledges it (BUFC IF bit 18 cleared). RAIL's helper reads this state to
     // decide the frame is being received (sets its gate flag B).
     void set_rx_frame(bool on) { rx_frame_ = on; }
+    // RXSEARCH (2) once the receiver has warmed up after the RX request; before that RXWARM (1).
+    void set_rx_ready(bool on) { rx_ready_ = on; }
     bool rx_frame() const { return rx_frame_; }
 
 private:
     std::unordered_map<std::uint32_t, std::uint32_t> words_;
     bool tx_started_{false};
     bool rx_frame_{false};
+    bool rx_ready_{false};
 };
 
 // MSC (0x40030000): page erase and word programming by the register protocol
