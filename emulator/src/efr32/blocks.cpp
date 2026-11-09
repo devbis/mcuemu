@@ -17,6 +17,11 @@ void Block::set_irq_level(unsigned irq, bool level) { chip_.core().set_irq_line(
 
 // ---- CMU, HFXO -----------------------------------------------------------------
 
+void Emu::reset() {
+    RegBlock::reset();
+    regs_[Rstcause >> 2] = chip().soft_reset() ? SystemRequestReset : PowerOnReset;
+}
+
 void Cmu::reset() {
     RegBlock::reset();
     regs_[Sysclkctrl >> 2] = 1; // FSRCO selected out of reset
@@ -146,6 +151,14 @@ std::uint32_t RailRegs::read(std::uint32_t address) {
     std::uint32_t value = it != words_.end() ? it->second : 0;
     if (address == SeqStatus)
         value |= SeqReadyBits;
+    // INFERRED stand-ins, not the silicon: the RAIL init in the Silicon Labs Zigbee NCP 8.2.2 image
+    // (pc 0x2e2f4) polls FRC IF (0xA8004068) for bit 14 and FRC+0x08 for bit 8 after it starts a
+    // calibration that the RAC sequencer would run (this model does not run it). Reporting both as
+    // set lets the init finish; what the bits mean on the silicon is not known here.
+    if (address == 0xA8004068)
+        value |= 0x4000;
+    if (address == 0xA8004008)
+        value |= 0x100;
     // RAC STATUS.STATE (bits 27:24): code 1 is RX (RAIL state 2), 0 is idle.
     if (base == RacStatus && rx_enabled())
         value = (value & ~(0xfu << 24)) | ((rx_frame_ ? 3u : 1u) << 24);

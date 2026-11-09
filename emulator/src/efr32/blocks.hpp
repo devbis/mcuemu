@@ -56,6 +56,20 @@ protected:
     std::array<std::uint32_t, 1024> regs_{};
 };
 
+// EMU (0x40004000): only RSTCAUSE (+0x94) is modelled; the rest reads back what was written. The
+// register is INFERRED from the Silicon Labs Zigbee NCP's start-up (halInternalClassifyReset reads
+// EMU+0x94 and treats bit 0 as a power-on reset, bit 10 as a system-request reset). Without it
+// the NCP reports "unknown reset" and sends an ASH ERROR frame instead of RSTACK.
+class Emu final : public RegBlock {
+public:
+    static constexpr std::uint32_t Rstcause = 0x094;
+    static constexpr std::uint32_t PowerOnReset = 1u << 0, SystemRequestReset = 1u << 10;
+    explicit Emu(Efr32mg21 &chip) : RegBlock(chip) { regs_[Rstcause >> 2] = PowerOnReset; }
+    // A reset the core asked for (SYSRESETREQ) is a system-request reset; any other reset is a
+    // power-up.
+    void reset() override;
+};
+
 // CMU (0x40008000). Only the system clock selection is observable.
 class Cmu final : public RegBlock {
 public:

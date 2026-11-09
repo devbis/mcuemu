@@ -679,6 +679,23 @@ if(MCUEMU_BUILD_TESTS)
         endif()
     endif()
 
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/firmware/zbdonglee-ncp.bin")
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            # Silicon Labs EZSP NCP (scripts/gbl2bin.py of the Nerivec release GBL): sends RSTACK.
+            add_test(
+                NAME firmware_efr32mg21_ncp_rstack
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_efr32mg21_ncp_rstack.py"
+                        "$<TARGET_FILE:mcuemu>"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/firmware/zbdonglee-ncp.bin")
+            set_tests_properties(firmware_efr32mg21_ncp_rstack PROPERTIES
+                TIMEOUT 180
+                LABELS "firmware"
+            )
+        endif()
+    endif()
+
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/firmware/efr32mg21-sensor.bin" AND
        EXISTS "${MCUEMU_SAMPLE_GW_FIRMWARE}")
         find_package(Python3 COMPONENTS Interpreter QUIET)

@@ -66,6 +66,33 @@ and the sensor associates, receives the NWK key and completes the trust-center
 link key exchange (about 23 s in, after the first scans find no network yet),
 then reports temperature and humidity (synthetic) from about 83 s.
 
+## Silicon Labs EZSP NCP (Sonoff ZBDongle-E image)
+
+The Zigbee NCP builds of the Nerivec `silabs-firmware-builder` releases (e.g.
+`sonoff_zbdonglee_zigbee_ncp_8.2.2.0_115200_sw_flow.gbl`, EmberZNet 8.2.2, GSDK 2025.6.2) run
+on the model up to the ASH UART. `scripts/gbl2bin.py IN.gbl OUT.bin` extracts the application
+(a GBL program-data block for 0x4000); `mcuemu run --model EFR32MG21 --firmware OUT.bin --for 3s`
+prints the UART0 bytes. After about 1.06 s (virtual) of NVM3 formatting and RAIL init the NCP
+sends the power-on RSTACK, `1A C1 02 02 9B 7B 7E`, which is what a real adapter sends (ctest
+`firmware_efr32mg21_ncp_rstack`, needs `firmware/zbdonglee-ncp.bin`).
+
+What it needed beyond the zigbee-rs and Zephyr images (all in the source with the evidence):
+
+- DEVINFO: `+0x1FC` bits 23:16 are checked against 0x80/0x81 (`sl_zigbee_system_common.c`
+  assert, line 71; 0xFF made the image reboot in a loop; 0x81 is a guess between the two accepted
+  values), `+0x08` MEMINFO gives the flash page size (`1 << ((MEMINFO + 10) & 31)`; NVM3 open rejects
+  512 B, the erased value), `+0x0C` MSIZE.
+- EMU RSTCAUSE (`+0x94`): bit 0 for a power-up, bit 10 after SYSRESETREQ. Without it the NCP's
+  reset classification is "unknown" and it sends an ASH ERROR frame (`C2 02 00`) instead of RSTACK.
+- RAIL init polls FRC IF bit 14 and FRC+0x08 bit 8 after a calibration the sequencer would run; both
+  read as set (`RailRegs::read`).
+
+Not there: USART RX and the LDMA. The NCP receives through an LDMA ring (it polls LDMA `+0x2C`,
+`+0x34`, `+0x6C`, `+0x70` in its main loop) so a host cannot send it ASH/EZSP frames yet, and the
+RAIL radio is the partial model above, so network formation would not work either. From the image,
+the UART is USART0 with routes written as TX = PB1, RX = PB0 (decoded with the alphabetical Series 2
+`USARTROUTE` layout: CS, CTS, RTS, RX, SCLK, TX; not confirmed against a schematic).
+
 ## RAIL registers
 
 The Silicon Labs RAIL library drives the radio through blocks outside the

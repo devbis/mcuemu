@@ -92,6 +92,8 @@ public:
 
     // Runs until `until_cycle`, restarting after resets.
     cortexm::RunResult run(std::uint64_t until_cycle);
+    // True while reset() runs for a reset the firmware requested (SYSRESETREQ) rather than a power-up.
+    bool soft_reset() const noexcept { return soft_reset_; }
 
     // Connects the RADIO to a shared medium under the node name `node`.
     void connect_radio(mcuemu::VirtualAir &air, const std::string &node);
@@ -119,6 +121,7 @@ private:
     std::uint8_t *flash_{nullptr};
     std::uint8_t *ram_{nullptr};
     std::uint8_t *devinfo_{nullptr};
+    bool soft_reset_{false};
     std::uint8_t *userdata_{nullptr};
     std::ostream *trace_{nullptr};
     std::uint32_t code_end_{0};

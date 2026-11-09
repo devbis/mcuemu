@@ -14,7 +14,7 @@ namespace {
 
 constexpr std::uint32_t RadioBase = 0x40090000, RadioEnd = 0x40096000;
 // Peripheral blocks are 16 KiB apart; slot = (offset from 0x40000000) / 0x4000.
-constexpr unsigned CmuSlot = 2, HfxoSlot = 3, DpllSlot = 7, UsartSlot = 22, MscSlot = 12, GpioSlot = 15;
+constexpr unsigned EmuSlot = 1, CmuSlot = 2, HfxoSlot = 3, DpllSlot = 7, UsartSlot = 22, MscSlot = 12, GpioSlot = 15;
 constexpr std::uint32_t RtccBase = 0x48000000, RtccSize = 0x4000;
 constexpr unsigned ProtimerIrq = 36; // PROTIMER_IRQn
 constexpr unsigned FrcIrq = 34, RacSeqIrq = 38; // FRC_IRQn, RAC_SEQ_IRQn
@@ -83,8 +83,21 @@ Efr32mg21::Efr32mg21() {
     std::memset(ram_, 0, RamSize);
     std::memset(userdata_, 0xff, 0x1000);
     std::memset(devinfo_, 0xff, 0x1000);
+    // INFERRED from the Silicon Labs Zigbee NCP 8.2.2 image (sl_zigbee_system_common.c, line 71):
+    // its start-up reads DEVINFO+0x1FC bits 23:16 and asserts unless they are 0x80 or 0x81 (0xFF,
+    // the erased value, trips the assert and the image reboots in a loop). 0x80 is a guess between
+    // the two accepted values; what the field means on the silicon is not documented here.
+    devinfo_[0x1fe] = 0x81;
+    // DEVINFO.MEMINFO (+0x08) bits 7:0 hold log2(flash page size) - 10: the GSDK's
+    // SYSTEM_GetFlashPageSize() is 1 << ((MEMINFO + 10) & 31), which the NVM3 open of the Zigbee
+    // NCP calls and rejects below 4 KiB (the erased 0xFF gives 512 B). The MG21 page is 8 KiB.
+    devinfo_[0x08] = 3;
+    // DEVINFO.MSIZE (+0x0C): flash size in KB (15:0), SRAM in KB (31:16), as this model maps them.
+    const std::uint32_t msize = (RamSize / 1024u) << 16 | 1024u;
+    std::memcpy(devinfo_ + 0x0c, &msize, 4);
     set_device_id(0x0123456789abcdefull);
 
+    blocks_[EmuSlot] = std::make_unique<Emu>(*this);
     auto cmu = std::make_unique<Cmu>(*this);
     cmu_ = cmu.get();
     blocks_[CmuSlot] = std::move(cmu);
@@ -182,7 +195,9 @@ cortexm::RunResult Efr32mg21::run(std::uint64_t until_cycle) {
         cortexm::RunResult result = core_->run(until_cycle);
         if (result.reason != cortexm::StopReason::Reset)
             return result;
+        soft_reset_ = true;
         reset();
+        soft_reset_ = false;
     }
 }
 
