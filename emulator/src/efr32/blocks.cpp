@@ -647,7 +647,7 @@ namespace {
 constexpr std::uint32_t PortStride = 0x30;
 constexpr std::uint32_t RegCtrl = 0x00, RegModel = 0x04, RegModeh = 0x0c, RegDout = 0x10, RegDin = 0x14;
 constexpr std::uint32_t RegLock = 0x300, RegExtipsel = 0x400, RegExtipinsel = 0x408, RegExtirise = 0x410,
-                        RegExtifall = 0x414, RegIf = 0x420, RegIen = 0x424;
+                        RegExtifall = 0x414, RegIf = 0x420, RegIen = 0x424, RegI2cRouteEn = 0x498;
 constexpr unsigned ExtiLines = 8, GpioEvenIrq = 26, GpioOddIrq = 25; // GPIO_EVEN_IRQn / GPIO_ODD_IRQn in efr32mg21*.h
 } // namespace
 
@@ -656,13 +656,19 @@ void Gpio::reset() {
     dout_ = {};
     ctrl_ = {};
     extipsel_ = extipinsel_ = extirise_ = extifall_ = if_ = ien_ = 0;
+    i2c_route_ = {};
+    i2c_low_[0] = i2c_low_[1] = false;
     for (unsigned pad = 0; pad != 64; ++pad)
         last_[pad] = level(pad);
     update_irq();
 }
 
 PadDrive Gpio::drive(unsigned pad) const {
-    const bool high = dout(pad);
+    bool high = dout(pad);
+    // A pad routed to I2C0 is an open-drain output of the I2C master: low while it holds the line.
+    for (int line = 0; line != 2; ++line)
+        if (i2c_pad(line == 0) == static_cast<int>(pad))
+            high = !i2c_low_[line];
     // Modes: 0 disabled, 1 input, 2/3 input with pull (DOUT picks the
     // direction), 4/5 push-pull, 6 wired-or, 7 wired-or with pull-down,
     // 8..13 wired-and (open drain; 10/11 with pull-up).
@@ -759,6 +765,9 @@ std::uint32_t Gpio::read(std::uint32_t reg) {
     case RegExtifall: return extifall_;
     case RegIf: return if_;
     case RegIen: return ien_;
+    case RegI2cRouteEn: return i2c_route_[0];
+    case RegI2cRouteEn + 4: return i2c_route_[1];
+    case RegI2cRouteEn + 8: return i2c_route_[2];
     default: return 0;
     }
 }
@@ -803,8 +812,316 @@ void Gpio::write(std::uint32_t reg, std::uint32_t value) {
         ien_ = value;
         update_irq();
         break;
+    case RegI2cRouteEn:
+    case RegI2cRouteEn + 4:
+    case RegI2cRouteEn + 8: {
+        const int before_scl = i2c_pad(true), before_sda = i2c_pad(false);
+        i2c_route_[(reg - RegI2cRouteEn) / 4] = value;
+        for (int pad : {before_scl, before_sda, i2c_pad(true), i2c_pad(false)})
+            if (pad >= 0)
+                changed(static_cast<unsigned>(pad));
+        break;
+    }
     default: break; // LOCK and the rest
     }
+}
+
+} // namespace efr32emu
+
+// ---- I2C0 master -----------------------------------------------------------------
+
+namespace efr32emu {
+
+namespace {
+constexpr std::uint32_t I2cEn = 0x04, I2cCtrl = 0x08, I2cCmd = 0x0C, I2cState = 0x10, I2cStatus = 0x14, I2cClkdiv = 0x18,
+                        I2cRxdata = 0x24, I2cRxdatap = 0x2C, I2cTxdata = 0x34, I2cIf = 0x3C, I2cIen = 0x40;
+constexpr std::uint32_t CtrlAutoAck = 1u << 2;
+constexpr std::uint32_t CmdStart = 1u << 0, CmdStop = 1u << 1, CmdAck = 1u << 2, CmdNack = 1u << 3, CmdAbort = 1u << 5,
+                        CmdClearTx = 1u << 6;
+constexpr std::uint32_t IfStart = 1u << 0, IfRstart = 1u << 1, IfTxc = 1u << 3, IfTxbl = 1u << 4, IfRxdatav = 1u << 5,
+                        IfAck = 1u << 6, IfNack = 1u << 7, IfMstop = 1u << 8;
+constexpr std::uint32_t IfLevels = IfTxbl | IfRxdatav; // follow the buffers, not stored
+constexpr unsigned I2c0Irq = 27;
+} // namespace
+
+std::uint64_t I2c::quarter() const {
+    // SCL period = (Nlow + Nhigh) * (DIV + 1) + 8 cycles with Nlow = Nhigh = 4 (CLHR standard).
+    const std::uint64_t div = regs_[I2cClkdiv >> 2] & 0x1ffu;
+    return std::max<std::uint64_t>((8 * (div + 1) + 8) / 4, 1);
+}
+
+void I2c::reset() {
+    RegBlock::reset();
+    steps_.clear();
+    at_ = 0;
+    if_ = ien_ = 0;
+    enabled_ = master_ = transmitter_ = nacked_ = bus_busy_ = hold_ = false;
+    start_pending_ = stop_pending_ = addr_phase_ = wait_ack_cmd_ = false;
+    scl_low_ = sda_low_ = false;
+    tx_full_ = rx_full_ = false;
+    chip().gpio().set_i2c_low(true, false);
+    chip().gpio().set_i2c_low(false, false);
+    update_irq();
+}
+
+void I2c::apply(bool sda_low, bool scl_low) {
+    if (sda_low == sda_low_ && scl_low == scl_low_)
+        return;
+    // SDA never moves while SCL is high: lower SCL before changing SDA, settle SDA before raising SCL.
+    const bool scl_falls = scl_low && !scl_low_;
+    scl_low_ = scl_low;
+    sda_low_ = sda_low;
+    if (scl_falls) {
+        chip().gpio().set_i2c_low(true, scl_low);
+        chip().gpio().set_i2c_low(false, sda_low);
+    } else {
+        chip().gpio().set_i2c_low(false, sda_low);
+        chip().gpio().set_i2c_low(true, scl_low);
+    }
+}
+
+void I2c::queue_start() {
+    const std::uint64_t q = quarter();
+    std::uint64_t at = std::max(at_, now());
+    steps_.push_back({at, Kind::Drive, false, scl_low_});
+    steps_.push_back({at + q, Kind::Drive, false, false});
+    steps_.push_back({at + 2 * q, Kind::Drive, true, false}); // SDA falls while SCL is high
+    steps_.push_back({at + 2 * q, bus_busy_ ? Kind::RepeatedStart : Kind::Started, true, false});
+    steps_.push_back({at + 3 * q, Kind::Drive, true, true});
+    at_ = at + 4 * q;
+}
+
+void I2c::queue_write_byte(std::uint8_t value) {
+    const std::uint64_t q = quarter();
+    std::uint64_t at = std::max(at_, now());
+    for (int bit = 7; bit >= 0; --bit) {
+        const bool low = ((value >> bit) & 1u) == 0;
+        steps_.push_back({at, Kind::Drive, low, true});
+        steps_.push_back({at + q, Kind::Drive, low, false});
+        steps_.push_back({at + 3 * q, Kind::Drive, low, true});
+        at += 4 * q;
+    }
+    steps_.push_back({at, Kind::Drive, false, true}); // release SDA for the slave's ACK
+    steps_.push_back({at + q, Kind::Drive, false, false});
+    steps_.push_back({at + 2 * q, Kind::SampleAck, false, false});
+    steps_.push_back({at + 3 * q, Kind::Drive, false, true});
+    at += 4 * q;
+    steps_.push_back({at, Kind::WriteDone, false, true});
+    at_ = at;
+}
+
+void I2c::queue_read_byte() {
+    const std::uint64_t q = quarter();
+    std::uint64_t at = std::max(at_, now());
+    shift_ = 0;
+    for (int bit = 7; bit >= 0; --bit) {
+        steps_.push_back({at, Kind::Drive, false, true});
+        steps_.push_back({at + q, Kind::Drive, false, false});
+        steps_.push_back({at + 2 * q, Kind::SampleBit, false, false});
+        steps_.push_back({at + 3 * q, Kind::Drive, false, true});
+        at += 4 * q;
+    }
+    steps_.push_back({at, Kind::ReadDone, false, true});
+    at_ = at;
+}
+
+void I2c::queue_ack_bit(bool nack) {
+    const std::uint64_t q = quarter();
+    std::uint64_t at = std::max(at_, now());
+    steps_.push_back({at, Kind::Drive, !nack, true});
+    steps_.push_back({at + q, Kind::Drive, !nack, false});
+    steps_.push_back({at + 3 * q, Kind::Drive, !nack, true});
+    steps_.push_back({at + 4 * q, Kind::Drive, false, true});
+    at_ = at + 4 * q;
+}
+
+void I2c::queue_stop() {
+    const std::uint64_t q = quarter();
+    std::uint64_t at = std::max(at_, now());
+    steps_.push_back({at, Kind::Drive, true, true});
+    steps_.push_back({at + q, Kind::Drive, true, false});
+    steps_.push_back({at + 2 * q, Kind::Drive, false, false}); // SDA rises while SCL is high
+    steps_.push_back({at + 2 * q, Kind::Stopped, false, false});
+    at_ = at + 3 * q;
+}
+
+void I2c::progress() {
+    if (!enabled_ || !steps_.empty())
+        return;
+    if (start_pending_) {
+        start_pending_ = false;
+        addr_phase_ = true;
+        queue_start();
+    }
+    if (tx_full_ && (addr_phase_ || (master_ && transmitter_ && !wait_ack_cmd_)) && (bus_busy_ || !steps_.empty())) {
+        sent_ = txdata_;
+        tx_full_ = false;
+        queue_write_byte(sent_);
+    } else if (stop_pending_ && steps_.empty()) {
+        stop_pending_ = false;
+        queue_stop();
+    }
+    if (!steps_.empty())
+        chip().request_service(steps_.front().cycle);
+}
+
+std::uint64_t I2c::service(std::uint64_t now_cycle) {
+    bool ack = false;
+    while (!steps_.empty() && steps_.front().cycle <= now_cycle) {
+        const Step step = steps_.front();
+        steps_.pop_front();
+        const int sda = chip().gpio().i2c_pad(false);
+        const bool sda_high = sda < 0 || chip().gpio().level(static_cast<unsigned>(sda));
+        switch (step.kind) {
+        case Kind::Drive: apply(step.sda_low, step.scl_low); break;
+        case Kind::SampleBit: shift_ = static_cast<std::uint8_t>((shift_ << 1) | (sda_high ? 1u : 0u)); break;
+        case Kind::SampleAck:
+            ack = !sda_high && sda >= 0;
+            if_ |= ack ? IfAck : IfNack;
+            nacked_ = !ack;
+            last_ack_ = ack;
+            break;
+        case Kind::Started:
+            bus_busy_ = master_ = true;
+            if_ |= IfStart;
+            break;
+        case Kind::RepeatedStart: if_ |= IfRstart; break;
+        case Kind::WriteDone:
+            if (addr_phase_) {
+                addr_phase_ = false;
+                transmitter_ = (sent_ & 1u) == 0;
+                if (last_ack_ && !transmitter_)
+                    queue_read_byte(); // the slave's first byte follows its address ACK
+            }
+            hold_ = true;
+            if_ |= IfTxc;
+            break;
+        case Kind::ReadDone:
+            rxdata_ = shift_;
+            rx_full_ = true;
+            wait_ack_cmd_ = true;
+            hold_ = true;
+            break;
+        case Kind::Stopped:
+            if_ |= IfMstop;
+            bus_busy_ = master_ = hold_ = false;
+            break;
+        }
+    }
+    if (steps_.empty())
+        progress();
+    update_irq();
+    return steps_.empty() ? ~std::uint64_t{0} : steps_.front().cycle;
+}
+
+void I2c::update_irq() {
+    std::uint32_t flags = if_ | (!tx_full_ && enabled_ ? IfTxbl : 0u) | (rx_full_ ? IfRxdatav : 0u);
+    set_irq_level(I2c0Irq, (flags & ien_) != 0);
+}
+
+std::uint32_t I2c::peek(std::uint32_t reg) {
+    switch (reg) {
+    case I2cEn: return enabled_ ? 1u : 0u;
+    case I2cState:
+        return (bus_busy_ ? 1u : 0u) | (master_ ? 2u : 0u) | (transmitter_ ? 4u : 0u) | (nacked_ ? 8u : 0u) | (hold_ ? 0x10u : 0u);
+    case I2cStatus:
+        return (!tx_full_ && enabled_ ? 0x80u : 0u) | (!tx_full_ && steps_.empty() && master_ && hold_ ? 0x40u : 0u) |
+               (rx_full_ ? 0x100u : 0u);
+    case I2cRxdata:
+    case I2cRxdatap: return rxdata_;
+    case I2cIf: return if_ | (!tx_full_ && enabled_ ? IfTxbl : 0u) | (rx_full_ ? IfRxdatav : 0u);
+    case I2cIen: return ien_;
+    default: return RegBlock::read(reg);
+    }
+}
+
+std::uint32_t I2c::read(std::uint32_t reg) {
+    const std::uint32_t value = peek(reg);
+    if (reg == I2cRxdata && rx_full_) {
+        rx_full_ = false;
+        // AUTOACK: the master acknowledges the byte as soon as it is read and starts the next one.
+        if (wait_ack_cmd_ && (regs_[I2cCtrl >> 2] & CtrlAutoAck)) {
+            wait_ack_cmd_ = false;
+            queue_ack_bit(false);
+            queue_read_byte();
+            chip().request_service(steps_.front().cycle);
+        }
+        update_irq();
+    }
+    return value;
+}
+
+void I2c::write(std::uint32_t reg, std::uint32_t value) {
+    switch (reg) {
+    case I2cEn:
+        enabled_ = (value & 1u) != 0;
+        if (!enabled_) {
+            steps_.clear();
+            chip().gpio().set_i2c_low(true, false);
+            chip().gpio().set_i2c_low(false, false);
+            scl_low_ = sda_low_ = master_ = bus_busy_ = hold_ = false;
+            tx_full_ = rx_full_ = start_pending_ = stop_pending_ = addr_phase_ = wait_ack_cmd_ = false;
+        }
+        break;
+    case I2cCmd:
+        if (!enabled_)
+            break;
+        if (value & CmdAbort) {
+            steps_.clear();
+            at_ = 0;
+            start_pending_ = stop_pending_ = addr_phase_ = wait_ack_cmd_ = hold_ = false;
+            apply(false, false);
+        }
+        if (value & CmdClearTx)
+            tx_full_ = false;
+        if ((value & CmdAck) && wait_ack_cmd_) {
+            wait_ack_cmd_ = false;
+            queue_ack_bit(false);
+            queue_read_byte();
+        }
+        if ((value & CmdNack) && wait_ack_cmd_) {
+            wait_ack_cmd_ = false;
+            queue_ack_bit(true);
+        }
+        if (value & CmdStart)
+            start_pending_ = true;
+        if (value & CmdStop)
+            stop_pending_ = true;
+        progress();
+        if (!steps_.empty())
+            chip().request_service(steps_.front().cycle);
+        break;
+    case I2cTxdata:
+        if (enabled_) {
+            txdata_ = static_cast<std::uint8_t>(value);
+            tx_full_ = true;
+            progress();
+        }
+        break;
+    case I2cIf: if_ = value & ~IfLevels; break;
+    case I2cIen: ien_ = value; break;
+    default: RegBlock::write(reg, value); break;
+    }
+    update_irq();
+}
+
+// ---- GPIO I2C routing --------------------------------------------------------------
+
+int Gpio::i2c_pad(bool scl) const {
+    const std::uint32_t enable = i2c_route_[0], route = i2c_route_[scl ? 1 : 2];
+    if (!(enable & (scl ? 1u : 2u)))
+        return -1;
+    return static_cast<int>((route & 3u) * 16u + ((route >> 16) & 0xfu));
+}
+
+void Gpio::set_i2c_low(bool scl, bool low) {
+    bool &state = i2c_low_[scl ? 0 : 1];
+    if (state == low)
+        return;
+    state = low;
+    const int pad = i2c_pad(scl);
+    if (pad >= 0)
+        changed(static_cast<unsigned>(pad));
 }
 
 } // namespace efr32emu

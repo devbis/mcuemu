@@ -187,9 +187,13 @@ bool Efr32mg21::uart0_rx(std::uint8_t byte) {
 
 Block &Efr32mg21::lp_block_at(std::uint32_t slot) {
     if (!lp_blocks_[slot]) {
-        if (slot == 1)
+        if (slot == 1) {
             lp_blocks_[slot] = std::make_unique<Iadc>(*this);
-        else
+        } else if (slot == 4) {
+            auto i2c = std::make_unique<I2c>(*this);
+            i2c_ = i2c.get();
+            lp_blocks_[slot] = std::move(i2c);
+        } else
             lp_blocks_[slot] = std::make_unique<RegBlock>(*this);
     }
     return *lp_blocks_[slot];
@@ -584,7 +588,7 @@ std::uint64_t Efr32mg21::service(std::uint64_t now) {
         }
         rx_poll = rail_rx_poll_at_;
     }
-    return std::min({radio_->service(now), rtcc_->service(now), next_protimer_, tx_done_at_, ack_timeout_at_, rx_poll, rx_warm_done_at_, lbt_tx_at_, pending_ack_at_, pending_rx_at_});
+    return std::min({radio_->service(now), rtcc_->service(now), i2c_ ? i2c_->service(now) : NoEvent, next_protimer_, tx_done_at_, ack_timeout_at_, rx_poll, rx_warm_done_at_, lbt_tx_at_, pending_ack_at_, pending_rx_at_});
 }
 
 void Efr32mg21::connect_radio(mcuemu::VirtualAir &air, const std::string &node) { radio_->connect(air, node); }

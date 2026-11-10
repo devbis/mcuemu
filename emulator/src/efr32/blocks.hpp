@@ -3,6 +3,7 @@
 #include "efr32emu/efr32mg21.hpp"
 
 #include <array>
+#include <deque>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -274,6 +275,11 @@ public:
     PadDrive drive(unsigned pad) const;
     bool level(unsigned pad) const;
     void set_external(unsigned pad, bool high);
+    // I2C0 routing (GPIO I2CROUTE[0], from the SDK header: ROUTEEN +0x498, SCLROUTE +0x49C, SDAROUTE +0x4A0; port in bits 1:0,
+    // pin in bits 19:16): the pad numbers, or -1 when the line is not enabled.
+    int i2c_pad(bool scl) const;
+    // The I2C master pulls its routed pad low (open drain); otherwise the pad's own mode and DOUT apply.
+    void set_i2c_low(bool scl, bool low);
 
 private:
     static constexpr unsigned PortCount = 4;
@@ -290,6 +296,49 @@ private:
     std::array<bool, 64> external_valid_{};
     std::array<bool, 64> external_{};
     std::array<bool, 64> last_{};
+    std::array<std::uint32_t, 3> i2c_route_{};
+    bool i2c_low_[2]{false, false}; // SCL, SDA
+};
+
+// I2C0 (0x4A010000), master only. CMD START/STOP/ACK/NACK, TXDATA, RXDATA and the IF flags follow emlib's I2C_Transfer: the
+// address byte is the first TXDATA, a received byte waits for CMD ACK or NACK (or AUTOACK on the RXDATA read), IF.ACK / IF.NACK
+// report each byte, IF.MSTOP the stop. The bit timing comes from CLKDIV at the 38.4 MHz clock and the lines are driven
+// through the GPIO routing as open drain, so a Lua I2C slave on the nets sees a real bus. Offsets and flags are from the SDK's
+// efr32mg21_i2c.h; the behaviour is INFERRED from emlib (no firmware of this repository uses I2C0 yet).
+class I2c final : public RegBlock {
+public:
+    using RegBlock::RegBlock;
+    std::uint32_t read(std::uint32_t reg) override;
+    void write(std::uint32_t reg, std::uint32_t value) override;
+    std::uint32_t peek(std::uint32_t reg) override;
+    std::uint64_t service(std::uint64_t now) override;
+    void reset() override;
+
+private:
+    enum class Kind { Drive, SampleAck, SampleBit, WriteDone, ReadDone, Stopped, Started, RepeatedStart };
+    struct Step {
+        std::uint64_t cycle;
+        Kind kind;
+        bool sda_low, scl_low;
+    };
+    void progress();
+    void queue_start();
+    void queue_write_byte(std::uint8_t value);
+    void queue_read_byte();
+    void queue_ack_bit(bool nack);
+    void queue_stop();
+    void apply(bool sda_low, bool scl_low);
+    void update_irq();
+    std::uint64_t quarter() const;
+
+    std::deque<Step> steps_;
+    std::uint64_t at_{0}; // the cycle after the last queued step
+    std::uint32_t if_{0}, ien_{0};
+    bool enabled_{false}, master_{false}, transmitter_{false}, nacked_{false}, bus_busy_{false}, hold_{false};
+    bool start_pending_{false}, stop_pending_{false}, addr_phase_{false}, wait_ack_cmd_{false};
+    bool scl_low_{false}, sda_low_{false};
+    bool tx_full_{false}, rx_full_{false}, last_ack_{false};
+    std::uint8_t txdata_{0}, rxdata_{0}, shift_{0}, sent_{0};
 };
 
 // The radio blocks (FRC, BUFC, SYNTH, RAC, MODEM, AGC) at 0x40090000. See

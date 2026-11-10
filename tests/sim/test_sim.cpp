@@ -476,6 +476,7 @@ void test_adc_reads_net_voltage();
 void test_i2c_master_with_sensor();
 void test_efr32_pads_follow_nets();
 void test_efr32_config_rules();
+void test_efr32_i2c_master_reads_cht8305();
 void test_bl702_runs_an_image_and_prints_on_uart();
 void test_bl702_transmits_on_the_world_radio();
 void test_bl702_config_rules_and_missing_header();
@@ -541,6 +542,7 @@ int main() {
     RUN(test_bl702_transmits_on_the_world_radio);
     RUN(test_bl702_config_rules_and_missing_header);
     RUN(test_efr32_config_rules);
+    RUN(test_efr32_i2c_master_reads_cht8305);
     RUN(test_nrf52_pads_follow_nets);
     RUN(test_nrf52_twim_talks_to_an_i2c_device);
     RUN(test_nrf52_uart_bytes_through_the_mcu_interface);

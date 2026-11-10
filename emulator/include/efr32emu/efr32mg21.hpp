@@ -16,6 +16,7 @@ namespace efr32emu {
 class Block;
 class Cmu;
 class Gpio;
+class I2c;
 class Radio;
 class Rtcc;
 class Ldma;
@@ -141,6 +142,7 @@ private:
     std::array<std::unique_ptr<Block>, 8> lp_blocks_;
     Cmu *cmu_{nullptr};
     Gpio *gpio_{nullptr};
+    I2c *i2c_{nullptr};
     std::unique_ptr<Radio> radio_;
     std::string uart0_output_;
     std::unique_ptr<Rtcc> rtcc_;

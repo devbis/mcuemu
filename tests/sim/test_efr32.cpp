@@ -66,6 +66,70 @@ void test_efr32_pads_follow_nets() {
     CHECK((mcu.chip().read(Gpio + 0xa4, 4) >> 2 & 1u) == 0);
 }
 
+// I2C0 as a master on a routed pad pair, with the CHT8305 Lua part on the nets: the emlib sequence for a register
+// read (address + pointer write, repeated START, address + read, two bytes, NACK, STOP).
+void test_efr32_i2c_master_reads_cht8305() {
+    const auto system = build("", std::string(R"(    nets:
+      - { id: scl, kind: open_drain, pull: up, pins: [m.PC1] }
+      - { id: sda, kind: open_drain, pull: up, pins: [m.PC2] }
+    parts:
+      - { id: sensor, type: script, script: )") + MCUEMU_SOURCE_DIR + R"(/examples/parts/cht8305.lua, pins: { sda: sda, scl: scl },
+          params: { temperature_c: 25, humidity: 50 } }
+)");
+    sim::World &world = system->world();
+    auto &mcu = static_cast<sim::Efr32mg21Mcu &>(world.mcu("d.m"));
+    auto &chip = mcu.chip();
+    constexpr std::uint32_t I2c = 0x4A010000, Set = 0x1000, Clear = 0x2000;
+    // PC1 (SCL) and PC2 (SDA): wired-and with pull-up, DOUT high; I2C0 routed to them.
+    chip.write(Gpio + 0x64, (0xAu << 4) | (0xAu << 8), 4);
+    chip.write(Gpio + Set + 0x70, 6, 4);
+    chip.write(Gpio + 0x49C, 2u | (1u << 16), 4);
+    chip.write(Gpio + 0x4A0, 2u | (2u << 16), 4);
+    chip.write(Gpio + 0x498, 3, 4);
+    chip.write(I2c + 0x18, 46, 4);
+    chip.write(I2c + 0x04, 1, 4);
+    auto wait_for = [&](std::uint32_t flag) {
+        for (int i = 0; i != 2000; ++i) {
+            if (chip.read(I2c + 0x3C, 4) & flag)
+                return true;
+            world.run_for(5000);
+        }
+        return false;
+    };
+    auto clear = [&](std::uint32_t flags) { chip.write(I2c + Clear + 0x3C, flags, 4); };
+    constexpr std::uint32_t Ack = 1u << 6, Nack = 1u << 7, Rx = 1u << 5, Stop = 1u << 8;
+    chip.write(I2c + 0x34, 0x40u << 1, 4);
+    chip.write(I2c + 0x0C, 1, 4); // START
+    CHECK(wait_for(Ack | Nack));
+    CHECK((chip.read(I2c + 0x3C, 4) & Ack) != 0);
+    clear(Ack);
+    chip.write(I2c + 0x34, 0x00, 4); // register pointer: temperature
+    CHECK(wait_for(Ack | Nack));
+    CHECK((chip.read(I2c + 0x3C, 4) & Ack) != 0);
+    clear(Ack);
+    chip.write(I2c + 0x34, (0x40u << 1) | 1u, 4);
+    chip.write(I2c + 0x0C, 1, 4); // repeated START
+    CHECK(wait_for(Ack | Nack));
+    CHECK((chip.read(I2c + 0x3C, 4) & Ack) != 0);
+    clear(Ack);
+    CHECK(wait_for(Rx));
+    const std::uint32_t high = chip.read(I2c + 0x24, 4);
+    chip.write(I2c + 0x0C, 1u << 2, 4); // ACK
+    CHECK(wait_for(Rx));
+    const std::uint32_t low = chip.read(I2c + 0x24, 4);
+    chip.write(I2c + 0x0C, (1u << 3) | (1u << 1), 4); // NACK, STOP
+    CHECK(wait_for(Stop));
+    CHECK(((high << 8) | low) == 0x64D8); // (25 + 40) / 165 * 65536 with the low two bits clear
+    // A device that is not there is NACKed.
+    clear(0x1FF);
+    chip.write(I2c + 0x34, 0x55u << 1, 4);
+    chip.write(I2c + 0x0C, 1, 4);
+    CHECK(wait_for(Ack | Nack));
+    CHECK((chip.read(I2c + 0x3C, 4) & Nack) != 0);
+    chip.write(I2c + 0x0C, 1u << 1, 4);
+    CHECK(wait_for(Stop));
+}
+
 void test_efr32_config_rules() {
     bool rejected = false;
     try {
