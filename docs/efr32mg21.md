@@ -174,13 +174,14 @@ falling edge, found from its GPIO set-up) wakes it, and a long press starts the 
 RX window (RAC CMD `0x20`/`0x100`, PROTIMER) but never writes RAC CMD.TXEN, so no frame reaches the air. I2C0 is not touched in
 the first 45 s, so the CHT8305 is not what blocks it.
 
-The wake cycle hops SYNTH (`0xA8018034`) over seven frequencies (looks like the 11/14/15/19/20/24/25 channel list) and returns
-to the first one between hops. It never reads AGC RSSI (not an energy scan), never writes BUFC `WRITE_DATA` (`0x44004020`, no
-frame is loaded) and never sets RAC CMD.TXEN or PROTIMER CMD bit 16 (the LBT start the NCP uses; it writes bit 18, `0x40000`,
-and `PROTIMER+0x74 = 0x1010000`). Each cycle also changes the sequencer mailbox word `SEQRAM+0x1E74` (`0x1020104` ->
-`0x1020204` -> `0x2020204`). Working theory, unverified: this older RAIL starts transmissions through the radio sequencer
-(commands in SEQRAM), which the model does not emulate; the NCP/Zephyr RAIL builds reach TXEN directly. Open: decode the
-`SEQRAM+0x1E74` request and make the model start a transmit from it.
+The wake cycle hops SYNTH (`0xA8018034`) every ~0.5 s over 14, 15, 19, 20, 24 and 25 (the word step 0x10AAB is 5 MHz; the
+first word `0x1F50AAA` is channel 11 and is written between hops), which matches the default Silicon Labs network-steering
+primary mask 11/14/15/19/20/24/25, so this is a scan. It never reads AGC RSSI (not an energy scan), never writes BUFC
+`WRITE_DATA` (`0x44004020`), never sets RAC CMD.TXEN, never programs the PROTIMER LBT registers (`+0x40..+0x54`) and no frame
+ever appears in the buffer RAM BUFC points at (`0x2000C3FA`, checked every millisecond for a hop): the radio only listens
+(`BUFC+0x28` byte count 0 each hop). So the transmit path of the model is not what blocks it: the stack never asks for a
+transmit. A theory that the transmit goes through the sequencer mailbox (`SEQRAM+0x1E74`) did not hold up. Open: why the
+beacon request is not issued (an RAIL error that the stack swallows, or a state the stack waits for before sending).
 
 Not yet tried: `joinNetwork` (the NCP as a joiner). From the image, the UART is USART0 with routes
 written as TX = PB1, RX = PB0 (decoded with the alphabetical Series 2 `USARTROUTE` layout: CS, CTS, RTS, RX, SCLK, TX; not
