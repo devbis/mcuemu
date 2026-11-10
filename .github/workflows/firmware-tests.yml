@@ -49,7 +49,9 @@ env:
   ZEPHYR_ZIGBEE_RELEASE: https://github.com/devbis/zephyr-tlsr8258/releases/download/zephyr-zigbee-20261030-de387d
   ZEPHYR_EFR32_ROUTER_SHA256: 1f172bc0ee806ce247ee1f04463bf3c5ce1c14a174ca656989b60640b5fbcc8d
   ZEPHYR_EFR32_ED_SHA256: 905a9add7a49915924ef897eb5f09d4504b1e1158a9deb599fd58f201f4749b6
-  THERMOSTAT_BASE: https://github.com/slacky1965/tuya_thermostat_full_custom_r02_zrd/raw/refs/heads/main/bin
+  THERMOSTAT_RELEASE: https://github.com/slacky1965/tuya_thermostat_full_custom_r02_zrd/releases/download/r02-20261109
+  THERMOSTAT_CA51_SHA256: f7d07704fd70effdb385fab243c4823c72a878b61a563fb1244c548f72d4cf24
+  THERMOSTAT_ZT3L_SHA256: 8ed2c753c8c8e7dc9e6a601ae7f9d95983c07998e14e81ce8aaa5deea3a78e29
 
 jobs:
   prepare:
@@ -330,9 +332,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
-          curl -fL --retry 3 -o out/thermostat-ca51.bin  "$THERMOSTAT_BASE/osrctherm_r02_v1.01_CA51F253L3.bin"
-          curl -fL --retry 3 -o out/thermostat-zt3l.bin  "$THERMOSTAT_BASE/osrctherm_r02_zrd_v1.0.01_ZT3L.bin"
-          sha256sum out/*.bin
+          curl -fL --retry 3 -o out/thermostat-ca51.bin  "$THERMOSTAT_RELEASE/osrctherm_r02_v1.05_CA51F253L3.bin"
+          curl -fL --retry 3 -o out/thermostat-zt3l.bin  "$THERMOSTAT_RELEASE/osrctherm_r02_zrd_v1.0.02_ZT3L.bin"
+          echo "$THERMOSTAT_CA51_SHA256  out/thermostat-ca51.bin" | sha256sum -c -
+          echo "$THERMOSTAT_ZT3L_SHA256  out/thermostat-zt3l.bin" | sha256sum -c -
       - uses: actions/upload-artifact@v7
         with:
           name: fw-tlsr8258_ca51_thermostat_r02
