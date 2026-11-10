@@ -154,6 +154,9 @@ Facts about the fork that bit us:
   (`pthread_jit_write_protect_np`), which is expensive. That is why both cores
   run many instructions per `uc_emu_start`.
 
+- The Apple JIT write-protect state is tracked per thread (`uc_jit_current_executable`), not per engine: a callback of one
+  engine that calls another engine's API (radio frames between chips of different architectures) changes the thread's mode,
+  and a per-engine tracker then skipped the unlock (SIGBUS in `tb_gen_code_arm` with an EFR32 next to an ESP32-H2).
 - The ARM backend is stock Unicorn plus our additions. Its Cortex-M exception
   model was dead code (`v7m_exception_taken` and `do_v7m_exception_exit` returned
   immediately, the NVIC was commented out), so `nvic.c` and the revived
