@@ -163,6 +163,17 @@ ESP32-H2, which also covers a RISC-V and an ARM engine in one process) run `ncp_
 Some devices need luck with the NCP's random beacon-response delay (7..190 ms): the TLSR8258 plug scans 71 ms per channel,
 once, and only joined with a later start (`start_at: 13s`); the Z03MMC scans at power-up and again after 60 s.
 
+### Tuya ZS3L thermometer (ZSS-ZK-THL, TS0222), status
+
+The full-flash dump of pvvx's ZSS-ZK-THL page (Gecko bootloader at 0, app at `0x4000`, NVM3 at `0xB6000..0xBFFFF`) runs
+(`firmware: [{file: dump.bin, offset: 0, size: 0x4000}, {file: dump.bin, offset: 0x4000, from: 0x4000}]`) but does **not**
+join the NCP's network yet. What it needed in the model: the `0x4A000000` low-energy window (WDOG, I2C0, ACMP, LETIMER as
+registers; IADC0 completes at once), the secure aliases `0xA0`/`0xA8` of the radio blocks, `0xA801803C` reading 1 before it is
+written, and dropped (not faulting) CPU stores to flash. In the factory-new state (NVM3 erased) it sleeps for 4 h; PB0 (EXTI0,
+falling edge, found from its GPIO set-up) wakes it, and a long press starts the radio: from then on it wakes every ~0.4 s for an
+RX window (RAC CMD `0x20`/`0x100`, PROTIMER) but never writes RAC CMD.TXEN, so no frame reaches the air. I2C0 is not touched in
+the first 45 s, so the CHT8305 is not what blocks it. Open: what the wake cycle waits for.
+
 Not yet tried: `joinNetwork` (the NCP as a joiner). From the image, the UART is USART0 with routes
 written as TX = PB1, RX = PB0 (decoded with the alphabetical Series 2 `USARTROUTE` layout: CS, CTS, RTS, RX, SCLK, TX; not
 confirmed against a schematic).
