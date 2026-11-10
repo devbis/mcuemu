@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <iostream>
 #include <iterator>
+#include <tuple>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -26,6 +27,7 @@ void usage(std::ostream &out) {
            "placed at 0x4000 and started directly; any other image is placed at 0. Without\n"
            "--steps and --for the run lasts 1 s of virtual time. DURATION is a number with\n"
            "ns, us, ms or s. --trace-mmio logs every peripheral register access to stderr.\n"
+           "--pad PAD=0|1@DURATION drives a pad input (repeatable); --trace-pc-after DURATION delays --trace-pc-range.\n"
            "--dump-memory ADDRESS:COUNT prints COUNT bytes from the end of the run.\n"
            "--trace-pc-range START:END prints each instruction executed in that address range.\n"
            "--uart0-send HEX@DURATION sends the bytes to USART0 at that virtual time (repeatable;\n"
@@ -67,6 +69,8 @@ int run_command(int argc, char **argv) {
     std::uint32_t pc_first = 0, pc_last = 0;
     bool trace_pc = false, trace_pc_regs = false;
     std::vector<std::pair<std::uint64_t, std::vector<std::uint8_t>>> sends;
+    std::vector<std::tuple<std::uint64_t, unsigned, bool>> pad_events;
+    std::uint64_t trace_pc_after_ns = 0;
     for (int i = 2; i < argc; ++i) {
         const std::string option = argv[i];
         if (option == "--firmware" && i + 1 < argc)
@@ -89,6 +93,18 @@ int run_command(int argc, char **argv) {
                 bytes.push_back(static_cast<std::uint8_t>(std::stoul(spec.substr(k, 2), nullptr, 16)));
             sends.emplace_back(parse_duration_ns(spec.substr(at + 1)), std::move(bytes));
         }
+        else if (option == "--pad" && i + 1 < argc) {
+            // PAD=0|1@TIME: drive a pad input (a button pulled to ground is 0).
+            const std::string spec = argv[++i];
+            const std::size_t eq = spec.find('='), at = spec.find('@');
+            unsigned pad = 0;
+            if (eq == std::string::npos || at == std::string::npos || at < eq + 2 ||
+                !Efr32mg21::parse_pad(spec.substr(0, eq), pad))
+                throw std::invalid_argument("--pad expects PAD=0|1@DURATION: " + spec);
+            pad_events.emplace_back(parse_duration_ns(spec.substr(at + 1)), pad, spec.substr(eq + 1, at - eq - 1) != "0");
+        }
+        else if (option == "--trace-pc-after" && i + 1 < argc)
+            trace_pc_after_ns = parse_duration_ns(argv[++i]);
         else if (option == "--dump-memory" && i + 1 < argc)
             dumps.push_back(argv[++i]);
         else if (option == "--trace-pc-regs")
@@ -124,7 +140,7 @@ int run_command(int argc, char **argv) {
     chip.load_firmware(image);
     if (trace_mmio)
         chip.set_trace(&std::cerr);
-    if (trace_pc)
+    if (trace_pc && trace_pc_after_ns == 0)
         chip.core().set_pc_trace(&std::cerr, pc_first, pc_last, trace_pc_regs);
     chip.reset();
     if (steps != 0)
@@ -133,18 +149,37 @@ int run_command(int argc, char **argv) {
     std::sort(sends.begin(), sends.end(),
               [](const auto &a, const auto &b) { return a.first < b.first; });
     cortexm::RunResult result{};
-    for (const auto &[at_ns, bytes] : sends) {
-        const std::uint64_t at = chip.core().ns_to_cycles(at_ns);
+    // Pad events and the delayed PC trace are steps of the same timeline as the UART sends.
+    struct Step {
+        std::uint64_t at_ns;
+        int kind; // 0 UART bytes, 1 pad, 2 start PC trace
+        unsigned pad;
+        bool level;
+        std::vector<std::uint8_t> bytes;
+    };
+    std::vector<Step> timeline;
+    for (auto &send : sends)
+        timeline.push_back({send.first, 0, 0, false, std::move(send.second)});
+    for (const auto &[at_ns, pad, level] : pad_events)
+        timeline.push_back({at_ns, 1, pad, level, {}});
+    if (trace_pc && trace_pc_after_ns != 0)
+        timeline.push_back({trace_pc_after_ns, 2, 0, false, {}});
+    std::stable_sort(timeline.begin(), timeline.end(), [](const Step &a, const Step &b) { return a.at_ns < b.at_ns; });
+    for (const Step &step : timeline) {
+        const std::uint64_t at = chip.core().ns_to_cycles(step.at_ns);
         if (at >= until)
             break;
         result = chip.run(at);
         if (result.reason != cortexm::StopReason::Deadline)
             break;
-        for (std::uint8_t byte : bytes) {
-            // Nothing listens before the firmware has set its DMA up: try again every millisecond.
-            for (unsigned tries = 0; !chip.uart0_rx(byte) && tries != 60000; ++tries)
-                chip.run(chip.core().cycles() + chip.core().ns_to_cycles(50000));
-        }
+        if (step.kind == 1)
+            chip.set_pad_input(step.pad, step.level);
+        else if (step.kind == 2)
+            chip.core().set_pc_trace(&std::cerr, pc_first, pc_last, trace_pc_regs);
+        else
+            for (std::uint8_t byte : step.bytes)
+                for (unsigned tries = 0; !chip.uart0_rx(byte) && tries != 60000; ++tries)
+                    chip.run(chip.core().cycles() + chip.core().ns_to_cycles(50000));
     }
     result = chip.run(until);
 
