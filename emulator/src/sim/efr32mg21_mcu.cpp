@@ -25,7 +25,9 @@ Efr32mg21Mcu::Efr32mg21Mcu(std::string name) : Mcu(std::move(name)) {
     chip_.set_pad_observer([this](unsigned pad) { drive_pad(pad); });
     // Debug aid: MCUEMU_EFR32_TRACE=FILE logs this chip's peripheral accesses (scripts/efr32_trace.py reads it);
     // with several EFR32 chips in one system the name is appended to the file name.
-    if (const char *trace = std::getenv("MCUEMU_EFR32_TRACE")) {
+    // MCUEMU_EFR32_TRACE_NODE=NAME restricts the trace to that chip (the NCP alone makes gigabytes).
+    const char *only = std::getenv("MCUEMU_EFR32_TRACE_NODE");
+    if (const char *trace = std::getenv("MCUEMU_EFR32_TRACE"); trace && (!only || this->name() == only)) {
         trace_file_ = std::make_unique<std::ofstream>(std::string(trace) + "." + this->name());
         chip_.set_trace(trace_file_.get());
     }

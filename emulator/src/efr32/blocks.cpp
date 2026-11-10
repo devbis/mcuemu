@@ -444,7 +444,9 @@ void RailRegs::write(std::uint32_t address, std::uint32_t value, unsigned) {
 
 bool RailRegs::rx_enabled() const {
     const auto it = words_.find(rail::RacRxEnable);
-    return it != words_.end() && (it->second & 2u) != 0;
+    // Bit 1 is the RX request of the NCP's and Zephyr's RAIL. INFERRED: the Tuya ZS3L image requests RX for its
+    // listen-before-talk through bit 4 (0x10) and then polls RAC STATUS.STATE for RX before it starts the LBT.
+    return it != words_.end() && (it->second & 0x12u) != 0;
 }
 
 bool RailRegs::take_tx_start() {

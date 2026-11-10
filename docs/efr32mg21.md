@@ -197,9 +197,16 @@ every compare was already in the past for the match test and its IF bit was neve
 (`cycles * 256 / (PRECNTTOP + 0x100)`). With that the scan steps through its channels, and on the NCP's channel the device
 sends a second beacon request, then an **Association Request** (acked by the NCP, `--channel 24`), about 0.1 s after the beacon.
 
-Open: the device does not poll for the Association Response (no Data Request follows). The `MCUEMU_EFR32_TRACE_PC=FILE` +
-`MCUEMU_EFR32_TRACE_PC_RANGE=FIRST:LAST[:FROM_NS]` environment variables (sim), `scripts/ncp_host.py --peek MCU:ADDR:LEN` and
-`--watch MCU:ADDR:LEN@FROM-TO` were added for this.
+The next stall was the data request: its LBT start waits for RAC STATUS.STATE to report RX, and this image requests RX through
+RXENSRCEN bit 4 (`0x10`) rather than bit 1, which the model did not treat as an RX request. Both bits count now. With that the
+device **associates**: Data Request, Association Response (short address, `trustCenterJoinHandler` EZSP 0x24 at the host), the
+NCP's APS Transport-Key command, then a Data Request every 200 ms (checked with `--channel 24`; the device scans channels 14,
+15, 19, 20, 24, 25 and 11 in that order of its own, so the NCP has to be on one of them).
+
+Open: after the Transport Key the device polls for about a second and then stops; no Device_annce follows. Suspect: the key
+decryption (the SE mailbox and RADIOAES stand-ins return no data). The `MCUEMU_EFR32_TRACE_PC=FILE` +
+`MCUEMU_EFR32_TRACE_PC_RANGE=FIRST:LAST[:FROM_NS]` and `MCUEMU_EFR32_TRACE_NODE=NAME` environment variables (sim),
+`scripts/ncp_host.py --peek MCU:ADDR:LEN` and `--watch MCU:ADDR:LEN@FROM-TO` were added for this.
 
 Not yet tried: `joinNetwork` (the NCP as a joiner). From the image, the UART is USART0 with routes
 written as TX = PB1, RX = PB0 (decoded with the alphabetical Series 2 `USARTROUTE` layout: CS, CTS, RTS, RX, SCLK, TX; not
