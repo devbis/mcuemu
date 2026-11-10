@@ -350,12 +350,24 @@ void Efr32mg21::deliver_rail_rx(const std::vector<std::uint8_t> &fifo) {
     std::uint16_t size = 0, write = 0, read = 0;
     std::uint8_t ring[0x42] = {};
     const std::uint32_t context = rx_context();
-    if (context == 0 || !core_->read_memory(context, ring, sizeof(ring)))
-        return;
-    base = ring[0x18] | (ring[0x19] << 8) | (ring[0x1A] << 16) | (static_cast<std::uint32_t>(ring[0x1B]) << 24);
-    size = static_cast<std::uint16_t>(ring[0x3A] | (ring[0x3B] << 8));
-    write = static_cast<std::uint16_t>(ring[0x3C] | (ring[0x3D] << 8));
-    read = static_cast<std::uint16_t>(ring[0x3E] | (ring[0x3F] << 8));
+    if (context != 0 && core_->read_memory(context, ring, sizeof(ring))) {
+        base = ring[0x18] | (ring[0x19] << 8) | (ring[0x1A] << 16) | (static_cast<std::uint32_t>(ring[0x1B]) << 24);
+        size = static_cast<std::uint16_t>(ring[0x3A] | (ring[0x3B] << 8));
+        write = static_cast<std::uint16_t>(ring[0x3C] | (ring[0x3D] << 8));
+        read = static_cast<std::uint16_t>(ring[0x3E] | (ring[0x3F] << 8));
+    } else {
+        // The older RAIL of the Tuya ZS3L image keeps the BUF2 ring inside its context: sixteen 8-byte entries at
+        // +0x10, so the context is BUF2 ADDR - 0x10, with the read offset (starts at 7, +8 per descriptor taken,
+        // sli at 0x3B254) at +0 and the write count at +2, both halfwords. INFERRED from that handler.
+        const std::uint32_t ring_base = rail_regs_->peek(Buf2Addr);
+        std::uint16_t words[2] = {};
+        if (ring_base < 0x10 || !core_->read_memory(ring_base - 0x10, words, sizeof(words)) || (words[0] & 7u) != 7u)
+            return;
+        base = ring_base;
+        size = 128;
+        read = words[0];
+        write = words[1];
+    }
     if (size == 0)
         return;
     const std::uint32_t position = static_cast<std::uint32_t>((write + read - 7) & (size - 1)) & ~7u;

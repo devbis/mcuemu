@@ -47,6 +47,9 @@ private:
 
     efr32emu::Efr32mg21 chip_;
     std::unique_ptr<std::ofstream> trace_file_;
+    std::unique_ptr<std::ofstream> pc_trace_file_;
+    std::uint64_t pc_trace_from_ns_{~std::uint64_t{0}};
+    std::uint32_t pc_trace_first_{0}, pc_trace_last_{0};
     McuState state_{McuState::Running};
     std::string fault_;
     std::array<Pin *, efr32emu::Efr32mg21::PadCount> pins_{};

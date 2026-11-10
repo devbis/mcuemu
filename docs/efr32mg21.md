@@ -183,13 +183,21 @@ WRITEOFFSET - READOFFSET (now it does). This image also leaves the SYNTH channel
 as a word at `0xA8018034` (channel 11 = `0x1F50AAA`, +`0x10AAA` per channel), which `rail_channel()` now follows. With both,
 the beacon request reaches the air and a NCP on the same channel answers it with a beacon (checked with `--channel 24`).
 
-Open: the device does not use that beacon. The frame is not delivered to it because `rx_context()` looks for a RAIL RX
-structure in RAM that holds the BUF2/BUF1/BUF0 buffer addresses in three consecutive words; this older RAIL has no such
-structure (the addresses are only in the BUFC registers: BUF0 `0x2000C3FA` ctrl 2, BUF1 `0x2000D204` ctrl 3, BUF2 `0x20006A80`
-ctrl 1, BUF3 `0x20006546` ctrl 7). The shared RAIL interrupt handler is `0x3994C` (vectors 32, 33, 34, 36, 38 and the stubs
-all branch there; the vector table is in RAM at VTOR `0x4200`). Afterwards the scan state stays at 1 (`0x20006704`) and the main
-loop never sleeps, so the scan's end is never reached. Next: find how this RAIL reads a received frame (the BUF1/BUF2 handling
-in that handler) and deliver frames in that form.
+Receive: this RAIL keeps the BUF2 descriptor ring inside its context at `0x20006A70` (sixteen 8-byte entries at +0x10, so
+the context is BUF2 ADDR - 0x10; two halfwords at +0 and +2 are the pending-bytes-plus-7 and the consumed bytes; the entry
+that the BUF2 threshold handler `0x3B254` takes next is `(h0 + h1 - 7) >> 3 & 15`, the same formula the NCP's ring uses).
+`deliver_rail_rx()` falls back to that layout when `rx_context()` finds no NCP-style structure. With it the BUF2 threshold
+(BUFC IF bit 18) is taken, `0x3B254` reads the descriptor (status 7 -> RAIL event bit 8) and `0x3B168` consumes it (bit 15 of the
+entry's first halfword is set), for the NCP's beacon as well.
+
+Open: the scan still never completes. After the beacon request (state byte `0x20006704` = 1, `0x2000CEA8+0x18` channel mask 0) the
+MAC waits for an end-of-dwell step that never comes: the RTCC compare `0x9202C` (1.95 s after the request) fires and its ISR
+runs, but no event becomes due (the event table at flash `0x16568` has only `0x20009F04` -> `0x1A463`, which is permanently active and
+makes the main loop spin, and `0x2000CE54` -> `0x2BBB5`, a 5120 ms re-arming radio hold timer), so the device never sleeps and
+never starts the next channel or a join. The state of the MAC radio arbitration at `0x2000CE10` stays 7 (`+0x18`) with the
+pending callback `0x2D20D` at `+0x14`. Not yet found: what clears it (the TX-complete event 7 is delivered to `0x2D308`
+with status 0 and takes its success branch). The `MCUEMU_EFR32_TRACE_PC=FILE` + `MCUEMU_EFR32_TRACE_PC_RANGE=FIRST:LAST[:FROM_NS]`
+environment variables (sim) and `scripts/ncp_host.py --peek MCU:ADDR:LEN` were added for this.
 
 Not yet tried: `joinNetwork` (the NCP as a joiner). From the image, the UART is USART0 with routes
 written as TX = PB1, RX = PB0 (decoded with the alphabetical Series 2 `USARTROUTE` layout: CS, CTS, RTS, RX, SCLK, TX; not

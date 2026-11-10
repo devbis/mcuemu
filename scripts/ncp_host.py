@@ -187,6 +187,7 @@ def main():
     p.add_argument("--nwk-key", default="000102030405060708090a0b0c0d0e0f")
     p.add_argument("--permit-at", default="6s")
     p.add_argument("--poll", default="50ms", help="callback polling interval once the network is up")
+    p.add_argument("--peek", action="append", default=[], help="MCU:ADDRESS:LENGTH, printed at the end (mem.read)")
     p.add_argument("--event", action="append", default=[], help="at=T endpoint=NAME value=V (scenario-like set)")
     a = p.parse_args()
 
@@ -250,6 +251,9 @@ def main():
                     state = "run"
             elif state == "run" and not host.waiting and now - last_poll >= poll:
                 host.command(0x0006); last_poll = now
+        for spec in a.peek:
+            mcu, address, length = spec.rsplit(":", 2)
+            print(f"peek {spec}: {sim.rpc('mem.read', {'mcu': mcu, 'address': int(address, 0), 'length': int(length, 0)})['hex']}")
     finally:
         sim.close()
 

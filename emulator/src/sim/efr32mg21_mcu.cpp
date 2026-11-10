@@ -29,6 +29,19 @@ Efr32mg21Mcu::Efr32mg21Mcu(std::string name) : Mcu(std::move(name)) {
         trace_file_ = std::make_unique<std::ofstream>(std::string(trace) + "." + this->name());
         chip_.set_trace(trace_file_.get());
     }
+    // Debug aid: MCUEMU_EFR32_TRACE_PC=FILE with MCUEMU_EFR32_TRACE_PC_RANGE=FIRST:LAST[:FROM_NS] logs each instruction of
+    // that address range (with registers) from FROM_NS of virtual time on, to FILE.<name> (the format of `mcuemu run
+    // --trace-pc-range --trace-pc-regs`).
+    if (const char *file = std::getenv("MCUEMU_EFR32_TRACE_PC")) {
+        if (const char *range = std::getenv("MCUEMU_EFR32_TRACE_PC_RANGE")) {
+            char *end = nullptr;
+            pc_trace_first_ = static_cast<std::uint32_t>(std::strtoul(range, &end, 0));
+            if (*end == ':')
+                pc_trace_last_ = static_cast<std::uint32_t>(std::strtoul(end + 1, &end, 0));
+            pc_trace_from_ns_ = *end == ':' ? std::strtoull(end + 1, nullptr, 0) : 0;
+            pc_trace_file_ = std::make_unique<std::ofstream>(std::string(file) + "." + this->name());
+        }
+    }
 }
 
 void Efr32mg21Mcu::load_firmware(const std::string &path) { load_images({{path, 0}}); }
@@ -65,6 +78,10 @@ void Efr32mg21Mcu::set_start_offset(std::uint64_t offset_ns) {
 }
 
 McuState Efr32mg21Mcu::run_until(std::uint64_t target_ns) {
+    if (pc_trace_file_ && target_ns >= pc_trace_from_ns_) {
+        chip_.core().set_pc_trace(pc_trace_file_.get(), pc_trace_first_, pc_trace_last_, true);
+        pc_trace_from_ns_ = ~std::uint64_t{0};
+    }
     const std::uint64_t target = chip_.core().ns_to_cycles(target_ns);
     while (state_ == McuState::Running && chip_.core().cycles() < target) {
         const cortexm::RunResult result = chip_.run(target);
