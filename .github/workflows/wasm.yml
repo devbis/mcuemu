@@ -16,7 +16,6 @@ concurrency:
 
 env:
   UNICORN_REPOSITORY: devbis/unicorn
-  UNICORN_REF: wasm
   EMSCRIPTEN_VERSION: 6.0.13
 
 jobs:
@@ -27,11 +26,10 @@ jobs:
       - name: Checkout mcuemu
         uses: actions/checkout@v5
 
-      - name: Checkout Unicorn WebAssembly branch
+      - name: Checkout Unicorn fork
         uses: actions/checkout@v5
         with:
           repository: ${{ env.UNICORN_REPOSITORY }}
-          ref: ${{ env.UNICORN_REF }}
           path: engine/unicorn
 
       - name: Set up Emscripten
