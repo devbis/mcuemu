@@ -190,14 +190,16 @@ that the BUF2 threshold handler `0x3B254` takes next is `(h0 + h1 - 7) >> 3 & 15
 (BUFC IF bit 18) is taken, `0x3B254` reads the descriptor (status 7 -> RAIL event bit 8) and `0x3B168` consumes it (bit 15 of the
 entry's first halfword is set), for the NCP's beacon as well.
 
-Open: the scan still never completes. After the beacon request (state byte `0x20006704` = 1, `0x2000CEA8+0x18` channel mask 0) the
-MAC waits for an end-of-dwell step that never comes: the RTCC compare `0x9202C` (1.95 s after the request) fires and its ISR
-runs, but no event becomes due (the event table at flash `0x16568` has only `0x20009F04` -> `0x1A463`, which is permanently active and
-makes the main loop spin, and `0x2000CE54` -> `0x2BBB5`, a 5120 ms re-arming radio hold timer), so the device never sleeps and
-never starts the next channel or a join. The state of the MAC radio arbitration at `0x2000CE10` stays 7 (`+0x18`) with the
-pending callback `0x2D20D` at `+0x14`. Not yet found: what clears it (the TX-complete event 7 is delivered to `0x2D308`
-with status 0 and takes its success branch). The `MCUEMU_EFR32_TRACE_PC=FILE` + `MCUEMU_EFR32_TRACE_PC_RANGE=FIRST:LAST[:FROM_NS]`
-environment variables (sim) and `scripts/ncp_host.py --peek MCU:ADDR:LEN` were added for this.
+The scan hung because of the PROTIMER time base: the image's timers are PROTIMER compare channels (`+0x100+16n`, CTRL
+`0x11`, WRAP at +0x0C; the MAC's end-of-dwell callback is armed through `0x37644` as `WRAPCNT + delay`), and the model's
+WRAPCNT *read* returned `cycles / divisor` while `service()` compared against `cycles * 256 / divisor` (the 2 MHz count), so
+every compare was already in the past for the match test and its IF bit was never set. Both now use the 2 MHz count
+(`cycles * 256 / (PRECNTTOP + 0x100)`). With that the scan steps through its channels, and on the NCP's channel the device
+sends a second beacon request, then an **Association Request** (acked by the NCP, `--channel 24`), about 0.1 s after the beacon.
+
+Open: the device does not poll for the Association Response (no Data Request follows). The `MCUEMU_EFR32_TRACE_PC=FILE` +
+`MCUEMU_EFR32_TRACE_PC_RANGE=FIRST:LAST[:FROM_NS]` environment variables (sim), `scripts/ncp_host.py --peek MCU:ADDR:LEN` and
+`--watch MCU:ADDR:LEN@FROM-TO` were added for this.
 
 Not yet tried: `joinNetwork` (the NCP as a joiner). From the image, the UART is USART0 with routes
 written as TX = PB1, RX = PB0 (decoded with the alphabetical Series 2 `USARTROUTE` layout: CS, CTS, RTS, RX, SCLK, TX; not

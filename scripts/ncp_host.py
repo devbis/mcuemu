@@ -188,6 +188,8 @@ def main():
     p.add_argument("--permit-at", default="6s")
     p.add_argument("--poll", default="50ms", help="callback polling interval once the network is up")
     p.add_argument("--peek", action="append", default=[], help="MCU:ADDRESS:LENGTH, printed at the end (mem.read)")
+    p.add_argument("--watch", action="append", default=[],
+                   help="MCU:ADDRESS:LENGTH@FROM-TO: print the bytes whenever they change inside that time window (1 ms steps)")
     p.add_argument("--event", action="append", default=[], help="at=T endpoint=NAME value=V (scenario-like set)")
     a = p.parse_args()
 
@@ -201,6 +203,12 @@ def main():
         value = {"true": True, "false": False}.get(kv["value"], kv["value"])
         sim.rpc("set", {"endpoint": kv["endpoint"], "value": value, "at": kv["at"]})
 
+    watches = []
+    for spec in a.watch:
+        where, window = spec.rsplit("@", 1)
+        mcu, address, length = where.rsplit(":", 2)
+        lo, hi = window.split("-")
+        watches.append([mcu, int(address, 0), int(length, 0), duration_ns(lo), duration_ns(hi), None])
     end = duration_ns(a.duration)
     permit_at, poll = duration_ns(a.permit_at), duration_ns(a.poll)
     step = 1_000_000
@@ -223,6 +231,12 @@ def main():
         while now < end:
             sim.rpc("step", {"duration": f"{step}ns"})
             now += step
+            for w in watches:
+                if w[3] <= now <= w[4]:
+                    value = sim.rpc("mem.read", {"mcu": w[0], "address": w[1], "length": w[2]})["hex"]
+                    if value != w[5]:
+                        print(f"{now/1e9:8.3f}s watch {w[0]}:{w[1]:#x} {value}")
+                        w[5] = value
             for kind, detail, ezsp in host.pump():
                 if kind == "RSTACK" and state == "boot":
                     state = "plan"; host.waiting = False

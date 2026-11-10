@@ -642,7 +642,7 @@ std::uint32_t Efr32mg21::read(std::uint32_t address, unsigned size) {
         // PROTIMER WRAPCNT (image layout +0x20): counts pre-counter overflows, one per
         // PRECNTTOP+0x100 core cycles while RUNNING (+0x14 bit 0).
         const std::uint64_t divisor = static_cast<std::uint64_t>(rail_regs_->peek(ProtimerPrecntTop)) + 0x100u;
-        value = static_cast<std::uint32_t>(core_->cycles() / divisor);
+        value = static_cast<std::uint32_t>(core_->cycles() * 256u / divisor); // the same count service() compares against
     } else if (is_rail_register(address)) {
         value = rail_regs_->read(address);
     } else {
