@@ -91,7 +91,6 @@ void Ldma::transfer_done(unsigned ch) {
         set_channel_reg(ch, ChCtrl, (ctrl & ~(0x7ffu << 4)) | ((count - 1) << 4));
         return;
     }
-    regs_[LdmaChdone >> 2] |= 1u << ch;
     if (ctrl & (1u << 20))
         regs_[LdmaIf >> 2] |= 1u << ch;
     const std::uint32_t link = channel_reg(ch, ChLink);
@@ -101,6 +100,10 @@ void Ldma::transfer_done(unsigned ch) {
             address += desc_addr_[ch];
         load_descriptor(ch, address);
     } else {
+        // CHDONE means the whole chain is finished, not one descriptor: the NCP's UART driver
+        // rebuilds "the rest of the running descriptor" from XFERCNT unless CHDONE is set, and a
+        // CHDONE raised by the parking descriptor made it build a 2048-byte one that overran the ring.
+        regs_[LdmaChdone >> 2] |= 1u << ch;
         enabled_ &= ~(1u << ch);
     }
     update_irq();

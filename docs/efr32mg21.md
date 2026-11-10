@@ -142,12 +142,23 @@ Transport-Key. What made that work in the model:
 - The Secure Engine mailbox now executes AES-128 ECB (command 0x04000100): the stack builds its CCM* and key hashing on it, and
   the transport key decrypts correctly with the key-transport key.
 
-Open: the NCP stops answering about 11.6 s into a run and sends ASH ERROR 0x06 at 12.67 s, even with no device on the air and a
-host that is in step: after a normal reply it re-sends seven of its older frames as new ones. It reproduces with this host
-alone, so it is a timing or state problem in the model, not the join. Until it is found the join cannot be run to its end (the
-device never gets the network key before the NCP dies). `MCUEMU_EFR32_TRACE=FILE` logs a sim chip's MMIO.
+LDMA CHDONE: it means the whole descriptor chain has finished, not one descriptor. The NCP's UART driver parks the receive
+channel on the dummy descriptor and then rebuilds "the rest of the running descriptor" from CHx_CTRL.XFERCNT unless CHDONE
+is set; with CHDONE raised by the parking descriptor it built a descriptor of 2048 bytes, the UART RX ring (128 bytes) was
+overrun and the neighbouring buffer-management data was overwritten. At about 11.6 s the stack hit an assert
+(`buffer-management.c:1345`, a buffer handle outside the pool), reset itself with reason 0x0701 and later sent
+ASH ERROR 0x06. CHDONE is now set only when a descriptor without a valid link ends.
 
-Still not there: forming or joining a network (EZSP `formNetwork`, `joinNetwork`) is untried. From the image, the UART is USART0 with routes
+With that fixed the zigbee-rs sensor (`efr32mg21-sensor.bin`) joins the NCP's network end to end:
+
+    python3 scripts/ncp_host.py join.yaml --root . --for 30s --event "at=8s endpoint=board.key.pressed value=true" \
+        --event "at=8.2s endpoint=board.key.pressed value=false"
+
+(an NCP `ncp` plus the BRD4181A board with the sensor on one air; the YAML must sit inside `--root`.) The host sees
+`trustCenterJoinHandler` (the standard secured join, about 10.7 s), `childJoinHandler` and the ZDO Device_annce as an
+`incomingMessageHandler` (about 12.7 s). `MCUEMU_EFR32_TRACE=FILE` logs a sim chip's MMIO.
+
+Not yet tried: `joinNetwork` (the NCP as a joiner). From the image, the UART is USART0 with routes
 written as TX = PB1, RX = PB0 (decoded with the alphabetical Series 2 `USARTROUTE` layout: CS, CTS, RTS, RX, SCLK, TX; not
 confirmed against a schematic).
 
