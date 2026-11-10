@@ -22,6 +22,8 @@ the scenarios that need it.
 | `thermostat-ca51.bin`, `thermostat-zt3l.bin` | releases in `slacky1965/tuya_thermostat_full_custom_r02_zrd` (`bin/`, default branch) | downloaded |
 | `zephyr-pmtest.bin`, `vendor_sleep_1s.bin`, `phy6252-ts0001.bin` (+ `phy6222-efuse.bin`, `phy6222-rfcal.bin`, `phy6222-rom.bin`) | no source available | committed in `tests/firmware-images/` |
 | `efr32-zephyr-router.bin`, `efr32-zephyr-ed.bin` | `devbis/zephyr-tlsr8258`, branch `zigbee-generic-stack`: Zephyr `samples/zigbee/zigbee_shell`, board `slwrb4180a` (RAIL driver, no console), built by that repository's "Build Zigbee firmware" workflow | downloaded from the release `zephyr-zigbee-20261016-deada2` (`efr32mg21-router.bin`, `efr32mg21-end-device.bin`), SHA-256 pinned in `ZEPHYR_EFR32_*_SHA256` |
+| `zbdonglee-ncp.bin` | Silicon Labs EZSP NCP 8.2.2 (Sonoff ZBDongle-E build) of `Nerivec/silabs-firmware-builder`, release `v2025.6.2-update1` | downloaded as the `.gbl` (SHA-256 pinned in `EFR32_NCP_GBL_SHA256`), then `scripts/gbl2bin.py` extracts the application |
+| `moes-brightness-thermometer.bin` | full-flash dump of the Moes ZigBee "Smart Brightness Thermometer" (ZSS-ZK-THL, Tuya ZS3L) from `https://pvvx.github.io/ZSS-ZK-THL/bin/FullFlashBin.zip` | downloaded, the zip's SHA-256 pinned in `MOES_THERMOMETER_ZIP_SHA256`, `0000000-00C0000.bin` (768 KiB) taken out of it; the scenario erases its NVM3 pages |
 
 Adding an image: build it from source if that is easy; otherwise download it
 from a stable URL or a GitHub release; commit it to `tests/firmware-images/`
@@ -45,6 +47,7 @@ locally too when you put the images there.
 | `zigbee-efr32-zephyr-router`, `zigbee-efr32-zephyr-ed` | the Zephyr zigbee_shell sample on the EFR32MG21 (RAIL radio driver, no console) gets an Association Response with status 0 from the sampleGW coordinator, judged from the pcap |
 | `zigbee-phy6252-ts0001` | the Tuya TS0001 relay (PHY6222 running the dumped ROM, NVM erased) scans, associates with the sampleGW (channel 15), gets the Transport Key and exchanges unicast NWK data, judged by `test_phy6252_ts0001_join.py` from the air sink, per transmitter |
 | `tlsr8258 + ca51 thermostat r02` | the ZT3L joins the coordinator and both UARTs of the two-chip board carry framed traffic |
+| `moes-brightness-thermometer` | `scripts/moes_brightness_thermometer.py`: the Tuya ZS3L thermometer (NVM3 erased, PB0 long press) joins the EZSP NCP's network: the NCP reports `trustCenterJoinHandler`, `childJoinHandler` and the Device_annce, the firmware reads its CHT8305 and OPT3001 (Lua parts on PA0/PA3) and refreshes the e-ink display (`docs/efr32mg21.md`) |
 | `nrf52840-boot`, `zephyr-pm-wake`, `vendor-sleep-1s` | the existing scripts in `tests/firmware/` |
 
 `tests/firmware/zigbee_air_check.py` runs the system file and reads the pcap

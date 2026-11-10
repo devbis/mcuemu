@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Runs the Moes ZSS-ZK-THL (Tuya ZS3L, EFR32MG21) thermometer firmware next to the EZSP NCP and reports what it does.
+"""Runs the Moes ZigBee "Smart Brightness Thermometer" (ZSS-ZK-THL, Tuya ZS3L, EFR32MG21) firmware next to the EZSP NCP and reports
+what it does.
 
-    tuya_thermometer.py DUMP [--ncp firmware/zbdonglee-ncp.bin] [--mcuemu build/mcuemu] [--for 40s]
-                        [--temperature 22.5] [--humidity 45] [--lux 120] [--channel 24] [--keep-nvm] [--no-press]
+    moes_brightness_thermometer.py DUMP [--ncp firmware/zbdonglee-ncp.bin] [--mcuemu build/mcuemu] [--for 40s]
+                        [--temperature 22.5] [--humidity 45] [--lux 120] [--channel 24] [--keep-nvm] [--no-press] [--no-check]
 
 DUMP is the full-flash dump of pvvx's ZSS-ZK-THL page (0000000-00C0000.bin: Gecko bootloader at 0, application from 0x4000,
 NVM3 at 0xB6000..0xBFFFF). Unless --keep-nvm is given the NVM3 pages are erased (the factory-new state), and a long press on
 PB0 (7 s from t = 8 s) starts the pairing. The NCP (scripts/ncp_host.py) forms a network on --channel, which must be one the device
 scans (14, 15, 19, 20, 24, 25, 11). The thermometer's CHT8305 (0x40) and OPT3001 (0x44) are Lua parts on PA0/PA3 and the e-ink
 display is decoded from PD0/PC2/PB1 (examples/parts); the report lists the join events the NCP saw, how often the firmware read
-each sensor, and the display refreshes with the last 18 segment-RAM bytes. See docs/efr32mg21.md for the details.
+each sensor, and the display refreshes with the last 18 segment-RAM bytes. The exit status is 1 when the device did not join
+(trustCenterJoinHandler, childJoinHandler and the Device_annce at the NCP) or did not read both sensors and refresh the display, unless
+--no-check is given. See docs/efr32mg21.md for the details.
 """
 import argparse
 import os
@@ -65,6 +68,7 @@ def main() -> int:
     p.add_argument("--lux", type=float, default=120)
     p.add_argument("--keep-nvm", action="store_true", help="keep the dump's NVM3 (the device then rejoins its old network)")
     p.add_argument("--no-press", action="store_true", help="do not press the pairing button")
+    p.add_argument("--no-check", action="store_true", help="only report, never fail")
     a = p.parse_args()
 
     image = bytearray(open(a.dump, "rb").read())
@@ -97,10 +101,26 @@ def main() -> int:
         if re.search(r"EZSP 0x00(19|1b|23|24|45) ", line):
             print("  " + line.strip())
     print("Thermometer:")
+    values = {}
     for line in text.splitlines():
         if line.startswith("get "):
             print("  " + line[4:])
-    return 0
+            name, _, value = line[4:].partition(": ")
+            values[name] = value
+    if a.no_check:
+        return 0
+    problems = []
+    for handler in ("trustCenterJoinHandler", "childJoinHandler", "incomingMessageHandler"):
+        if handler not in text:
+            problems.append(f"the NCP never reported {handler}")
+    for name in ("board.sensor.reads", "board.light.reads", "board.display.refreshes"):
+        if not values.get(name, "0").strip().isdigit() or int(values[name]) == 0:
+            problems.append(f"{name} is {values.get(name, 'missing')}")
+    for problem in problems:
+        print("FAIL: " + problem, file=sys.stderr)
+    if not problems:
+        print("moes_brightness_thermometer: ok")
+    return 1 if problems else 0
 
 
 if __name__ == "__main__":

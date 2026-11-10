@@ -49,6 +49,12 @@ env:
   ZEPHYR_ZIGBEE_RELEASE: https://github.com/devbis/zephyr-tlsr8258/releases/download/zephyr-zigbee-20261030-de387d
   ZEPHYR_EFR32_ROUTER_SHA256: 1f172bc0ee806ce247ee1f04463bf3c5ce1c14a174ca656989b60640b5fbcc8d
   ZEPHYR_EFR32_ED_SHA256: 905a9add7a49915924ef897eb5f09d4504b1e1158a9deb599fd58f201f4749b6
+  # Silicon Labs EZSP NCP (Sonoff ZBDongle-E build of Nerivec/silabs-firmware-builder), the coordinator of the Moes scenario.
+  EFR32_NCP_URL: https://github.com/Nerivec/silabs-firmware-builder/releases/download/v2025.6.2-update1/sonoff_zbdonglee_zigbee_ncp_8.2.2.0_115200_sw_flow.gbl
+  EFR32_NCP_GBL_SHA256: a99fe1a9d967ccebddba0ef3e547f2e7af3d5949b30fe77b1c756a13997fdcc6
+  # Full-flash dump of the Moes ZigBee "Smart Brightness Thermometer" (ZSS-ZK-THL, Tuya ZS3L) from pvvx's page.
+  MOES_THERMOMETER_URL: https://pvvx.github.io/ZSS-ZK-THL/bin/FullFlashBin.zip
+  MOES_THERMOMETER_ZIP_SHA256: f3825e33cb65e88feb7bf447b0c21fc36e39102bb6e3da285ba8d8661034ba4d
   THERMOSTAT_RELEASE: https://github.com/slacky1965/tuya_thermostat_full_custom_r02_zrd/releases/download/r02-20261109
   THERMOSTAT_CA51_SHA256: f7d07704fd70effdb385fab243c4823c72a878b61a563fb1244c548f72d4cf24
   THERMOSTAT_ZT3L_SHA256: 8ed2c753c8c8e7dc9e6a601ae7f9d95983c07998e14e81ce8aaa5deea3a78e29
@@ -342,6 +348,52 @@ jobs:
           path: out/*.bin
           if-no-files-found: error
 
+  firmware-efr32-ncp:
+    name: "Prepare: EFR32MG21 EZSP NCP"
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      # The release asset is a GBL upgrade file; scripts/gbl2bin.py extracts the application (program data for 0x4000).
+      - name: Download the NCP and extract the application image
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          curl -fL --retry 3 -o ncp.gbl "$EFR32_NCP_URL"
+          echo "$EFR32_NCP_GBL_SHA256  ncp.gbl" | sha256sum -c -
+          python3 scripts/gbl2bin.py ncp.gbl out/zbdonglee-ncp.bin
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fw-efr32-ncp
+          path: out/zbdonglee-ncp.bin
+          if-no-files-found: error
+
+  firmware-moes-thermometer:
+    name: "Prepare: Moes brightness thermometer"
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      # pvvx's page publishes the full-flash dump of the original Tuya firmware: the Gecko bootloader at 0, the application from
+      # 0x4000 and the NVM3 pages of a device that had joined a network. The scenario erases the NVM3 pages itself.
+      - name: Download and unpack the full-flash dump
+        run: |
+          set -euo pipefail
+          mkdir -p out dump
+          curl -fL --retry 3 -o dump.zip "$MOES_THERMOMETER_URL"
+          echo "$MOES_THERMOMETER_ZIP_SHA256  dump.zip" | sha256sum -c -
+          unzip -o dump.zip -d dump
+          ls -l dump
+          test "$(stat -c %s dump/0000000-00C0000.bin)" = 786432
+          cp dump/0000000-00C0000.bin out/moes-brightness-thermometer.bin
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fw-moes-thermometer
+          path: out/moes-brightness-thermometer.bin
+          if-no-files-found: error
+
   firmware-efr32-zephyr:
     name: "Prepare: EFR32MG21 Zephyr router and ED"
     needs: prepare
@@ -376,6 +428,8 @@ jobs:
       - firmware-nrf52840
       - firmware-efr32mg21
       - firmware-efr32-zephyr
+      - firmware-efr32-ncp
+      - firmware-moes-thermometer
       - firmware-esp32
       - firmware-tlsr8258_ca51_thermostat_r02
     # Run even when an unrelated image failed to build: the scenario that needs
@@ -432,6 +486,10 @@ jobs:
             command: >-
               python3 tests/firmware/zigbee_air_check.py "$MCUEMU"
               tests/firmware/scenarios/zigbee_efr32_zephyr_ed.yaml --workdir "$LOGS" --for 30s
+          - name: moes-brightness-thermometer
+            command: >-
+              python3 scripts/moes_brightness_thermometer.py firmware/moes-brightness-thermometer.bin
+              --ncp firmware/zbdonglee-ncp.bin --mcuemu "$MCUEMU" --for 30s
           - name: zigbee-esp32h2
             command: >-
               python3 tests/firmware/zigbee_air_check.py "$MCUEMU"
