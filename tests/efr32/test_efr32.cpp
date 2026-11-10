@@ -357,6 +357,90 @@ void test_efr32_rail_registers() {
     CHECK(c.r(0xA801803C) == 1);
 }
 
+// RADIOAES: descriptor chains for CCM (RFC 3610 packet vector 1, as sli_protocol_crypto_radioaes.c builds them)
+// and ECB (FIPS-197 appendix B).
+namespace {
+struct AesDescriptor {
+    std::uint32_t address, next, length, tag;
+};
+} // namespace
+
+void test_efr32_radioaes() {
+    Chip c;
+    constexpr std::uint32_t Ram = 0x20000000, Buf = Ram + 0x8000, Desc = Ram + 0x9000;
+    auto put = [&](std::uint32_t at, const std::vector<std::uint8_t> &bytes) {
+        c.chip.core().write_memory(at, bytes.data(), bytes.size());
+    };
+    auto get = [&](std::uint32_t at, std::size_t n) {
+        std::vector<std::uint8_t> bytes(n);
+        c.chip.core().read_memory(at, bytes.data(), n);
+        return bytes;
+    };
+    auto chain = [&](std::uint32_t at, const std::vector<AesDescriptor> &list) {
+        for (std::size_t i = 0; i != list.size(); ++i) {
+            AesDescriptor d = list[i];
+            d.next = i + 1 == list.size() ? 1u : at + static_cast<std::uint32_t>(16 * (i + 1));
+            c.chip.core().write_memory(at + static_cast<std::uint32_t>(16 * i), &d, sizeof d);
+        }
+    };
+    constexpr std::uint32_t Aes = 0x44000000;
+    constexpr std::uint32_t Config = 0x10, Data = 0x0, Last = 0x20, Header = 0x40, Engine = 1;
+    // CCM encrypt: key, nonce, AAD and payload of RFC 3610 vector 1 (M = 8, L = 2).
+    std::vector<std::uint8_t> key, b0 = {0x59, 0, 0, 0, 3, 2, 1, 0, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x00, 0x17};
+    for (unsigned i = 0; i != 16; ++i)
+        key.push_back(static_cast<std::uint8_t>(0xC0 + i));
+    std::vector<std::uint8_t> aad = {0x00, 0x08, 0, 1, 2, 3, 4, 5, 6, 7};
+    std::vector<std::uint8_t> plain;
+    for (unsigned i = 8; i != 31; ++i)
+        plain.push_back(static_cast<std::uint8_t>(i));
+    const std::uint32_t mode = 0x2000; // CCM, encrypt, AES-128
+    put(Buf, {static_cast<std::uint8_t>(mode), static_cast<std::uint8_t>(mode >> 8), 0, 0});
+    put(Buf + 0x10, key);
+    put(Buf + 0x20, b0);
+    put(Buf + 0x30, aad);
+    put(Buf + 0x40, plain);
+    chain(Desc, {{Buf, 0, 4, Engine | Config | (0u << 8)},
+                 {Buf + 0x10, 0, 16, Engine | Config | (8u << 8)},
+                 {Buf + 0x20, 0, 16, Engine | Header},
+                 {Buf + 0x30, 0, 10, Engine | Header | (6u << 8)},
+                 {Buf + 0x40, 0, 23, Engine | Data | Last | (9u << 8)}});
+    // Pusher: discard the 32 header bytes, the data (23), its padding (9), the tag (8) and 8 bytes of padding.
+    chain(Desc + 0x100, {{0, 0, 32 | 0x40000000u, 0},
+                         {Buf + 0x100, 0, 23, 0},
+                         {0, 0, 9 | 0x40000000u, 0},
+                         {Buf + 0x120, 0, 8, 0},
+                         {0, 0, 8 | 0x40000000u, 0}});
+    c.w(Aes + 0x04, Desc);
+    c.w(Aes + 0x14, Desc + 0x100);
+    c.w(Aes + 0x34, 3);
+    c.w(Aes + 0x38, 3);
+    CHECK((c.r(Aes + 0x3C) & 3) == 0);
+    const std::vector<std::uint8_t> cipher = {0x58, 0x8C, 0x97, 0x9A, 0x61, 0xC6, 0x63, 0xD2, 0xF0, 0x66, 0xD0, 0xC2,
+                                              0xC0, 0xF9, 0x89, 0x80, 0x6D, 0x5F, 0x6B, 0x61, 0xDA, 0xC3, 0x84};
+    const std::vector<std::uint8_t> mic = {0x17, 0xE8, 0xD1, 0x2C, 0xFD, 0xF9, 0x26, 0xE0};
+    CHECK(get(Buf + 0x100, 23) == cipher);
+    CHECK(get(Buf + 0x120, 8) == mic);
+
+    // ECB (FIPS-197 appendix B): key 2b7e1516..., plaintext 3243f6a8... -> 3925841d02dc09fbdc118597196a0b32.
+    const std::vector<std::uint8_t> ecb_key = {0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
+                                               0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c};
+    const std::vector<std::uint8_t> block = {0x32, 0x43, 0xf6, 0xa8, 0x88, 0x5a, 0x30, 0x8d,
+                                             0x31, 0x31, 0x98, 0xa2, 0xe0, 0x37, 0x07, 0x34};
+    put(Buf, {0x00, 0x01, 0, 0});
+    put(Buf + 0x10, ecb_key);
+    put(Buf + 0x40, block);
+    chain(Desc, {{Buf, 0, 4, Engine | Config},
+                 {Buf + 0x10, 0, 16, Engine | Config | (8u << 8)},
+                 {Buf + 0x40, 0, 16, Engine | Data | Last}});
+    chain(Desc + 0x100, {{Buf + 0x140, 0, 16, 0}});
+    c.w(Aes + 0x04, Desc);
+    c.w(Aes + 0x14, Desc + 0x100);
+    c.w(Aes + 0x38, 3);
+    const std::vector<std::uint8_t> expected = {0x39, 0x25, 0x84, 0x1d, 0x02, 0xdc, 0x09, 0xfb,
+                                                0xdc, 0x11, 0x85, 0x97, 0x19, 0x6a, 0x0b, 0x32};
+    CHECK(get(Buf + 0x140, 16) == expected);
+}
+
 // A transmit takes the frame from the BUF0 buffer RAM on RAC CMD.TXEN, puts it on the air
 // on the SYNTH channel, and raises FRC TX_PACKET_SENT when it ends.
 void test_efr32_rail_transmit() {

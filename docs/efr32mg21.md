@@ -203,10 +203,22 @@ device **associates**: Data Request, Association Response (short address, `trust
 NCP's APS Transport-Key command, then a Data Request every 200 ms (checked with `--channel 24`; the device scans channels 14,
 15, 19, 20, 24, 25 and 11 in that order of its own, so the NCP has to be on one of them).
 
-Open: after the Transport Key the device polls for about a second and then stops; no Device_annce follows. Suspect: the key
-decryption (the SE mailbox and RADIOAES stand-ins return no data). The `MCUEMU_EFR32_TRACE_PC=FILE` +
-`MCUEMU_EFR32_TRACE_PC_RANGE=FIRST:LAST[:FROM_NS]` and `MCUEMU_EFR32_TRACE_NODE=NAME` environment variables (sim),
-`scripts/ncp_host.py --peek MCU:ADDR:LEN` and `--watch MCU:ADDR:LEN@FROM-TO` were added for this.
+The stack's AES is RADIOAES (`0x44000000`), a CRYPTOACC-style engine fed through scatter-gather descriptors (FETCHADDR +0x04,
+PUSHADDR +0x14, CTRL +0x34, CMD +0x38, STATUS +0x3C). `radioaes.cpp` models it from `sli_protocol_crypto_radioaes.c`: ECB, CBC, CTR
+and CCM/CCM* (RFC 3610 vector 1 and FIPS-197 in `test_efr32_radioaes`). With it the device decrypts the APS Transport Key,
+installs the network key and sends NWK-secured frames (an End Device Timeout Request and the Device_annce broadcast; a captured
+frame verifies with the NWK key and openssl).
+
+Both chips had the same EUI-64 (`0x0123456789ABCDEF`), so the NCP ignored the joiner's secured frames as its own. The mcu key
+`eui64: 0x...` (efr32mg21 only) sets the device information page's EUI-64; with distinct ids the NCP reports
+`trustCenterJoinHandler`, `childJoinHandler` and the ZDO Device_annce (`incomingMessageHandler`, cluster 0x0013).
+
+Result: the Tuya ZS3L ZSS-ZK-THL image (full-flash dump of pvvx's page, NVM3 erased, a long press on PB0 as the pairing
+trigger, the NCP on one of the device's scan channels) joins the NCP's network in the emulator. `firmware_efr32mg21_ncp_join_efr32`
+now also uses distinct EUI-64s and requires the childJoinHandler and the Device_annce.
+
+The `MCUEMU_EFR32_TRACE_PC=FILE` + `MCUEMU_EFR32_TRACE_PC_RANGE=FIRST:LAST[:FROM_NS]` and `MCUEMU_EFR32_TRACE_NODE=NAME` environment
+variables (sim), `scripts/ncp_host.py --peek MCU:ADDR:LEN` and `--watch MCU:ADDR:LEN@FROM-TO` were added while finding this.
 
 Not yet tried: `joinNetwork` (the NCP as a joiner). From the image, the UART is USART0 with routes
 written as TX = PB1, RX = PB0 (decoded with the alphabetical Series 2 `USARTROUTE` layout: CS, CTS, RTS, RX, SCLK, TX; not

@@ -176,6 +176,7 @@ add_library(efr32emu
     emulator/src/efr32/efr32mg21.cpp
     emulator/src/efr32/blocks.cpp
     emulator/src/efr32/radio.cpp
+    emulator/src/efr32/radioaes.cpp
     emulator/src/efr32/run_command.cpp
 )
 target_include_directories(efr32emu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/emulator/src)

@@ -30,7 +30,7 @@ devices:
           radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 8, protocols: [zigbee] } }
   - id: board
     mcus:
-      - { id: mcu, model: %s, firmware: joiner.bin,
+      - { id: mcu, model: %s, %sfirmware: joiner.bin,
           radio: { air: air0, position: [4, 0, 1], tx_power_dbm: %d, protocols: [zigbee] } }
 """
 
@@ -50,7 +50,7 @@ def main() -> int:
         shutil.copy(ncp, os.path.join(root, "ncp.bin"))
         shutil.copy(joiner, os.path.join(root, "joiner.bin"))
         with open(os.path.join(root, "join.yaml"), "w") as handle:
-            handle.write(AIR % (model, power))
+            handle.write(AIR % (model, "eui64: 0x84fd27fffe123456, " if model == "efr32mg21" else "", power))
         try:
             result = subprocess.run([sys.executable, "-u", os.path.join(HERE, "..", "..", "scripts", "ncp_host.py"),
                                      "join.yaml", "--root", root, "--mcuemu", mcuemu, "--for", "26s"],
@@ -66,8 +66,8 @@ def main() -> int:
         return fail("the NCP never formed a network:\n" + text[-1500:])
     if "trustCenterJoinHandler" not in text:
         return fail("the device did not join (no trustCenterJoinHandler):\n" + text[-1500:])
-    if sys.argv[4] == "esp32h2" and "incomingMessageHandler" not in text:
-        return fail("no Device_annce reached the host:\n" + text[-1500:])
+    if "incomingMessageHandler" not in text or "childJoinHandler" not in text:
+        return fail("the join was not completed (no childJoinHandler / Device_annce at the host):\n" + text[-1500:])
     print(f"firmware_efr32mg21_ncp_join ({sys.argv[4]}): ok")
     return 0
 

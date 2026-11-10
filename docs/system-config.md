@@ -32,6 +32,7 @@ devices:
         supply_mv: 3300    # tlsr8258, nrf52840, cc2530f256: chip supply seen by the ADC (default 3300; cc2530f256: AVDD5 = DVDD, 2000-3600)
         start_at: 100us    # power-on delay on the world timeline
         flash_timing: true # tlsr8258 only: flash instruction-cache and register-bus timing (default true)
+        eui64: 0x84fd27fffe123456 # efr32mg21 only: the EUI-64 of the device information page (default 0x0123456789ABCDEF, the same for every chip)
         tick_start_settle: 30us # tlsr8258 only: a system timer START this soon after a STOP is ignored (default off)
         tick_start_jitter: 15us # tlsr8258 only: random +- on that window, redrawn at every STOP (needs tick_start_settle)
         tick_start_seed: 3      # tlsr8258 only: seed of that draw (default 1; every device draws its own sequence)

@@ -14,6 +14,7 @@ void test_efr32_rtcc_counts_and_compares();
 void test_efr32_semailbox_answers_commands();
 void test_efr32_rtcc_keeps_tick_fraction();
 void test_efr32_rail_registers();
+void test_efr32_radioaes();
 void test_efr32_rail_transmit();
 void test_efr32_rail_receive_and_ack();
 } // namespace mcuemu_tests
@@ -37,6 +38,7 @@ int main() {
     RUN(test_efr32_semailbox_answers_commands);
     RUN(test_efr32_rtcc_keeps_tick_fraction);
     RUN(test_efr32_rail_registers);
+    RUN(test_efr32_radioaes);
     RUN(test_efr32_rail_transmit);
     RUN(test_efr32_rail_receive_and_ack);
     if (failures != 0) {

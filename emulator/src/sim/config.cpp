@@ -542,7 +542,7 @@ McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
     require_map(node, "mcu");
     check_keys(node, "mcu",
                {"id", "model", "variant", "firmware", "efuse", "rom", "boot_from_rom", "rf_calibration", "clock_hz", "supply_mv",
-                "start_at", "radio", "rtt", "flash_timing",
+                "start_at", "radio", "rtt", "flash_timing", "eui64",
                 "tick_start_settle", "tick_start_jitter", "tick_start_seed", "debugger", "flash"});
     McuConfig mcu;
     mcu.line = node.Mark().line + 1;
@@ -551,6 +551,8 @@ McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
     mcu.model = required_string(node, "model", "mcu");
     if (const YAML::Node variant = node["variant"])
         mcu.variant = scalar(variant, "variant");
+    if (const YAML::Node eui = node["eui64"])
+        mcu.eui64 = config_integer(eui, "'eui64'");
     const YAML::Node firmware = node["firmware"];
     if (!firmware)
         fail(node, "mcu requires 'firmware'");

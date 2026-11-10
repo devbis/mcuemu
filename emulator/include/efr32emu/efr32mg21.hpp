@@ -122,6 +122,8 @@ private:
     std::uint64_t service(std::uint64_t now);
     Block &block_at(std::uint32_t slot);
     Block &lp_block_at(std::uint32_t slot);
+    // RADIOAES: runs the descriptor chains the firmware pointed FETCHADDR/PUSHADDR at (radioaes.cpp).
+    void run_radioaes();
 
     std::unique_ptr<cortexm::Core> core_;
     std::uint8_t *flash_{nullptr};

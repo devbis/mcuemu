@@ -692,6 +692,8 @@ void Efr32mg21::write(std::uint32_t address, std::uint32_t value, unsigned size)
         if (address == Buf0Cmd && (value & 1u))
             rail_regs_->write(Buf0WriteOffset, 0); // CMD.CLEAR empties the buffer
         rail_regs_->write(address, value, size);
+        if (address == RadioAesCmd && (value & 3u))
+            run_radioaes();
         if (rail_regs_->take_tx_start())
             start_tx();
         // INFERRED: PROTIMER CMD bit 16 starts the hardware listen-before-talk that RAIL's CSMA

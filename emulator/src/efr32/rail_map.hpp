@@ -35,6 +35,10 @@ constexpr std::uint32_t FrcIf = 0xA8004068u, FrcIen = 0xA800406Cu;
 constexpr std::uint32_t SynthChannel = 0xA8018044u;
 constexpr std::uint32_t SynthCarrier = 0xA8018034u;
 
+// RADIOAES (0x44000000): the engine's descriptor chain heads, CMD (+0x38) starts it.
+constexpr std::uint32_t RadioAesBase = 0x44000000u, RadioAesFetchAddr = RadioAesBase + 0x04, RadioAesPushAddr = RadioAesBase + 0x14,
+                        RadioAesCmd = RadioAesBase + 0x38;
+
 // PROTIMER (image layout).
 constexpr std::uint32_t ProtimerBase = 0xA801C000u;
 constexpr std::uint32_t ProtimerCmd = ProtimerBase + 0x00C, ProtimerStatus = ProtimerBase + 0x014,

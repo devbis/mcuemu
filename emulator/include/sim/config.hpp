@@ -127,6 +127,7 @@ struct McuConfig {
     // list of {file, offset} places several (bootloader + application).
     std::vector<FirmwareImage> images;
     std::optional<std::uint32_t> clock_hz;
+    std::optional<std::uint64_t> eui64; // efr32mg21: the EUI-64 of the device information page (default 0x0123456789ABCDEF)
     std::optional<std::uint32_t> supply_mv; // supply voltage (default 3300)
     std::optional<bool> flash_timing; // tlsr8258: flash and register-bus timing (default on)
     // tlsr8258: the 16 MHz system timer ignores a START this soon after a STOP, plus or

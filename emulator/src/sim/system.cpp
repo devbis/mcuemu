@@ -187,7 +187,10 @@ const McuRegistry &McuRegistry::builtin() {
                     "efr32mg21 does not model its supply; remove 'supply_mv'");
             if (config.flash_timing)
                 throw std::invalid_argument("flash_timing is only modelled for tlsr8258");
-            return std::make_unique<Efr32mg21Mcu>(name);
+            auto mcu = std::make_unique<Efr32mg21Mcu>(name);
+            if (config.eui64)
+                mcu->chip().set_device_id(*config.eui64);
+            return mcu;
         });
         for (const auto &[model, variant, mhz] :
              {std::tuple{"esp32c6", esp32emu::Variant::C6, "160"}, std::tuple{"esp32h2", esp32emu::Variant::H2, "96"}}) {
