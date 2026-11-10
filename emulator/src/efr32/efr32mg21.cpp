@@ -4,6 +4,7 @@
 #include "efr32/rail_map.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <ostream>
 #include <stdexcept>
@@ -16,6 +17,7 @@ constexpr std::uint32_t RadioBase = 0x40090000, RadioEnd = 0x40096000;
 // Peripheral blocks are 16 KiB apart; slot = (offset from 0x40000000) / 0x4000.
 constexpr unsigned EmuSlot = 1, CmuSlot = 2, HfxoSlot = 3, DpllSlot = 7, UsartSlot = 22, MscSlot = 12, LdmaSlot = 16, GpioSlot = 15;
 constexpr std::uint32_t RtccBase = 0x48000000, RtccSize = 0x4000;
+constexpr std::uint32_t LpBase = 0x4A000000, LpSize = 0x20000;
 constexpr unsigned ProtimerIrq = 36; // PROTIMER_IRQn
 constexpr unsigned FrcIrq = 34, RacSeqIrq = 38; // FRC_IRQn, RAC_SEQ_IRQn
 // FRC IF bit 15: TX_PACKET_SENT; RAC IF bit 22: RX_ACK_TIMEOUT.
@@ -126,11 +128,16 @@ Efr32mg21::Efr32mg21() {
     // RTCC_S and RTCC_NS sit outside the peripheral window.
     core_->map_mmio(RtccBase, RtccSize, *this);
     core_->map_mmio(0x58000000, RtccSize, *this);
+    core_->map_mmio(LpBase, LpSize, *this);
+    core_->map_mmio(0x5A000000, 0x14000, *this); // the non-secure alias, up to HFRCOEM23's stand-in memory
+    core_->map_mmio(0x5A018000, 0x8000, *this);
     // SEMAILBOX host, secure and non-secure (the NS alias folds onto the secure one).
     core_->map_mmio(SeBase, SeSize, *this);
     core_->map_mmio(0x5C000000, SeSize, *this);
     core_->map_mmio(0x44000000, 0x10000, *this);
     core_->map_mmio(0x54000000, 0x10000, *this);
+    core_->map_mmio(0xA0000000, 0x10000, *this); // the secure addresses of the same RDMEM / RAC blocks
+    core_->map_mmio(0xA8000000, 0x40000, *this);
     core_->map_mmio(0xB0000000, 0x10000, *this);
     core_->map_mmio(0xB8000000, 0x40000, *this);
     // The non-secure alias (CMU_NS 0x50008000, SYSCFG_NS 0x5007C000, ...) is the
@@ -138,8 +145,18 @@ Efr32mg21::Efr32mg21() {
     // folds both onto it.
     core_->map_mmio(0x50000000, PeripheralSize, *this);
     core_->set_service_handler([this](std::uint64_t now) { return service(now); });
-    // Flash is written through the MSC; a CPU store to it is a bus fault.
-    core_->set_write_protect_handler([](std::uint32_t, unsigned, std::uint32_t) { return false; });
+    // Flash is written through the MSC. INFERRED: a direct CPU store to it is dropped, not a fault: the Tuya
+    // ZS3L thermometer image stores a DEVINFO word through a NULL pointer (pc 0x38c74, address 0) on every
+    // start and runs on the silicon. The store is let through and undone before the next instruction.
+    core_->set_write_protect_handler([this](std::uint32_t address, unsigned size, std::uint32_t) {
+        if (address >= FlashSize || size > 4)
+            return false;
+        std::uint8_t *flash = flash_ + address;
+        std::array<std::uint8_t, 4> saved{};
+        std::copy(flash, flash + size, saved.begin());
+        core_->defer([flash, saved, size] { std::copy(saved.begin(), saved.begin() + size, flash); });
+        return true;
+    });
 }
 
 Efr32mg21::~Efr32mg21() = default;
@@ -168,6 +185,16 @@ bool Efr32mg21::uart0_rx(std::uint8_t byte) {
     return true;
 }
 
+Block &Efr32mg21::lp_block_at(std::uint32_t slot) {
+    if (!lp_blocks_[slot]) {
+        if (slot == 1)
+            lp_blocks_[slot] = std::make_unique<Iadc>(*this);
+        else
+            lp_blocks_[slot] = std::make_unique<RegBlock>(*this);
+    }
+    return *lp_blocks_[slot];
+}
+
 Block &Efr32mg21::block_at(std::uint32_t slot) {
     if (!blocks_[slot])
         blocks_[slot] = std::make_unique<RegBlock>(*this);
@@ -194,6 +221,9 @@ void Efr32mg21::load_firmware(const std::vector<std::uint8_t> &image, std::uint3
 void Efr32mg21::reset() {
     gpio_->reset();
     for (auto &block : blocks_)
+        if (block)
+            block->reset();
+    for (auto &block : lp_blocks_)
         if (block)
             block->reset();
     radio_->reset();
@@ -587,6 +617,8 @@ std::uint32_t Efr32mg21::read(std::uint32_t address, unsigned size) {
         value = rtcc_->read((address - RtccBase) & 0xffc);
     } else if (address - SeBase < SeSize) {
         value = se_mailbox_->read((address - SeBase) & 0xffc);
+    } else if (address - LpBase < LpSize) {
+        value = lp_block_at((address - LpBase) >> 14).read((address - LpBase) & 0xffc);
     } else if (address == ProtimerWrapCount && rail_regs_->peek(ProtimerStatus) != 0) {
         // PROTIMER WRAPCNT (image layout +0x20): counts pre-counter overflows, one per
         // PRECNTTOP+0x100 core cycles while RUNNING (+0x14 bit 0).
@@ -623,6 +655,10 @@ void Efr32mg21::write(std::uint32_t address, std::uint32_t value, unsigned size)
     }
     if (address - SeBase < SeSize) {
         write_register(*se_mailbox_, address - SeBase, value);
+        return;
+    }
+    if (address - LpBase < LpSize) {
+        write_register(lp_block_at((address - LpBase) >> 14), address - LpBase, value);
         return;
     }
     if (is_rail_register(address)) {

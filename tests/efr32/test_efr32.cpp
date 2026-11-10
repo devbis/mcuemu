@@ -110,7 +110,7 @@ void test_efr32_gpio_aliases_and_exti() {
     c.w(Gpio + Toggle + 0x40, 1);
     CHECK(c.chip.pad_drive(16) == efr32emu::PadDrive::High);
 
-    // PD2 input with pull-up, EXTI2 on the falling edge: GPIO_EVEN (IRQ 3).
+    // PD2 input with pull-up, EXTI2 on the falling edge: GPIO_EVEN (IRQ 26).
     c.w(Gpio + 0x94, 2u << 8);                          // mode 2 (input with pull)
     c.w(Gpio + Set + 0xa0, 4);                          // DOUT = 1: pull-up
     CHECK(c.chip.pad_drive(3 * 16 + 2) == efr32emu::PadDrive::PullUp);
@@ -118,8 +118,8 @@ void test_efr32_gpio_aliases_and_exti() {
     c.w(Gpio + 0x408, 2u << 8);                         // EXTIPINSEL2 = pin 2
     c.w(Gpio + 0x414, 4);                               // EXTIFALL
     c.w(Gpio + Set + 0x424, 4);                         // IEN
-    std::uint32_t enable = 1u << 3;
-    c.chip.core().write_memory(0xE000E100, &enable, 4); // NVIC: enable IRQ 3
+    std::uint32_t enable = 1u << 26;
+    c.chip.core().write_memory(0xE000E100, &enable, 4); // NVIC: enable IRQ 26
     c.chip.set_pad_input(3 * 16 + 2, true);
     CHECK(c.r(Gpio + 0x420) == 0);
     CHECK(!c.chip.core().interrupt_pending());
@@ -130,7 +130,7 @@ void test_efr32_gpio_aliases_and_exti() {
     CHECK(c.r(Gpio + 0x420) == 0);
     // The NVIC latched the edge: it stays pending until taken or cleared.
     CHECK(c.chip.core().interrupt_pending());
-    std::uint32_t clear_pending = 1u << 3;
+    std::uint32_t clear_pending = 1u << 26;
     c.chip.core().write_memory(0xE000E280, &clear_pending, 4);
     CHECK(!c.chip.core().interrupt_pending());
     // Rising edges are not selected.

@@ -168,6 +168,26 @@ public:
     void write(std::uint32_t reg, std::uint32_t value) override;
 };
 
+// IADC0 (0x4A004000): a conversion completes the moment it is started. CMD.SINGLESTART (bit 0) or SCANSTART
+// (bit 3) puts one result in the matching FIFO (STATUS.SINGLEFIFODV bit 8 / SCANFIFODV bit 9, IF bits 9 / 8 and
+// 0 / 1); reading SINGLEFIFODATA (+0x74) or SCANFIFODATA (+0x84) takes it. The result is a fixed mid-scale
+// value: no analog input is modelled. Offsets are from the SDK's efr32mg21_iadc.h; the instant completion is
+// INFERRED from a Tuya thermometer image that polls STATUS & 0x140 after SINGLESTART.
+class Iadc final : public RegBlock {
+public:
+    using RegBlock::RegBlock;
+    std::uint32_t read(std::uint32_t reg) override;
+    void write(std::uint32_t reg, std::uint32_t value) override;
+    void reset() override {
+        RegBlock::reset();
+        single_dv_ = scan_dv_ = false;
+    }
+    std::uint32_t peek(std::uint32_t reg) override;
+
+private:
+    bool single_dv_{false}, scan_dv_{false};
+};
+
 // SEMAILBOX host (0x4C000000 secure, 0x5C000000 non-secure): the mailbox to the
 // Secure Element that se_manager uses for its commands. The SE itself is not
 // modelled; the mailbox answers every command with SUCCESS and no output data.

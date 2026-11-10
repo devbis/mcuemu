@@ -313,12 +313,61 @@ bool is_rdmem(std::uint32_t address) { return address >= 0xA0000000u && address 
 std::uint32_t register_base(std::uint32_t address) { return is_rdmem(address) ? address : address & ~0x3000u; }
 } // namespace
 
+namespace {
+constexpr std::uint32_t IadcCmd = 0x0c, IadcStatus = 0x14, IadcIf = 0x24, IadcSingleFifoData = 0x74,
+                        IadcSingleData = 0x7c, IadcScanFifoData = 0x84, IadcScanData = 0x8c;
+constexpr std::uint32_t IadcResult = 0x8000;
+} // namespace
+
+std::uint32_t Iadc::peek(std::uint32_t reg) {
+    if (reg == IadcStatus)
+        return RegBlock::read(reg) | (single_dv_ ? 0x100u : 0u) | (scan_dv_ ? 0x200u : 0u);
+    return RegBlock::read(reg);
+}
+
+std::uint32_t Iadc::read(std::uint32_t reg) {
+    switch (reg) {
+    case IadcSingleFifoData:
+        single_dv_ = false;
+        return IadcResult;
+    case IadcScanFifoData:
+        scan_dv_ = false;
+        return IadcResult;
+    case IadcSingleData:
+    case IadcScanData:
+        return IadcResult;
+    default: return peek(reg);
+    }
+}
+
+void Iadc::write(std::uint32_t reg, std::uint32_t value) {
+    if (reg == IadcCmd) {
+        if (value & 1u) {
+            single_dv_ = true;
+            regs_[IadcIf >> 2] |= (1u << 9) | 1u;
+        }
+        if (value & 8u) {
+            scan_dv_ = true;
+            regs_[IadcIf >> 2] |= (1u << 8) | 2u;
+        }
+        return;
+    }
+    if (reg == IadcStatus)
+        return;
+    RegBlock::write(reg, value);
+}
+
 std::uint32_t RailRegs::read(std::uint32_t address) {
     const std::uint32_t base = register_base(address);
     const auto it = words_.find(base);
     std::uint32_t value = it != words_.end() ? it->second : 0;
     if (address == SeqStatus)
         value |= SeqReadyBits;
+    // INFERRED: a Tuya EFR32MG21 image (ZS3L thermometer) reads 0xA801803C before the radio configuration
+    // table is applied and multiplies its three 3-bit fields (the synthesizer divider); a product of zero
+    // makes it assert (udf at 0xef3c). The NCP writes 1 to this word, so an unwritten word reads as 1.
+    if (address == 0xA801803C && it == words_.end())
+        value = 1;
     // INFERRED stand-ins, not the silicon: the RAIL init in the Silicon Labs Zigbee NCP 8.2.2 image
     // (pc 0x2e2f4) polls FRC IF (0xA8004068) for bit 14 and FRC+0x08 for bit 8 after it starts a
     // calibration that the RAC sequencer would run (this model does not run it). Reporting both as
@@ -586,7 +635,7 @@ constexpr std::uint32_t PortStride = 0x30;
 constexpr std::uint32_t RegCtrl = 0x00, RegModel = 0x04, RegModeh = 0x0c, RegDout = 0x10, RegDin = 0x14;
 constexpr std::uint32_t RegLock = 0x300, RegExtipsel = 0x400, RegExtipinsel = 0x408, RegExtirise = 0x410,
                         RegExtifall = 0x414, RegIf = 0x420, RegIen = 0x424;
-constexpr unsigned ExtiLines = 8, GpioEvenIrq = 3, GpioOddIrq = 13;
+constexpr unsigned ExtiLines = 8, GpioEvenIrq = 26, GpioOddIrq = 25; // GPIO_EVEN_IRQn / GPIO_ODD_IRQn in efr32mg21*.h
 } // namespace
 
 void Gpio::reset() {

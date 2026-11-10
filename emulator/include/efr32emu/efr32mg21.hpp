@@ -121,6 +121,7 @@ public:
 private:
     std::uint64_t service(std::uint64_t now);
     Block &block_at(std::uint32_t slot);
+    Block &lp_block_at(std::uint32_t slot);
 
     std::unique_ptr<cortexm::Core> core_;
     std::uint8_t *flash_{nullptr};
@@ -134,6 +135,8 @@ private:
     std::uint32_t boot_vector_{0};
     PadObserver pad_observer_;
     std::array<std::unique_ptr<Block>, 64> blocks_;
+    // The low-energy peripherals at 0x4A000000 (LETIMER0, IADC0, ACMP0/1, I2C0, HFRCOEM23, WDOG0/1), 16 KiB apart.
+    std::array<std::unique_ptr<Block>, 8> lp_blocks_;
     Cmu *cmu_{nullptr};
     Gpio *gpio_{nullptr};
     std::unique_ptr<Radio> radio_;
