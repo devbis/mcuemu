@@ -188,6 +188,7 @@ def main():
     p.add_argument("--permit-at", default="6s")
     p.add_argument("--poll", default="50ms", help="callback polling interval once the network is up")
     p.add_argument("--peek", action="append", default=[], help="MCU:ADDRESS:LENGTH, printed at the end (mem.read)")
+    p.add_argument("--get", action="append", default=[], help="ENDPOINT, printed at the end (get)")
     p.add_argument("--watch", action="append", default=[],
                    help="MCU:ADDRESS:LENGTH@FROM-TO: print the bytes whenever they change inside that time window (1 ms steps)")
     p.add_argument("--event", action="append", default=[], help="at=T endpoint=NAME value=V (scenario-like set)")
@@ -265,6 +266,8 @@ def main():
                     state = "run"
             elif state == "run" and not host.waiting and now - last_poll >= poll:
                 host.command(0x0006); last_poll = now
+        for endpoint in a.get:
+            print(f"get {endpoint}: {sim.rpc('get', {'endpoint': endpoint})}")
         for spec in a.peek:
             mcu, address, length = spec.rsplit(":", 2)
             print(f"peek {spec}: {sim.rpc('mem.read', {'mcu': mcu, 'address': int(address, 0), 'length': int(length, 0)})['hex']}")
