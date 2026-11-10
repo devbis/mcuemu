@@ -171,8 +171,11 @@ bit-banged I2C bus on **PA0 (SDA) and PA3 (SCL)** (SDA is released by switching 
 from the GPIO mode and DOUT traffic, then confirmed by the addresses it probes). A spy slave saw two devices: **0x40**, the
 CHT8305 (`examples/parts/cht8305.lua`), and **0x44**, an OPT3001 light sensor (`examples/parts/opt3001.lua`: it reads register
 0x7E, the manufacturer id, writes the limits 0x03 and 0x02 and the configuration 0xCE11, then reads the result). Both Lua parts
-count `reads` / `writes` endpoints. The battery is measured with IADC0 SINGLE = SUPPLY (`0x1001`). Other pads (PD0, PC1/PC2, PB1,
-PA5) belong to the e-ink display (not modelled). `examples/devices/tuya_zs3l_thermometer.yaml` wires all of this.
+count `reads` / `writes` endpoints. The battery is measured with IADC0 SINGLE = SUPPLY (`0x1001`). The e-ink display is a 9-bit 3-wire SPI (data/command bit first, MSB first, sampled on the SCK rising edge, one frame per CS pulse)
+on PD0 (SCK), PC2 (DATA) and PB1 (CS), decoded by `examples/parts/epd_zsszkthl.lua`: init commands `04 00 01 30 03`, waveform tables
+(`20 23 24 25 26`, 15 bytes each), `18` + 18 bytes of segment RAM, `11 ff` = refresh. Only the temperature moved the RAM in the first
+14 s (humidity 10..90 % and 5..5000 lx left it unchanged); the bit layout of the segments is not plain 7-segment bytes (0.0 and 0.1 °C
+give the same RAM, the tenths change bytes 7..9) and is not decoded. PA5, PC1 and PD1 are other control pads. `examples/devices/tuya_zs3l_thermometer.yaml` wires all of this.
 
 The full-flash dump of pvvx's ZSS-ZK-THL page (Gecko bootloader at 0, app at `0x4000`, NVM3 at `0xB6000..0xBFFFF`) runs
 (`firmware: [{file: dump.bin, offset: 0, size: 0x4000}, {file: dump.bin, offset: 0x4000, from: 0x4000}]`) but does **not**

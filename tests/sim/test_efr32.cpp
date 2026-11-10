@@ -154,6 +154,44 @@ void test_efr32_i2c_master_reads_cht8305() {
     CHECK(wait_for(Stop));
 }
 
+// The e-ink display part decodes the 9-bit SPI frames the firmware bit-bangs on PD0 (SCK), PC2 (DATA) and PB1 (CS).
+void test_efr32_epd_part_decodes_frames() {
+    const std::string parts = std::string(MCUEMU_SOURCE_DIR) + "/examples/parts/";
+    const auto system = build("", "    nets:\n"
+                                  "      - { id: sck, pins: [m.PD0] }\n"
+                                  "      - { id: sdi, pins: [m.PC2] }\n"
+                                  "      - { id: cs, pins: [m.PB1] }\n"
+                                  "    parts:\n"
+                                  "      - { id: epd, type: script, script: " + parts + "epd_zsszkthl.lua, pins: { sck: sck, data: sdi, cs: cs } }\n");
+    sim::World &world = system->world();
+    auto &chip = static_cast<sim::Efr32mg21Mcu &>(world.mcu("d.m")).chip();
+    chip.write(Gpio + 0x94, 4, 4);  // PD0 push-pull
+    chip.write(Gpio + 0x64, 4u << 8, 4);  // PC2
+    chip.write(Gpio + 0x34, 4u << 4, 4);  // PB1
+    auto pin = [&](std::uint32_t port_dout, unsigned bit, bool high) {
+        chip.write(Gpio + (high ? 0x1000u : 0x2000u) + port_dout, 1u << bit, 4);
+        world.run_for(1000);
+    };
+    auto frame = [&](bool data, std::uint8_t value) {
+        pin(0x40, 1, false); // CS low
+        for (int i = 8; i >= 0; --i) {
+            const bool bit = i == 8 ? data : ((value >> i) & 1u) != 0;
+            pin(0x70, 2, bit);
+            pin(0x90 + 0x10, 0, true); // SCK rises
+            pin(0x90 + 0x10, 0, false);
+        }
+        pin(0x40, 1, true);
+    };
+    pin(0x40, 1, true);
+    frame(false, 0x18);
+    frame(true, 0xA5);
+    frame(true, 0x3C);
+    frame(false, 0x11);
+    frame(true, 0xFF);
+    CHECK(std::get<std::int64_t>(world.endpoints().at("d.epd.refreshes").get()) == 1);
+    CHECK(std::get<std::string>(world.endpoints().at("d.epd.ram").get()) == "a53c");
+}
+
 void test_efr32_config_rules() {
     bool rejected = false;
     try {

@@ -2,6 +2,7 @@
 # and an OPT3001 light sensor on one bit-banged I2C bus, a pairing button, an e-ink display on other pads (not modelled).
 #
 #   mcu.PA0 <-> SDA   mcu.PA3 -> SCL   (found from the firmware's GPIO traffic and the addresses it probes: 0x40, 0x44)
+#   mcu.PD0 -> SCK, mcu.PC2 -> DATA, mcu.PB1 -> CS of the e-ink display (9-bit 3-wire SPI, decoded by epd_zsszkthl.lua)
 #   mcu.PB0 <- button (EXTI0, falling edge; a long press starts pairing in the factory-new state)
 #
 # The firmware is a local image: put the dump in firmware/ (the bootloader piece is the first 0x4000 bytes, the application
@@ -36,6 +37,9 @@ device:
     - { id: sda, pull: up, pins: ["mcu.PA0"] }
     - { id: scl, pull: up, pins: ["mcu.PA3"] }
     - { id: button, pull: up, pins: ["mcu.PB0"] }
+    - { id: sck, pins: ["mcu.PD0"] }
+    - { id: data, pins: ["mcu.PC2"] }
+    - { id: cs, pins: ["mcu.PB1"] }
   parts:
     - id: sensor
       type: script
@@ -47,4 +51,8 @@ device:
       script: ../parts/opt3001.lua
       pins: { sda: sda, scl: scl }
       params: { lux: "${lux}" }
+    - id: display
+      type: script
+      script: ../parts/epd_zsszkthl.lua
+      pins: { sck: sck, data: data, cs: cs }
     - { id: key, type: button, pins: { out: button } }
