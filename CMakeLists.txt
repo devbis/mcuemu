@@ -707,6 +707,26 @@ if(MCUEMU_BUILD_TESTS)
                     LABELS "firmware"
                 )
             endif()
+            foreach(joiner efr32:efr32-zephyr-ed esp32h2:esp32h2-sensor)
+                string(REPLACE ":" ";" joiner_parts "${joiner}")
+                list(GET joiner_parts 0 joiner_kind)
+                list(GET joiner_parts 1 joiner_image)
+                if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/firmware/${joiner_image}.bin")
+                    # The NCP forms a network (EZSP host in scripts/ncp_host.py) and a device of another family joins.
+                    add_test(
+                        NAME firmware_efr32mg21_ncp_join_${joiner_kind}
+                        COMMAND "${Python3_EXECUTABLE}"
+                                "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_efr32mg21_ncp_join.py"
+                                "$<TARGET_FILE:mcuemu>"
+                                "${CMAKE_CURRENT_SOURCE_DIR}/firmware/zbdonglee-ncp.bin"
+                                "${CMAKE_CURRENT_SOURCE_DIR}/firmware/${joiner_image}.bin"
+                                ${joiner_kind})
+                    set_tests_properties(firmware_efr32mg21_ncp_join_${joiner_kind} PROPERTIES
+                        TIMEOUT 600
+                        LABELS "firmware;zigbee"
+                    )
+                endif()
+            endforeach()
         endif()
     endif()
 

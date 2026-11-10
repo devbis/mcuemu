@@ -158,6 +158,11 @@ With that fixed the zigbee-rs sensor (`efr32mg21-sensor.bin`) joins the NCP's ne
 `trustCenterJoinHandler` (the standard secured join, about 10.7 s), `childJoinHandler` and the ZDO Device_annce as an
 `incomingMessageHandler` (about 12.7 s). `MCUEMU_EFR32_TRACE=FILE` logs a sim chip's MMIO.
 
+Tests: `firmware_efr32mg21_ncp_join_efr32` (Zephyr ED on an EFR32MG21) and `firmware_efr32mg21_ncp_join_esp32h2` (zigbee-rs sensor on an
+ESP32-H2, which also covers a RISC-V and an ARM engine in one process) run `ncp_host.py` for 26 s and expect `trustCenterJoinHandler`.
+Some devices need luck with the NCP's random beacon-response delay (7..190 ms): the TLSR8258 plug scans 71 ms per channel,
+once, and only joined with a later start (`start_at: 13s`); the Z03MMC scans at power-up and again after 60 s.
+
 Not yet tried: `joinNetwork` (the NCP as a joiner). From the image, the UART is USART0 with routes
 written as TX = PB1, RX = PB0 (decoded with the alphabetical Series 2 `USARTROUTE` layout: CS, CTS, RTS, RX, SCLK, TX; not
 confirmed against a schematic).
