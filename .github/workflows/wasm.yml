@@ -52,10 +52,25 @@ jobs:
           ninja --version
 
       - name: Configure WebAssembly target
-        run: >-
-          emcmake cmake -S . -B build-wasm -G Ninja
-          -DCMAKE_BUILD_TYPE=Release
-          -DMCUEMU_BUILD_WASM=ON
+        run: |
+          if emcmake cmake -S . -B build-wasm -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DMCUEMU_BUILD_WASM=ON; then
+            exit 0
+          fi
+
+          echo "::group::Configure diagnostics"
+          if [ -f build-wasm/config.log ]; then
+            echo "--- Unicorn QEMU configure log: build-wasm/config.log ---"
+            cat build-wasm/config.log
+          else
+            echo "No build-wasm/config.log found; discovered logs:"
+            find build-wasm -type f \
+              \( -name config.log -o -name CMakeError.log -o -name CMakeConfigureLog.yaml \) \
+              -print -exec cat {} \;
+          fi
+          echo "::endgroup::"
+          exit 1
 
       - name: Build WebAssembly target
         run: cmake --build build-wasm --target mcuemu-wasm --parallel
