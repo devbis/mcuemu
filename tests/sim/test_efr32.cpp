@@ -69,13 +69,15 @@ void test_efr32_pads_follow_nets() {
 // I2C0 as a master on a routed pad pair, with the CHT8305 Lua part on the nets: the emlib sequence for a register
 // read (address + pointer write, repeated START, address + read, two bytes, NACK, STOP).
 void test_efr32_i2c_master_reads_cht8305() {
-    const auto system = build("", std::string(R"(    nets:
-      - { id: scl, kind: open_drain, pull: up, pins: [m.PC1] }
-      - { id: sda, kind: open_drain, pull: up, pins: [m.PC2] }
-    parts:
-      - { id: sensor, type: script, script: )") + MCUEMU_SOURCE_DIR + R"(/examples/parts/cht8305.lua, pins: { sda: sda, scl: scl },
-          params: { temperature_c: 25, humidity: 50 } }
-)");
+    const std::string parts = std::string(MCUEMU_SOURCE_DIR) + "/examples/parts/";
+    const auto system = build("", "    nets:\n"
+                                  "      - { id: scl, kind: open_drain, pull: up, pins: [m.PC1] }\n"
+                                  "      - { id: sda, kind: open_drain, pull: up, pins: [m.PC2] }\n"
+                                  "    parts:\n"
+                                  "      - { id: sensor, type: script, script: " + parts + "cht8305.lua, pins: { sda: sda, scl: scl },\n"
+                                  "          params: { temperature_c: 25, humidity: 50 } }\n"
+                                  "      - { id: light, type: script, script: " + parts + "opt3001.lua, pins: { sda: sda, scl: scl },\n"
+                                  "          params: { lux: 320 } }\n");
     sim::World &world = system->world();
     auto &mcu = static_cast<sim::Efr32mg21Mcu &>(world.mcu("d.m"));
     auto &chip = mcu.chip();
@@ -120,6 +122,28 @@ void test_efr32_i2c_master_reads_cht8305() {
     chip.write(I2c + 0x0C, (1u << 3) | (1u << 1), 4); // NACK, STOP
     CHECK(wait_for(Stop));
     CHECK(((high << 8) | low) == 0x64D8); // (25 + 40) / 165 * 65536 with the low two bits clear
+    // The OPT3001 light sensor next to it on the same bus: manufacturer id, then the result for 320 lux (E = 3, M = 4000).
+    clear(0x1FF);
+    chip.write(I2c + 0x34, 0x44u << 1, 4);
+    chip.write(I2c + 0x0C, 1, 4);
+    CHECK(wait_for(Ack | Nack));
+    CHECK((chip.read(I2c + 0x3C, 4) & Ack) != 0);
+    clear(Ack);
+    chip.write(I2c + 0x34, 0x7E, 4);
+    CHECK(wait_for(Ack | Nack));
+    clear(Ack);
+    chip.write(I2c + 0x34, (0x44u << 1) | 1u, 4);
+    chip.write(I2c + 0x0C, 1, 4);
+    CHECK(wait_for(Ack | Nack));
+    clear(Ack);
+    CHECK(wait_for(Rx));
+    const std::uint32_t id_high = chip.read(I2c + 0x24, 4);
+    chip.write(I2c + 0x0C, 1u << 2, 4);
+    CHECK(wait_for(Rx));
+    const std::uint32_t id_low = chip.read(I2c + 0x24, 4);
+    chip.write(I2c + 0x0C, (1u << 3) | (1u << 1), 4);
+    CHECK(wait_for(Stop));
+    CHECK(((id_high << 8) | id_low) == 0x5449);
     // A device that is not there is NACKed.
     clear(0x1FF);
     chip.write(I2c + 0x34, 0x55u << 1, 4);

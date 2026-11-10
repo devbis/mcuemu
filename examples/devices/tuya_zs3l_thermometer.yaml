@@ -1,0 +1,50 @@
+# Tuya ZS3L (EFR32MG21) e-ink thermometer ZSS-ZK-THL / TS0222 (pvvx's full-flash dump): a CHT8305 temperature/humidity sensor
+# and an OPT3001 light sensor on one bit-banged I2C bus, a pairing button, an e-ink display on other pads (not modelled).
+#
+#   mcu.PA0 <-> SDA   mcu.PA3 -> SCL   (found from the firmware's GPIO traffic and the addresses it probes: 0x40, 0x44)
+#   mcu.PB0 <- button (EXTI0, falling edge; a long press starts pairing in the factory-new state)
+#
+# The firmware is a local image: put the dump in firmware/ (the bootloader piece is the first 0x4000 bytes, the application
+# slot starts at 0x4000). `mcuemu sim` joins an NCP network when an NVM3-erased dump is used, see docs/efr32mg21.md.
+version: 1
+
+params:
+  firmware: ../../firmware/tuya-zs3l-thermometer.bin
+  air: air0
+  position: [0, 0, 0]
+  tx_power_dbm: 0
+  eui64: 0x84fd27fffe123456
+  temperature_c: 22.5
+  humidity: 45
+  lux: 120
+
+device:
+  id: thermometer
+  mcus:
+    - id: mcu
+      model: efr32mg21
+      eui64: "${eui64}"
+      firmware:
+        - { file: "${firmware}", offset: 0, size: 0x4000 }
+        - { file: "${firmware}", offset: 0x4000, from: 0x4000 }
+      radio:
+        air: "${air}"
+        position: "${position}"
+        tx_power_dbm: "${tx_power_dbm}"
+        protocols: [zigbee]
+  nets:
+    - { id: sda, pull: up, pins: ["mcu.PA0"] }
+    - { id: scl, pull: up, pins: ["mcu.PA3"] }
+    - { id: button, pull: up, pins: ["mcu.PB0"] }
+  parts:
+    - id: sensor
+      type: script
+      script: ../parts/cht8305.lua
+      pins: { sda: sda, scl: scl }
+      params: { temperature_c: "${temperature_c}", humidity: "${humidity}" }
+    - id: light
+      type: script
+      script: ../parts/opt3001.lua
+      pins: { sda: sda, scl: scl }
+      params: { lux: "${lux}" }
+    - { id: key, type: button, pins: { out: button } }

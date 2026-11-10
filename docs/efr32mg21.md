@@ -166,6 +166,14 @@ once, and only joined with a later start (`start_at: 13s`); the Z03MMC scans at 
 
 ### Tuya ZS3L thermometer (ZSS-ZK-THL, TS0222), status
 
+Sensors (Moes ZSS-ZK-THL "Smart Brightness Thermometer", TS0222): the firmware reads them at boot even without a network, over a
+bit-banged I2C bus on **PA0 (SDA) and PA3 (SCL)** (SDA is released by switching PA0 between push-pull low and input; found
+from the GPIO mode and DOUT traffic, then confirmed by the addresses it probes). A spy slave saw two devices: **0x40**, the
+CHT8305 (`examples/parts/cht8305.lua`), and **0x44**, an OPT3001 light sensor (`examples/parts/opt3001.lua`: it reads register
+0x7E, the manufacturer id, writes the limits 0x03 and 0x02 and the configuration 0xCE11, then reads the result). Both Lua parts
+count `reads` / `writes` endpoints. The battery is measured with IADC0 SINGLE = SUPPLY (`0x1001`). Other pads (PD0, PC1/PC2, PB1,
+PA5) belong to the e-ink display (not modelled). `examples/devices/tuya_zs3l_thermometer.yaml` wires all of this.
+
 The full-flash dump of pvvx's ZSS-ZK-THL page (Gecko bootloader at 0, app at `0x4000`, NVM3 at `0xB6000..0xBFFFF`) runs
 (`firmware: [{file: dump.bin, offset: 0, size: 0x4000}, {file: dump.bin, offset: 0x4000, from: 0x4000}]`) but does **not**
 join the NCP's network yet. What it needed in the model: the `0x4A000000` low-energy window (WDOG, I2C0, ACMP, LETIMER as
