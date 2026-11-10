@@ -289,7 +289,14 @@ void Efr32mg21::tx_store(std::uint8_t byte) {
 // The RF channel is the SYNTH channel field (0xB8018044), 11..26 for 802.15.4.
 std::uint8_t Efr32mg21::rail_channel() const {
     const std::uint32_t synth_channel = rail_regs_->peek(SynthChannel);
-    return static_cast<std::uint8_t>(synth_channel >= 11 && synth_channel <= 26 ? synth_channel : 11);
+    if (synth_channel >= 11 && synth_channel <= 26)
+        return static_cast<std::uint8_t>(synth_channel);
+    // INFERRED from the Tuya ZS3L image, which leaves the channel field 0 and writes the carrier as a word at
+    // 0xA8018034: 0x1F50AAA for channel 11 and 0x10AAA (5 MHz) more per channel (14 is 0x1F82AAA, 25 is 0x203A000).
+    const std::uint32_t carrier = rail_regs_->peek(SynthCarrier);
+    if (carrier >= 0x1F50AAAu - 0x8555u && carrier <= 0x203A000u + 0x8555u)
+        return static_cast<std::uint8_t>(11 + (carrier - (0x1F50AAAu - 0x8555u)) / 0x10AAAu);
+    return 11;
 }
 
 // RAIL's RX context (the BUF2 descriptor ring state) is a RAM structure whose address differs

@@ -174,14 +174,22 @@ falling edge, found from its GPIO set-up) wakes it, and a long press starts the 
 RX window (RAC CMD `0x20`/`0x100`, PROTIMER) but never writes RAC CMD.TXEN, so no frame reaches the air. I2C0 is not touched in
 the first 45 s, so the CHT8305 is not what blocks it.
 
-The wake cycle hops SYNTH (`0xA8018034`) every ~0.5 s over 14, 15, 19, 20, 24 and 25 (the word step 0x10AAB is 5 MHz; the
-first word `0x1F50AAA` is channel 11 and is written between hops), which matches the default Silicon Labs network-steering
-primary mask 11/14/15/19/20/24/25, so this is a scan. It never reads AGC RSSI (not an energy scan), never writes BUFC
-`WRITE_DATA` (`0x44004020`), never sets RAC CMD.TXEN, never programs the PROTIMER LBT registers (`+0x40..+0x54`) and no frame
-ever appears in the buffer RAM BUFC points at (`0x2000C3FA`, checked every millisecond for a hop): the radio only listens
-(`BUFC+0x28` byte count 0 each hop). So the transmit path of the model is not what blocks it: the stack never asks for a
-transmit. A theory that the transmit goes through the sequencer mailbox (`SEQRAM+0x1E74`) did not hold up. Open: why the
-beacon request is not issued (an RAIL error that the stack swallows, or a state the stack waits for before sending).
+What the long press starts is an active scan: the application calls the stack's scan start (`0x2CECC`: type 1, one channel
+bit per call, duration 3) for 14, 15, 19, 20, 24 and 25 (channel 11 is the idle channel between them), and the stack's RAIL
+layer sends a beacon request through `0x31B8C` -> `0x35088` (the RAIL transmit start). It failed with EmberStatus 0x8C
+(PHY_TX_BUSY, three retries per channel, then the next channel) because the start peeks byte 3/4 of the frame in BUF0 with
+`BUFC BUF0 STATUS` (+0x28, bits 12:0) as the length check, and the model did not derive that count from
+WRITEOFFSET - READOFFSET (now it does). This image also leaves the SYNTH channel field (`0xA8018044`) at 0 and sets the carrier
+as a word at `0xA8018034` (channel 11 = `0x1F50AAA`, +`0x10AAA` per channel), which `rail_channel()` now follows. With both,
+the beacon request reaches the air and a NCP on the same channel answers it with a beacon (checked with `--channel 24`).
+
+Open: the device does not use that beacon. The frame is not delivered to it because `rx_context()` looks for a RAIL RX
+structure in RAM that holds the BUF2/BUF1/BUF0 buffer addresses in three consecutive words; this older RAIL has no such
+structure (the addresses are only in the BUFC registers: BUF0 `0x2000C3FA` ctrl 2, BUF1 `0x2000D204` ctrl 3, BUF2 `0x20006A80`
+ctrl 1, BUF3 `0x20006546` ctrl 7). The shared RAIL interrupt handler is `0x3994C` (vectors 32, 33, 34, 36, 38 and the stubs
+all branch there; the vector table is in RAM at VTOR `0x4200`). Afterwards the scan state stays at 1 (`0x20006704`) and the main
+loop never sleeps, so the scan's end is never reached. Next: find how this RAIL reads a received frame (the BUF1/BUF2 handling
+in that handler) and deliver frames in that form.
 
 Not yet tried: `joinNetwork` (the NCP as a joiner). From the image, the UART is USART0 with routes
 written as TX = PB1, RX = PB0 (decoded with the alphabetical Series 2 `USARTROUTE` layout: CS, CTS, RTS, RX, SCLK, TX; not

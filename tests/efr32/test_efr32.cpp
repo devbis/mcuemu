@@ -347,6 +347,14 @@ void test_efr32_rail_registers() {
     CHECK((c.r(ProtimerStatus) & 1) == 1);
     c.w(ProtimerCmd, 4);
     CHECK((c.r(ProtimerStatus) & 1) == 0);
+    // BUFC BUF0 STATUS (+0x28) counts the bytes between READOFFSET and WRITEOFFSET.
+    CHECK((c.r(0x44004028) & 0x1fff) == 0);
+    c.w(0x44004010, 9);
+    CHECK((c.r(0x44004028) & 0x1fff) == 9);
+    c.w(0x44004014, 4);
+    CHECK((c.r(0x44004028) & 0x1fff) == 5);
+    // An unwritten synthesizer divider word reads as 1 (the Tuya image asserts on 0).
+    CHECK(c.r(0xA801803C) == 1);
 }
 
 // A transmit takes the frame from the BUF0 buffer RAM on RAC CMD.TXEN, puts it on the air

@@ -363,6 +363,17 @@ std::uint32_t RailRegs::read(std::uint32_t address) {
     std::uint32_t value = it != words_.end() ? it->second : 0;
     if (address == SeqStatus)
         value |= SeqReadyBits;
+    // BUFC BUF0 STATUS (+0x28): the byte count in bits 12:0, WRITEOFFSET - READOFFSET. INFERRED from the
+    // Tuya ZS3L image, whose RAIL peeks byte 3 or 4 of the TX frame in BUF0 before it starts a transmit and
+    // fails with EMBER_PHY_TX_BUSY (0x8C) when the count is zero: the frame is copied into the buffer RAM and
+    // WRITEOFFSET set to its length, so the count has to follow the offsets.
+    if (address == rail::Buf0Status && it == words_.end()) {
+        const auto count = [&](std::uint32_t reg) {
+            const auto word = words_.find(reg);
+            return word != words_.end() ? word->second : 0u;
+        };
+        value = (count(rail::Buf0WriteOffset) - count(rail::Buf0ReadOffset)) & 0x1fffu;
+    }
     // INFERRED: a Tuya EFR32MG21 image (ZS3L thermometer) reads 0xA801803C before the radio configuration
     // table is applied and multiplies its three 3-bit fields (the synthesizer divider); a product of zero
     // makes it assert (udf at 0xef3c). The NCP writes 1 to this word, so an unwritten word reads as 1.

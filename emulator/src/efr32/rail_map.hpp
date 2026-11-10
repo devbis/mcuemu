@@ -11,6 +11,7 @@ namespace efr32emu::rail {
 constexpr std::uint32_t BufcBase = 0x44004000u;
 constexpr std::uint32_t Buf0Addr = BufcBase + 0x00C, Buf0WriteOffset = BufcBase + 0x010,
                         Buf0WriteData = BufcBase + 0x020, Buf0Cmd = BufcBase + 0x030;
+constexpr std::uint32_t Buf0ReadOffset = BufcBase + 0x014, Buf0Status = BufcBase + 0x028;
 constexpr std::uint32_t Buf2Addr = BufcBase + 0x06C;
 constexpr std::uint32_t Buf1Addr = BufcBase + 0x03C, Buf1WriteOffset = BufcBase + 0x040,
                         Buf1ReadOffset = BufcBase + 0x044;
@@ -32,6 +33,7 @@ constexpr std::uint32_t FrcIf = 0xA8004068u, FrcIen = 0xA800406Cu;
 
 // SYNTH channel number.
 constexpr std::uint32_t SynthChannel = 0xA8018044u;
+constexpr std::uint32_t SynthCarrier = 0xA8018034u;
 
 // PROTIMER (image layout).
 constexpr std::uint32_t ProtimerBase = 0xA801C000u;
