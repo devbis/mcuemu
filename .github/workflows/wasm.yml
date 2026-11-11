@@ -24,10 +24,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout mcuemu
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Checkout Unicorn fork
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.UNICORN_REPOSITORY }}
           path: engine/unicorn

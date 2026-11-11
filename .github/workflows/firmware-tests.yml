@@ -98,7 +98,7 @@ jobs:
           - { app: sampleGW,    image: telink-gw }
           - { app: sampleLight, image: telink-light }
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
@@ -155,14 +155,14 @@ jobs:
     needs: prepare
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           repository: ${{ env.PLUGS_REPOSITORY }}
           path: plugs
           persist-credentials: false
       - name: Cache the tc32 Rust toolchain archive
         id: cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/tc32-rust-archive
           key: tc32-rust-archive-${{ env.TC32_RUST_SHA256 }}
@@ -205,7 +205,7 @@ jobs:
           - { variant: default, features: "",             image: nrf52840-sensor }
           - { variant: sht31,   features: "sensor-sht31", image: nrf52840-sensor-sht31 }
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           repository: ${{ env.ZIGBEE_RS_REPOSITORY }}
           ref: ${{ env.ZIGBEE_RS_REF }}
@@ -249,7 +249,7 @@ jobs:
           - { chip: esp32h2, image: esp32h2-sensor }
           - { chip: esp32c6, image: esp32c6-sensor }
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           repository: ${{ env.ZIGBEE_RS_REPOSITORY }}
           ref: ${{ env.ZIGBEE_RS_REF }}
@@ -293,7 +293,7 @@ jobs:
     needs: prepare
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           repository: ${{ env.ZIGBEE_RS_REPOSITORY }}
           ref: ${{ env.ZIGBEE_RS_REF }}
@@ -353,7 +353,7 @@ jobs:
     needs: prepare
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
@@ -530,19 +530,19 @@ jobs:
           - name: vendor-sleep-1s
             command: python3 tests/firmware/test_vendor_sleep_1s.py "$MCUEMU" tests/firmware-images/vendor_sleep_1s.bin
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
       - name: Get the emulator build
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: mcuemu-linux-amd64
           path: dl
           run-id: ${{ needs.prepare.outputs.run_id }}
           github-token: ${{ github.token }}
       - name: Get the images
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: fw-*
           merge-multiple: true
