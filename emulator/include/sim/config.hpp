@@ -126,6 +126,8 @@ struct McuConfig {
     // Every image to load; `firmware: path` gives one image at offset 0, a
     // list of {file, offset} places several (bootloader + application).
     std::vector<FirmwareImage> images;
+    // stm32wb55: independent Cortex-M0+ image(s) for CPU2.
+    std::vector<FirmwareImage> cpu2_images;
     std::optional<std::uint32_t> clock_hz;
     std::optional<std::uint64_t> eui64; // efr32mg21: the EUI-64 of the device information page (default 0x0123456789ABCDEF)
     std::optional<std::uint32_t> supply_mv; // supply voltage (default 3300)

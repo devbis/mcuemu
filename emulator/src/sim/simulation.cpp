@@ -96,6 +96,8 @@ void Simulation::check_config(const SystemConfig &config) const {
         for (const McuConfig &mcu : device.mcus) {
             for (const FirmwareImage &image : mcu.images)
                 (void)confine_path(image.file);
+            for (const FirmwareImage &image : mcu.cpu2_images)
+                (void)confine_path(image.file);
             if (mcu.efuse)
                 (void)confine_path(*mcu.efuse);
             if (mcu.rom)

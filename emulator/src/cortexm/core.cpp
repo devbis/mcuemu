@@ -55,6 +55,7 @@ struct Core::Region {
     std::uint32_t size;
     bool writable;
     std::vector<std::uint8_t> storage;
+    std::uint8_t *data{};
 };
 
 enum class Cause { None, Deadline, StepLimit, Hint, Halted, Reset, CodeInvalidation, ExceptionBoundary };
@@ -160,7 +161,7 @@ struct Core::Impl final : Bus {
             const uc_prot perms = region->writable
                                       ? static_cast<uc_prot>(UC_PROT_READ | UC_PROT_WRITE | UC_PROT_EXEC)
                                       : static_cast<uc_prot>(UC_PROT_READ | UC_PROT_EXEC);
-            check(uc_mem_map_ptr(uc, region->base, region->size, perms, region->storage.data()),
+            check(uc_mem_map_ptr(uc, region->base, region->size, perms, region->data),
                   "map memory");
         }
         for (auto &user : mmio_users)
@@ -462,9 +463,22 @@ std::uint8_t *Core::map_memory(std::uint32_t base, std::uint32_t size, bool writ
     region->writable = writable;
     // Erased flash reads 0xFF; RAM comes up zeroed (real SRAM is undefined).
     region->storage.assign(size, writable ? 0x00 : 0xff);
-    std::uint8_t *data = region->storage.data();
+    region->data = region->storage.data();
+    std::uint8_t *data = region->data;
     impl_->regions.push_back(std::move(region));
     return data;
+}
+
+void Core::map_memory_alias(std::uint32_t base, std::uint32_t size, bool writable,
+                            std::uint8_t *storage) {
+    if (!storage)
+        throw std::invalid_argument("cannot map a null memory alias");
+    auto region = std::make_unique<Region>();
+    region->base = base;
+    region->size = size;
+    region->writable = writable;
+    region->data = storage;
+    impl_->regions.push_back(std::move(region));
 }
 
 void Core::map_mmio(std::uint32_t base, std::uint32_t size, Bus &bus) {
@@ -486,7 +500,7 @@ std::uint8_t *Core::host_pointer(std::uint32_t address, std::size_t length) {
         if (address >= region->base &&
             static_cast<std::uint64_t>(address) + length <=
                 static_cast<std::uint64_t>(region->base) + region->size)
-            return region->storage.data() + (address - region->base);
+            return region->data + (address - region->base);
     }
     return nullptr;
 }

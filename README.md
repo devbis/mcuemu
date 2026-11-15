@@ -25,6 +25,7 @@ radio medium in YAML, and mcuemu runs them on one virtual timeline.
 | TI CC2530F256 | MCS-51 | CPU, FMAP code banks, XBANK/XMAP, SRAM aliases, MPAGE, dual DPTR, interrupt controller (priorities, nesting), PM0-PM3, resets; I/O ports, Timers 1-4, sleep timer, watchdog, DMA, flash controller, AES, ADC/RNG/op-amp/comparator, USART UART/SPI, 802.15.4 radio, two-wire debug interface (DBGLOCK, programming through it); Table 2-3 best-case timing, not cycle accurate |
 | Silicon Labs EFR32MG21 (BRD4181A) | Cortex-M33 | NVIC, SysTick, FPU, WFE; CMU/HFXO, GPIO/EXTI, MSC; a radio with the interface of the zigbee-rs driver (not the silicon's); the zigbee-rs sensor image joins a TLSR8258 coordinator |
 | Nordic nRF52840 (Pro Micro / nice!nano board) | Cortex-M4F | NVIC, SysTick, FPU, WFE; clocks, GPIO/GPIOTE, UARTE, TWIM, SAADC, TIMER, RTC, RNG, ECB, WDT, NVMC, PPI; 802.15.4 RADIO; the Embassy Zigbee sensor image joins a TLSR8258 coordinator; no BLE yet |
+| STM32WB55 | Cortex-M4F + Cortex-M0+ | Experimental dual-core execution with shared flash/SRAM and separately loaded CPU2 image; wireless PHY/radio not modeled yet |
 | PHY6252 (Ai-Thinker PB-03F) | Cortex-M0 | Experimental 512 KiB flash model, polling UART, GPIO, timers, AON and inferred 802.15.4 path; the Zephyr ED joins a TLSR8258 coordinator and exchanges NWK data in `sim`; the closed TS0001 relay firmware joins the TLSR8258 sample coordinator and exchanges NWK data |
 
 Support is partial and driven by the firmware tested so far. See
@@ -41,7 +42,8 @@ Support is partial and driven by the firmware tested so far. See
   [`docs/mcs51.md`](docs/mcs51.md),
   [`docs/cc2530.md`](docs/cc2530.md),
   [`docs/nrf52840.md`](docs/nrf52840.md) (Cortex-M core, peripherals, status),
-  [`docs/efr32mg21.md`](docs/efr32mg21.md) (Cortex-M33, what is and is not the silicon) —
+  [`docs/efr32mg21.md`](docs/efr32mg21.md) (Cortex-M33, what is and is not the silicon),
+  [`docs/stm32wb55.md`](docs/stm32wb55.md) (dual-core execution and current peripheral coverage) —
   chip models.
 - [`docs/phy6252-investigation.md`](docs/phy6252-investigation.md) — experimental PHY6252 boot, ROM, radio and firmware evidence.
 - [`examples/`](examples/) — ready-made systems (`mcuemu sim examples/world.yaml`).

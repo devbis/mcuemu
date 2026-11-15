@@ -80,7 +80,7 @@ if(MCUEMU_BUILD_WASM)
     set_target_properties(mcuemu-wasm PROPERTIES SUFFIX ".mjs")
 elseif(NOT EMSCRIPTEN)
     add_executable(mcuemu emulator/src/main.cpp)
-    target_link_libraries(mcuemu PRIVATE mcuemu-core mcs51emu nrf52emu efr32emu esp32emu phy6252emu simcore)
+    target_link_libraries(mcuemu PRIVATE mcuemu-core mcs51emu nrf52emu efr32emu esp32emu phy6252emu stm32wb55emu simcore)
 endif()
 
 add_library(mcs51emu
@@ -110,6 +110,11 @@ add_library(cortexm emulator/src/cortexm/core.cpp)
 target_include_directories(cortexm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(cortexm PRIVATE ${MCUEMU_WARNING_FLAGS})
 target_link_libraries(cortexm PUBLIC unicorn)
+
+add_library(stm32wb55emu emulator/src/stm32wb55/stm32wb55.cpp)
+target_include_directories(stm32wb55emu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
+target_compile_options(stm32wb55emu PRIVATE ${MCUEMU_WARNING_FLAGS})
+target_link_libraries(stm32wb55emu PUBLIC cortexm mcuemu-core)
 
 add_library(phy6252emu emulator/src/phy6252/image.cpp emulator/src/phy6252/phy6252.cpp emulator/src/phy6252/run_command.cpp)
 target_include_directories(phy6252emu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
@@ -257,13 +262,14 @@ add_library(simcore
     emulator/src/sim/cc2530f256_mcu.cpp
     emulator/src/sim/nrf52840_mcu.cpp
     emulator/src/sim/efr32mg21_mcu.cpp
+    emulator/src/sim/stm32wb55_mcu.cpp
     emulator/src/sim/esp32_mcu.cpp
     emulator/src/sim/bl702_mcu.cpp
     emulator/src/sim/phy6252_mcu.cpp
 )
 target_include_directories(simcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(simcore PRIVATE ${MCUEMU_WARNING_FLAGS})
-target_link_libraries(simcore PUBLIC mcuemu-core mcs51emu nrf52emu efr32emu esp32emu bl702emu phy6252emu ${MCUEMU_YAML_TARGET} lua54
+target_link_libraries(simcore PUBLIC mcuemu-core mcs51emu nrf52emu efr32emu esp32emu bl702emu phy6252emu stm32wb55emu ${MCUEMU_YAML_TARGET} lua54
     nlohmann_json::nlohmann_json)
 if(WIN32)
     target_link_libraries(simcore PUBLIC ws2_32)

@@ -1,0 +1,37 @@
+# Zephyr's weact_stm32wb55_core Zigbee end device.
+# Build the Zephyr checkout with CONFIG_ZIGBEE_ED=y and the sleepy_deep overlay,
+# then place zephyr/zephyr.bin at firmware/stm32wb55-zigbee-shell.bin. Without
+# cpu2_firmware, the built-in Thread RCP model runs in CPU2's M0 time domain.
+# See docs/stm32wb55.md to configure a separate raw CPU2 M0+ image.
+version: 1
+
+world:
+  seed: 1
+  duration: 24s
+  radio:
+    - id: air0
+      model: log_distance
+      reference_loss_db: 40
+      path_loss_exponent: 2.5
+
+devices:
+  - id: coordinator
+    mcus:
+      - id: zb
+        model: tlsr8258
+        variant: F1K
+        firmware: ../firmware/samplegw_tb03f.bin
+        radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 10, protocols: [zigbee] }
+
+  - id: wb55
+    mcus:
+      - id: main
+        model: stm32wb55
+        firmware:
+          - file: ../firmware/stm32wb55-zigbee-shell.bin
+            offset: 0x14000
+        eui64: 0x0211223344556677
+        radio: { air: air0, position: [2, 0, 1], tx_power_dbm: 8, protocols: [zigbee] }
+
+attach:
+  - { endpoint: air0, sink: "pcap:stm32wb55-air.pcap" }

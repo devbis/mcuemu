@@ -23,9 +23,11 @@ devices:
   - id: node               # letters, digits, '_' and '-'
     mcus:
       - id: main
-        model: tlsr8258    # tlsr8258 | tlsr8269 | tlsr8267 | ca51f253l3 | cc2530f256 | nrf52840 | efr32mg21 | esp32c6 | bl702
+        model: tlsr8258    # tlsr8258 | tlsr8269 | tlsr8267 | ca51f253l3 | cc2530f256 | nrf52840 | efr32mg21 | esp32c6 | bl702 | phy6252 | stm32wb55
         variant: F1K       # tlsr8258 only: F512 (default) | F1K
         firmware: fw/a.bin # relative to this file; or a list of flash pieces, see below
+        cpu2_firmware:     # stm32wb55 only: separate Cortex-M0+ image, same image-piece syntax
+          - { file: fw/cpu2.bin, offset: 0xC0000 }
         efuse: data/chip.efuse # phy6252 only: optional 32-byte external eFuse dump
         rom: data/phy6252-rom.bin # phy6252 only: optional 96 KiB ROM or 128 KiB dump
         clock_hz: 48MHz    # 48000000 | 48MHz | 32kHz
@@ -95,6 +97,14 @@ firmware:
 file where it starts (default 0) and `size` its length (default: the rest of
 the file); numbers may be decimal or `0x` hex. Only `tlsr8258` accepts more
 than a single image at offset 0.
+
+`stm32wb55` accepts a separate `cpu2_firmware:` image (or list of image
+pieces), loaded into the same flash address space as CPU1. CPU2 starts when
+CPU1 sets C2BOOT. The image must be a raw executable linked for the selected
+flash offset; encrypted STM32 wireless-stack packages are not decoded by the
+emulator. When no CPU2 image is configured, CPU2 execution is skipped and a
+host-side Thread RCP compatibility model handles the IPCC commands instead.
+See [`stm32wb55.md`](stm32wb55.md) for the current CPU/peripheral coverage.
 
 For `phy6252`, `efuse:` optionally supplies a raw 32-byte external dump, four
 8-byte blocks in block-number order. The dump is kept outside the repository.
@@ -458,7 +468,9 @@ Zigbee RF path; `ble` on it is rejected (its BLE registers are not modeled),
 so BLE traffic comes from scripted parts, which can use the `radio` API in
 [scripting.md](scripting.md). `nrf52840`, `efr32mg21`, `esp32c6` and `bl702` connect an 802.15.4 radio (`zigbee`)
 and reject `ble`. `cc2530f256` connects its IEEE 802.15.4 radio (`zigbee`
-only, default 32 MHz clock). `ca51f253l3` has no radio. The experimental `phy6252` model
+only, default 32 MHz clock). `stm32wb55` connects the host-side Thread RCP
+compatibility radio only when `cpu2_firmware` is absent; with a CPU2 image, the
+wireless PHY is not yet modeled. `ca51f253l3` has no radio. The experimental `phy6252` model
 connects its Zephyr PB-03F 802.15.4 path to shared `zigbee` air; this PHY
 behavior is inferred from the Zephyr driver and is not hardware-verified.
 
@@ -470,7 +482,9 @@ behavior is inferred from the Zephyr driver and is not hardware-verified.
 - Pads: `tlsr8258` has `PA0`..`PE7`. `nrf52840` has `P0.00`..`P0.31` and
   `P1.00`..`P1.15`. `efr32mg21` has `PA0`..`PD15`. `esp32c6` has `GPIO0`..`GPIO30`, `esp32h2` `GPIO0`..`GPIO27` (plain GPIO and pull-ups; the GPIO matrix to other peripherals is not modelled). `phy6252` exposes `GPIO0`..`GPIO22` (plain GPIO, direction, pulls and basic interrupts; alternate pad functions are not modelled). `cc2530f256` has `P0.0`..`P0.7`, `P1.0`..`P1.7` and `P2.0`..`P2.4`, plus the input-only `RESET_N` (low holds the chip in reset, floating counts as high; not listed as a GPIO pad). Two falling edges on `P2.2` while `RESET_N` is low enter the debug interface: `P2.2` is then DC and `P2.1` DD, so another MCU or a script can program the chip over nets (see [cc2530.md](cc2530.md#debug-interface)). `ca51f253l3` has no GPIO model yet, so no pad can be wired.
 - UART: `uartN`. `tlsr8258` has `uart0`; `nrf52840` has `uart0`/`uart1` (UARTE0
-  and UARTE1); `efr32mg21` has none yet; `phy6252` has polling `uart0` without interrupts; `esp32c6`/`esp32h2` have `uart0` (the console, with a receive FIFO and interrupts); `ca51f253l3` has `uart0`/`uart1` (transmit only), so a link to
+  and UARTE1); `efr32mg21` has none yet; `phy6252` and `stm32wb55` have polling
+  `uart0` without interrupts; `esp32c6`/`esp32h2` have `uart0` (the console,
+  with a receive FIFO and interrupts); `ca51f253l3` has `uart0`/`uart1` (transmit only), so a link to
   it is one-way and reports a warning. `cc2530f256` has `uart0`/`uart1` (USART0
   and USART1 in UART mode), each with a frame endpoint `uartN.frames`.
 - Memory windows for `mem.read`/`mem.write`: `cc2530f256` maps its 8051

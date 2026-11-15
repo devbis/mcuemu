@@ -7,6 +7,7 @@
 #include "sim/esp32_mcu.hpp"
 #include "sim/nrf52840_mcu.hpp"
 #include "sim/phy6252_mcu.hpp"
+#include "sim/stm32wb55_mcu.hpp"
 #include "sim/tlsr8258_mcu.hpp"
 #include "sim/tlsr826x_mcu.hpp"
 
@@ -188,6 +189,20 @@ const McuRegistry &McuRegistry::builtin() {
             if (config.flash_timing)
                 throw std::invalid_argument("flash_timing is only modelled for tlsr8258");
             auto mcu = std::make_unique<Efr32mg21Mcu>(name);
+            if (config.eui64)
+                mcu->chip().set_device_id(*config.eui64);
+            return mcu;
+        });
+        r.add("stm32wb55", [](const McuConfig &config, const std::string &name) {
+            if (config.variant)
+                throw std::invalid_argument("stm32wb55 has no variants; remove 'variant'");
+            if (config.clock_hz)
+                throw std::invalid_argument("stm32wb55 runs at a fixed 64 MHz; remove 'clock_hz'");
+            if (config.supply_mv)
+                throw std::invalid_argument("stm32wb55 does not model its supply; remove 'supply_mv'");
+            if (config.flash_timing)
+                throw std::invalid_argument("flash_timing is only modelled for tlsr8258");
+            auto mcu = std::make_unique<Stm32wb55Mcu>(name);
             if (config.eui64)
                 mcu->chip().set_device_id(*config.eui64);
             return mcu;
@@ -505,6 +520,8 @@ std::unique_ptr<System> build_system(const SystemConfig &config,
                     phy6252->chip().set_random_seed(
                         phy6252_random_seed(config.seed, name));
                 mcu->load_images(mcu_config.images);
+                if (auto *stm32wb55 = dynamic_cast<Stm32wb55Mcu *>(mcu.get()))
+                    stm32wb55->load_cpu2_images(mcu_config.cpu2_images);
             } catch (const std::exception &error) {
                 fail_at(mcu_config.line, "mcu '" + name + "': " + error.what());
             }

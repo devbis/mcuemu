@@ -37,8 +37,8 @@ struct RunResult {
     std::string message;
 };
 
-// A Cortex-M3/M4 core on the Unicorn fork's ARM backend: memory map, the NVIC
-// and System Control Space (in the engine), SysTick and the DWT cycle counter
+// A Cortex-M core on the Unicorn fork's ARM backend: memory map, the NVIC and
+// System Control Space (in the engine), SysTick and the DWT cycle counter
 // (here), WFI/WFE, and the cycle clock that a chip model hangs its peripherals
 // on.
 //
@@ -65,6 +65,10 @@ public:
     // are refused when `writable` is false and reported to the write-protect
     // handler (flash).
     std::uint8_t *map_memory(std::uint32_t base, std::uint32_t size, bool writable);
+    // Maps caller-owned bytes for a second core that sees the same physical
+    // memory. The caller keeps the storage alive until this Core is destroyed.
+    void map_memory_alias(std::uint32_t base, std::uint32_t size, bool writable,
+                          std::uint8_t *storage);
     void map_mmio(std::uint32_t base, std::uint32_t size, Bus &bus);
     // Called for a CPU store to non-writable memory; returning true lets the
     // store complete (the chip decides what it means), false faults.

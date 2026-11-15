@@ -541,7 +541,7 @@ FlashConfig parse_flash(const YAML::Node &node, const std::string &base_dir) {
 McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
     require_map(node, "mcu");
     check_keys(node, "mcu",
-               {"id", "model", "variant", "firmware", "efuse", "rom", "boot_from_rom", "rf_calibration", "clock_hz", "supply_mv",
+               {"id", "model", "variant", "firmware", "cpu2_firmware", "efuse", "rom", "boot_from_rom", "rf_calibration", "clock_hz", "supply_mv",
                 "start_at", "radio", "rtt", "flash_timing", "eui64",
                 "tick_start_settle", "tick_start_jitter", "tick_start_seed", "debugger", "flash"});
     McuConfig mcu;
@@ -591,6 +591,44 @@ McuConfig parse_mcu(const YAML::Node &node, const std::string &base_dir) {
     } else {
         mcu.firmware = resolve(scalar(firmware, "'firmware'"));
         mcu.images.push_back({mcu.firmware, 0});
+    }
+    if (const YAML::Node cpu2_firmware = node["cpu2_firmware"]) {
+        if (mcu.model != "stm32wb55")
+            fail(cpu2_firmware, "'cpu2_firmware' is only supported by stm32wb55");
+        auto add_cpu2_image = [&](const YAML::Node &entry) {
+            FirmwareImage image;
+            if (entry.IsScalar()) {
+                image.file = resolve(scalar(entry, "cpu2_firmware"));
+            } else {
+                require_map(entry, "CPU2 firmware image");
+                check_keys(entry, "a CPU2 firmware image", {"file", "offset", "from", "size"});
+                image.file = resolve(required_string(entry, "file", "CPU2 firmware image"));
+                if (const YAML::Node offset = entry["offset"]) {
+                    const std::uint64_t value = config_integer(offset, "CPU2 image 'offset'");
+                    if (value > 0xffffffffull)
+                        fail(offset, "offset is out of range");
+                    image.offset = static_cast<std::uint32_t>(value);
+                }
+                for (const char *key : {"from", "size"}) {
+                    const YAML::Node field = entry[key];
+                    if (!field)
+                        continue;
+                    const std::uint64_t value = config_integer(field, std::string("'") + key + "'");
+                    if (value > 0xffffffffull)
+                        fail(field, std::string("'") + key + "' is out of range");
+                    (key[0] == 'f' ? image.skip : image.size) = static_cast<std::uint32_t>(value);
+                }
+            }
+            mcu.cpu2_images.push_back(std::move(image));
+        };
+        if (cpu2_firmware.IsSequence()) {
+            for (const YAML::Node &entry : cpu2_firmware)
+                add_cpu2_image(entry);
+        } else {
+            add_cpu2_image(cpu2_firmware);
+        }
+        if (mcu.cpu2_images.empty())
+            fail(cpu2_firmware, "'cpu2_firmware' lists no images");
     }
     if (const YAML::Node efuse = node["efuse"]) {
         if (mcu.model != "phy6252")
