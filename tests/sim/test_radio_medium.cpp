@@ -208,6 +208,41 @@ void test_air_shadowing_and_frequency_map() {
     CHECK(VirtualAir::frequency_mhz(RadioProtocol::Ble, 36) == 2478.0);
 }
 
+void test_air_ble_access_address_and_framing() {
+    VirtualAir air;
+    constexpr std::uint32_t conn_aa = 0x50123456u;
+    // Legacy BLE frames (no address given) are advertising-channel frames.
+    air.transmit("adv", "", RadioProtocol::Ble, 37, 0, {1, 2, 3});
+    // A connection frame carries a full LL PDU and its own address.
+    air.transmit("peer", "", RadioProtocol::Ble, 12, 0, {0x02, 0x01, 0xaa}, 0,
+                 {conn_aa, 0xabcdefu, true});
+    const auto end = airtime(RadioProtocol::Ble, 3);
+    CHECK(air.frames().size() == 2);
+    CHECK(air.frames()[0].ble.access_address == mcuemu::kBleAdvertisingAccessAddress);
+    CHECK(!air.frames()[0].ble.ll_framed);
+    CHECK(air.frames()[1].ble.crc_init == 0xabcdefu);
+    CHECK(air.frames()[1].ble.access_address == conn_aa && air.frames()[1].ble.ll_framed);
+    // Legacy: PDU body + 10 bytes; LL-framed: whole PDU + 8 bytes (1M PHY).
+    CHECK(air.frames()[0].end_ns - air.frames()[0].start_ns == end);
+    CHECK(air.frames()[1].end_ns - air.frames()[1].start_ns ==
+          VirtualAir::airtime_ns(RadioProtocol::Ble, 3, 0, true));
+    CHECK((air.frames()[1].end_ns - air.frames()[1].start_ns) / 1000 == (3 + 8) * 8);
+    // No filter hears every address (sniffer); a programmed address filters.
+    CHECK(air.receive("sniffer", RadioProtocol::Ble, 12, 1000000).size() == 1);
+    CHECK(air.receive("other", RadioProtocol::Ble, 12, 1000000, 0,
+                      mcuemu::kBleAdvertisingAccessAddress).empty());
+    CHECK(air.receive("central", RadioProtocol::Ble, 12, 1000000, 0, conn_aa).size() == 1);
+    CHECK(air.receive("scanner", RadioProtocol::Ble, 37, 1000000, 0,
+                      mcuemu::kBleAdvertisingAccessAddress).size() == 1);
+    CHECK(air.in_flight("central", RadioProtocol::Ble, 12, 1000, 0, conn_aa).size() == 1);
+    CHECK(air.in_flight("central", RadioProtocol::Ble, 12, 1000, 0,
+                        mcuemu::kBleAdvertisingAccessAddress).empty());
+    // Zigbee ignores the address filter.
+    VirtualAir zb;
+    zb.transmit("a", "", RadioProtocol::Zigbee802154, 15, 0, {1});
+    CHECK(zb.receive("b", RadioProtocol::Zigbee802154, 15, 10000000, 0, 0x1234u).size() == 1);
+}
+
 void test_radio_system_config() {
     auto build_yaml = [](const std::string &yaml) {
         return error_of([&] { sim::build_system(sim::parse_system_config(yaml)); });

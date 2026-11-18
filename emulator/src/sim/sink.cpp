@@ -1,4 +1,5 @@
 #include "sim/sink.hpp"
+#include "ble/ll.hpp"
 
 #include "sim/config.hpp"
 
@@ -215,14 +216,16 @@ public:
           alive_(std::make_shared<bool>(true)) {
         if (!out_)
             throw std::invalid_argument("cannot write '" + path + "'");
-        // LINKTYPE_IEEE802_15_4_NOFCS (230) or LINKTYPE_BLUETOOTH_LE_LL (251).
+        // LINKTYPE_IEEE802_15_4_NOFCS (230) or LINKTYPE_BLUETOOTH_LE_LL_WITH_PHDR
+        // (256): a 10-byte header (channel, powers, reference access address,
+        // flags), then access address, PDU and CRC.
         put32(0xa1b2c3d4u);
         put16(2);
         put16(4);
         put32(0);
         put32(0);
         put32(65535);
-        put32(protocol == mcuemu::RadioProtocol::Zigbee802154 ? 230u : 251u);
+        put32(protocol == mcuemu::RadioProtocol::Zigbee802154 ? 230u : 256u);
         out_.flush();
         auto alive = alive_;
         air.add_observer([this, alive](const mcuemu::RadioFrame &frame) {
@@ -242,9 +245,29 @@ private:
         if (frame.protocol != protocol_)
             return;
         std::vector<std::uint8_t> data;
-        if (protocol_ == mcuemu::RadioProtocol::Ble)
-            data = {0xd6, 0xbe, 0x89, 0x8e}; // advertising access address, LE
-        data.insert(data.end(), frame.payload.begin(), frame.payload.end());
+        if (protocol_ == mcuemu::RadioProtocol::Ble) {
+            const auto put_aa = [&](std::uint32_t aa) {
+                for (int shift = 0; shift < 32; shift += 8)
+                    data.push_back(static_cast<std::uint8_t>(aa >> shift));
+            };
+            // RF channel is the index 0..39; power fields are not valid, the
+            // access address offenses are 0 and the reference address is the
+            // frame's own. Flags: de-whitened, reference address valid and
+            // matching, CRC checked and valid (the CRC below is generated).
+            data.push_back(frame.channel);
+            data.push_back(0);
+            data.push_back(0);
+            data.push_back(0);
+            put_aa(frame.ble.access_address);
+            data.push_back(0xF1);
+            data.push_back(0x00);
+            put_aa(frame.ble.access_address);
+            data.insert(data.end(), frame.payload.begin(), frame.payload.end());
+            const auto crc = ble::crc24(frame.ble.crc_init, frame.payload);
+            data.insert(data.end(), crc.begin(), crc.end());
+        } else {
+            data.insert(data.end(), frame.payload.begin(), frame.payload.end());
+        }
         put32(static_cast<std::uint32_t>(frame.start_ns / 1000000000ull));
         put32(static_cast<std::uint32_t>(frame.start_ns % 1000000000ull / 1000));
         put32(static_cast<std::uint32_t>(data.size()));

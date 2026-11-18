@@ -382,7 +382,7 @@ use `stdout`, `text` or `hex`.
 | `file:PATH` | any | the same, into a file |
 | `tcp:PORT` or `tcp:HOST:PORT` | any; useful for uart/rtt | listens (default `127.0.0.1`; `tcp:0` picks a port); one client gets the events and what it sends is fed into the endpoint; a new connection replaces the old one; a client that does not read loses data |
 | `vcd:PATH` | `net` and numeric `param` | a waveform, written when the run ends; several endpoints can share one file |
-| `pcap:PATH[,ble]` | `radio` | a capture of Zigbee frames (IEEE 802.15.4 without FCS, link type 230) or BLE (link type 251, with the advertising access address in front of the payload); timestamps are virtual time |
+| `pcap:PATH[,ble]` | `radio` | a capture of Zigbee frames (IEEE 802.15.4 without FCS, link type 230) or BLE (link type 256, `LE_LL_WITH_PHDR`: channel, access address, the PDU and its CRC-24, de-whitened); timestamps are virtual time |
 
 UART frames (`cc2530f256`). `uartN.frames` is a frame view of the same UART
 for the 9th bit and line errors (see [cc2530.md](cc2530.md#usart-uart-errors)).

@@ -87,8 +87,8 @@ ctest --test-dir build --output-on-failure
   the nRF52840 peripherals), `riscvemu-tests`
   (the fork's RISC-V traps and interrupts), `esp32emu-tests` (the ESP32 models and the MAC/AES blocks),
   `efr32emu-tests`
-  (the EFR32MG21), `bl702emu-tests` (the BL702 model), `simcore-tests` (the whole system layer, about 9 s).
-  `ctest -E firmware` runs just those nine.
+  (the EFR32MG21), `bl702emu-tests` (the BL702 model), `bleemu-tests` (BLE link layer), `simcore-tests` (the whole system layer, about 9 s).
+  `ctest -E firmware` runs just those ten.
   The nrf52 test programs are assembly in `tests/nrf52/programs/*.s`; after
   editing one, run `tests/nrf52/programs/build.py` (needs `arm-none-eabi-as`) and
   commit the regenerated `tests/nrf52/programs.hpp`.

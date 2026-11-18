@@ -121,6 +121,11 @@ target_include_directories(phy6252emu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulato
 target_compile_options(phy6252emu PRIVATE ${MCUEMU_WARNING_FLAGS})
 target_link_libraries(phy6252emu PUBLIC cortexm mcuemu-core)
 
+# BLE link layer helpers (CRC, whitening, PDUs, channel selection); no dependencies.
+add_library(bleemu emulator/src/ble/ll.cpp)
+target_include_directories(bleemu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
+target_compile_options(bleemu PRIVATE ${MCUEMU_WARNING_FLAGS})
+
 # Generic RV32 hart on the fork's RISC-V backend (traps, host interrupt line, WFI, cycle clock).
 add_library(riscvcore emulator/src/riscv/core.cpp)
 target_include_directories(riscvcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
@@ -269,7 +274,7 @@ add_library(simcore
 )
 target_include_directories(simcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(simcore PRIVATE ${MCUEMU_WARNING_FLAGS})
-target_link_libraries(simcore PUBLIC mcuemu-core mcs51emu nrf52emu efr32emu esp32emu bl702emu phy6252emu stm32wb55emu ${MCUEMU_YAML_TARGET} lua54
+target_link_libraries(simcore PUBLIC bleemu mcuemu-core mcs51emu nrf52emu efr32emu esp32emu bl702emu phy6252emu stm32wb55emu ${MCUEMU_YAML_TARGET} lua54
     nlohmann_json::nlohmann_json)
 if(WIN32)
     target_link_libraries(simcore PUBLIC ws2_32)
@@ -372,6 +377,13 @@ if(MCUEMU_BUILD_TESTS)
     add_executable(simcore-tests
         tests/sim/test_sim.cpp
         tests/sim/test_config.cpp
+    add_executable(bleemu-tests
+        tests/ble/test_main.cpp
+        tests/ble/test_ll.cpp
+    )
+    target_link_libraries(bleemu-tests PRIVATE bleemu)
+    add_test(NAME bleemu-tests COMMAND bleemu-tests)
+
         tests/sim/test_parts.cpp
         tests/sim/test_periph.cpp
         tests/sim/test_lua.cpp

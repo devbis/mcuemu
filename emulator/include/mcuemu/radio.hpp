@@ -15,6 +15,24 @@ enum class RadioProtocol {
     Ble,
 };
 
+// Access address and CRC seed of every BLE advertising-channel packet (Core
+// spec Vol 6 Part B 2.1.2, 3.1.1). Frames that do not name others carry these.
+constexpr std::uint32_t kBleAdvertisingAccessAddress = 0x8E89BED6u;
+constexpr std::uint32_t kBleAdvertisingCrcInit = 0x555555u;
+
+// What a BLE frame says about its link. access_address is what a receiver
+// matches on (connections use their own); crc_init seeds the CRC the air
+// interface would append (only the pcap sink needs it, to write the CRC).
+// With ll_framed the payload is the complete link-layer PDU (2-byte header
+// included) and the air adds preamble, access address and CRC (8 bytes);
+// without it (the original behavior, Lua parts) the payload is the PDU body and
+// the 2-byte header counts as air overhead (10 bytes).
+struct BleLinkInfo {
+    std::uint32_t access_address{kBleAdvertisingAccessAddress};
+    std::uint32_t crc_init{kBleAdvertisingCrcInit};
+    bool ll_framed{false};
+};
+
 struct RadioFrame {
     std::uint64_t id{0};
     std::string source;
@@ -24,6 +42,7 @@ struct RadioFrame {
     std::uint64_t start_ns{0};
     std::uint64_t end_ns{0};
     std::vector<std::uint8_t> payload;
+    BleLinkInfo ble; // BLE only; ignored for other protocols.
     // Physical layer. tx_power_dbm is set from the sender's node settings;
     // rssi_dbm is filled in per receiver on the copies returned by receive().
     // The ideal model reports a fixed -50 dBm.
@@ -87,26 +106,28 @@ public:
     // Time on air of `payload_bytes` including protocol overhead.
     static std::uint64_t airtime_ns(RadioProtocol protocol,
                                     std::size_t payload_bytes,
-                                    std::uint32_t bit_rate = 0);
+                                    std::uint32_t bit_rate = 0,
+                                    bool ll_framed = false);
 
     std::uint64_t transmit(std::string source, std::string destination,
                            RadioProtocol protocol, std::uint8_t channel,
                            std::uint64_t start_ns,
                            std::vector<std::uint8_t> payload,
-                           std::uint32_t bit_rate = 0);
-    std::vector<RadioFrame> receive(const std::string &node,
-                                    RadioProtocol protocol,
-                                    std::uint8_t channel,
-                                    std::uint64_t at_ns,
-                                    std::uint64_t after_ns = 0);
+                           std::uint32_t bit_rate = 0,
+                           const BleLinkInfo &ble = {});
+    // `access_address` (BLE) restricts reception to frames with that address,
+    // like a radio programmed with one; unset hears every address (sniffers).
+    std::vector<RadioFrame> receive(
+        const std::string &node, RadioProtocol protocol, std::uint8_t channel,
+        std::uint64_t at_ns, std::uint64_t after_ns = 0,
+        std::optional<std::uint32_t> access_address = std::nullopt);
     // Frames of other nodes that are on the air at `at_ns` and have been for
     // `lead_ns` (a receiver can lock onto them), heard at their power only:
     // collisions are judged by receive() once the frame has ended.
-    std::vector<RadioFrame> in_flight(const std::string &node,
-                                      RadioProtocol protocol,
-                                      std::uint8_t channel,
-                                      std::uint64_t at_ns,
-                                      std::uint64_t lead_ns) const;
+    std::vector<RadioFrame> in_flight(
+        const std::string &node, RadioProtocol protocol, std::uint8_t channel,
+        std::uint64_t at_ns, std::uint64_t lead_ns,
+        std::optional<std::uint32_t> access_address = std::nullopt) const;
     const std::vector<RadioFrame> &frames() const noexcept { return frames_; }
     const std::vector<RadioReception> &receptions() const noexcept {
         return receptions_;
@@ -133,11 +154,12 @@ public:
     std::uint64_t transmit(std::string destination, RadioProtocol protocol,
                            std::uint8_t channel, std::uint64_t start_ns,
                            std::vector<std::uint8_t> payload,
-                           std::uint32_t bit_rate = 0);
-    std::vector<RadioFrame> receive(RadioProtocol protocol,
-                                    std::uint8_t channel,
-                                    std::uint64_t at_ns,
-                                    std::uint64_t after_ns = 0);
+                           std::uint32_t bit_rate = 0,
+                           const BleLinkInfo &ble = {});
+    std::vector<RadioFrame> receive(
+        RadioProtocol protocol, std::uint8_t channel, std::uint64_t at_ns,
+        std::uint64_t after_ns = 0,
+        std::optional<std::uint32_t> access_address = std::nullopt);
     const std::string &name() const noexcept { return name_; }
 
 private:

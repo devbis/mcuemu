@@ -445,6 +445,7 @@ void test_air_ideal_is_unchanged();
 void test_air_path_loss_and_sensitivity();
 void test_air_sinr_capture_and_cross_protocol();
 void test_air_shadowing_and_frequency_map();
+void test_air_ble_access_address_and_framing();
 void test_radio_system_config();
 void test_tlsr_rssi_over_distance();
 void test_lua_radio_parts();
@@ -523,6 +524,7 @@ int main() {
     RUN(test_air_path_loss_and_sensitivity);
     RUN(test_air_sinr_capture_and_cross_protocol);
     RUN(test_air_shadowing_and_frequency_map);
+    RUN(test_air_ble_access_address_and_framing);
     RUN(test_radio_system_config);
     RUN(test_tlsr_rssi_over_distance);
     RUN(test_lua_radio_parts);

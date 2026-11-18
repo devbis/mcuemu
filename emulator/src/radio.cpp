@@ -9,13 +9,16 @@ namespace mcuemu {
 
 std::uint64_t VirtualAir::airtime_ns(RadioProtocol protocol,
                                      std::size_t payload_bytes,
-                                     std::uint32_t bit_rate) {
+                                     std::uint32_t bit_rate, bool ll_framed) {
     if (bit_rate == 0)
         bit_rate = protocol == RadioProtocol::Zigbee802154 ? 250000u : 1000000u;
     // IEEE 802.15.4: preamble (4), SFD (1), PHR (1) and the two FCS bytes the
-    // medium does not carry; BLE: preamble, access address and header.
+    // medium does not carry. BLE (1M PHY): preamble (1), access address (4) and
+    // CRC (3), plus the 2-byte PDU header unless the payload includes it.
+    // (The 2M PHY has a 2-byte preamble.)
     const std::uint64_t overhead_bytes =
-        protocol == RadioProtocol::Zigbee802154 ? 8u : 10u;
+        protocol == RadioProtocol::Zigbee802154 ? 8u
+                                                : (ll_framed ? (bit_rate == 2000000u ? 9u : 8u) : 10u);
     constexpr std::uint64_t nanos_per_second = 1000000000u;
     const std::uint64_t max_value = std::numeric_limits<std::uint64_t>::max();
     if (payload_bytes > max_value / 8u - overhead_bytes)
@@ -38,14 +41,15 @@ std::uint64_t VirtualAir::transmit(std::string source, std::string destination,
                                   RadioProtocol protocol, std::uint8_t channel,
                                   std::uint64_t start_ns,
                                   std::vector<std::uint8_t> payload,
-                                  std::uint32_t bit_rate) {
+                                  std::uint32_t bit_rate,
+                                  const BleLinkInfo &ble) {
     if (source.empty())
         throw std::invalid_argument("radio sender must have a node name");
     if ((protocol == RadioProtocol::Zigbee802154 &&
          (channel < 11 || channel > 26)) ||
         (protocol == RadioProtocol::Ble && channel > 39))
         throw std::invalid_argument("radio channel is invalid for the selected protocol");
-    const std::uint64_t duration_ns = airtime_ns(protocol, payload.size(), bit_rate);
+    const std::uint64_t duration_ns = airtime_ns(protocol, payload.size(), bit_rate, ble.ll_framed);
     if (duration_ns > std::numeric_limits<std::uint64_t>::max() - start_ns)
         throw std::overflow_error("radio frame end time overflows virtual clock");
 
@@ -58,6 +62,8 @@ std::uint64_t VirtualAir::transmit(std::string source, std::string destination,
     frame.start_ns = start_ns;
     frame.end_ns = start_ns + duration_ns;
     frame.payload = std::move(payload);
+    if (protocol == RadioProtocol::Ble)
+        frame.ble = ble;
     if (const RadioNodeConfig *sender = node(frame.source))
         frame.tx_power_dbm = sender->tx_power_dbm;
     frames_.push_back(std::move(frame));
@@ -157,12 +163,15 @@ std::vector<RadioFrame> VirtualAir::in_flight(const std::string &node,
                                               RadioProtocol protocol,
                                               std::uint8_t channel,
                                               std::uint64_t at_ns,
-                                              std::uint64_t lead_ns) const {
+                                              std::uint64_t lead_ns,
+                                              std::optional<std::uint32_t> access_address) const {
     std::vector<RadioFrame> result;
     for (const RadioFrame &frame : frames_) {
         if (frame.end_ns <= at_ns || frame.start_ns + lead_ns > at_ns ||
             frame.source == node || frame.protocol != protocol ||
             frame.channel != channel ||
+            (access_address && protocol == RadioProtocol::Ble &&
+             frame.ble.access_address != *access_address) ||
             (!frame.destination.empty() && frame.destination != node))
             continue;
         RadioFrame heard = frame;
@@ -183,12 +192,15 @@ std::vector<RadioFrame> VirtualAir::receive(const std::string &node,
                                            RadioProtocol protocol,
                                            std::uint8_t channel,
                                            std::uint64_t at_ns,
-                                           std::uint64_t after_ns) {
+                                           std::uint64_t after_ns,
+                                           std::optional<std::uint32_t> access_address) {
     std::vector<RadioFrame> received;
     for (const RadioFrame &frame : frames_) {
         if (frame.end_ns > at_ns || frame.end_ns <= after_ns ||
             frame.source == node ||
             frame.protocol != protocol || frame.channel != channel ||
+            (access_address && protocol == RadioProtocol::Ble &&
+             frame.ble.access_address != *access_address) ||
             (!frame.destination.empty() && frame.destination != node))
             continue;
 
@@ -240,16 +252,18 @@ VirtualRadioNode::VirtualRadioNode(VirtualAir &air, std::string name)
 std::uint64_t VirtualRadioNode::transmit(
     std::string destination, RadioProtocol protocol, std::uint8_t channel,
     std::uint64_t start_ns, std::vector<std::uint8_t> payload,
-    std::uint32_t bit_rate) {
+    std::uint32_t bit_rate, const BleLinkInfo &ble) {
     return air_.transmit(name_, std::move(destination), protocol, channel,
-                         start_ns, std::move(payload), bit_rate);
+                         start_ns, std::move(payload), bit_rate, ble);
 }
 
 std::vector<RadioFrame> VirtualRadioNode::receive(RadioProtocol protocol,
                                                    std::uint8_t channel,
                                                    std::uint64_t at_ns,
-                                                   std::uint64_t after_ns) {
-    return air_.receive(name_, protocol, channel, at_ns, after_ns);
+                                                   std::uint64_t after_ns,
+                                                   std::optional<std::uint32_t> access_address) {
+    return air_.receive(name_, protocol, channel, at_ns, after_ns,
+                        access_address);
 }
 
 const char *protocol_name(RadioProtocol protocol) noexcept {

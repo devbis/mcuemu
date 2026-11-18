@@ -1,4 +1,5 @@
 #include "../test_support.hpp"
+#include "ble/ll.hpp"
 
 #include "sim/config.hpp"
 #include "sim/socket.hpp"
@@ -290,6 +291,34 @@ world: { radio: [ { id: air0 } ] }
     CHECK(u32(24) == 1 && u32(28) == 500000); // 1.5 s since the epoch of the run
     CHECK(u32(32) == 3 && u32(36) == 3);
     CHECK(static_cast<std::uint8_t>(pcap[40]) == 1);
+
+    // pcap, BLE: link type 256, a 10-byte header, access address, PDU and CRC.
+    session.attach("air0", "pcap:" + path_of("ble.pcap") + ",ble");
+    const std::vector<std::uint8_t> pdu{0x00, 0x03, 0xAA, 0xBB, 0xCC};
+    air.transmit("x", "", mcuemu::RadioProtocol::Ble, 38, 1000, pdu);
+    air.transmit("x", "", mcuemu::RadioProtocol::Ble, 12, 5000, {0x02, 0x00}, 0,
+                 {0x71764129u, 0xA1B2C3u, true});
+    session.finish();
+    const std::string ble = read_file(path_of("ble.pcap"));
+    auto b32 = [&](std::size_t at) {
+        std::uint32_t v = 0;
+        std::memcpy(&v, ble.data() + at, 4);
+        return v;
+    };
+    CHECK(b32(20) == 256u);
+    // Record 1: header 10 + AA 4 + PDU 5 + CRC 3 = 22 bytes, advertising channel 38.
+    CHECK(b32(32) == 22u);
+    CHECK(static_cast<std::uint8_t>(ble[40]) == 38 && b32(44) == 0x8E89BED6u);
+    CHECK(b32(50) == 0x8E89BED6u && std::memcmp(ble.data() + 54, pdu.data(), 5) == 0);
+    const auto crc = ble::crc24(0x555555u, pdu);
+    CHECK(std::memcmp(ble.data() + 59, crc.data(), 3) == 0);
+    // Record 2 starts at 24 + 16 + 22; it carries its own address and seed.
+    const std::size_t second = 24 + 16 + 22;
+    CHECK(static_cast<std::uint8_t>(ble[second + 16]) == 12);
+    CHECK(b32(second + 16 + 10) == 0x71764129u);
+    const std::vector<std::uint8_t> pdu2{0x02, 0x00};
+    const auto crc2 = ble::crc24(0xA1B2C3u, pdu2);
+    CHECK(std::memcmp(ble.data() + second + 16 + 14 + 2, crc2.data(), 3) == 0);
 
     // detach stops delivery.
     const auto id = session.attach("d.a", "file:" + path_of("detached.log"));
