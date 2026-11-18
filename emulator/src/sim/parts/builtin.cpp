@@ -2,6 +2,7 @@
 #include "sim/parts/i2c_slave.hpp"
 #include "sim/parts/lua_part.hpp"
 #include "sim/part.hpp"
+#include "sim/ble_host.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -275,6 +276,9 @@ const PartRegistry &PartRegistry::builtin() {
             return std::make_unique<Ds18b20>(ctx.name(), ctx.scheduler(), dq, rom,
                                              temperature,
                                              static_cast<unsigned>(resolution));
+        });
+        r.add("ble_host", [](PartContext &ctx) -> std::unique_ptr<Part> {
+            return make_ble_host_part(ctx);
         });
         r.add("ntc", [](PartContext &ctx) -> std::unique_ptr<Part> {
             return std::make_unique<Ntc>(ctx);

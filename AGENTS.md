@@ -33,6 +33,10 @@ chips and a declarative system layer on top:
 - **BL702** (Bouffalo RISC-V, the XT-ZB1 module): the chip model `bl702emu` in
   `emulator/src/bl702/` (`Bl702`, on the generic `riscv::Core`), the sim adapter
   `sim/bl702_mcu.cpp`. See `docs/bl702.md`. The zigbee-rs sources it runs live in another repository.
+- **Bluetooth LE** (work in progress, see `docs/ble.md`): link layer helpers in
+  `emulator/src/ble/` (`bleemu`, namespace `ble`), BLE mode of the nRF52840 RADIO, and the virtual host
+  `sim::BleHost` (`emulator/src/sim/ble_host.cpp`), an HCI controller with a central link layer that
+  scans and connects to firmware peripherals.
 - **`sim` layer** (`emulator/src/sim/`, `emulator/include/sim/`): YAML-described
   systems of devices, nets, parts (built-in and Lua), a shared radio medium,
   endpoints and sinks, a scenario runner, and a JSON-RPC 2.0 control API over

@@ -24,6 +24,8 @@
 | `phy6252-ts0001-log-replay.yaml` | 65-second no-coordinator replay of the supplied UART context with one GPIO8 press. Seed 57013 reproduces its three `LL_Rand`-derived reporting intervals; periodic stack counters and the `On/Off` diagnostic are still different or absent. |
 | `parts/shtc3.lua`, `parts/sht4x.lua`, `parts/lcd_lywsd03mmc.lua` | The two sensors and the I2C segment display of the LYWSD03MMC. |
 | `parts/bl0937.lua` | The BL0937 as a scripted part (CF / CF1 pulse outputs, SEL input). |
+| `ble_host.yaml` | The virtual BLE host scanning a scripted advertiser (`parts/ble_beacon.lua`): the host's HCI stream is served on TCP port 9000 for a host stack such as Bumble (`scripts/ble_scan.py`). Run with `--speed 1`. |
+| `parts/ble_beacon.lua` | A scannable BLE advertiser as a script part (ADV_IND on 37/38/39 and a SCAN_RSP). |
 | `parts/ds18b20.lua`, `parts/sht3x.lua` | Reference sensor scripts (see `docs/scripting.md`). |
 
 ```sh

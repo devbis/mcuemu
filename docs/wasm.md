@@ -49,3 +49,15 @@ session root, just as they are by the native control API.
 The Emscripten build and MCU firmware execution path have been smoke-tested
 with two TLSR8258 nodes. No performance claim is made for the interpreted
 backend.
+
+## Bluetooth LE host in the browser
+
+A `ble_host` part (see [ble.md](ble.md)) needs no sockets: its HCI stream is the
+endpoint `device.part.hci`, so a page drives it with the same bridge it uses for
+everything else. `set` with `{"hex": "01 0c 20 02 01 00"}`-style bytes writes H4
+packets (they may be split or merged arbitrarily), and `subscribe` delivers the
+controller's packets as `{"hex": ...}` events, which the page hands to its own
+host stack (a JavaScript GATT client, Bumble in Pyodide) or forwards over a
+WebSocket to BlueZ on another machine. This path has not been run in a browser
+yet; the endpoint and the JSON-RPC methods it relies on are covered by the
+native tests.

@@ -53,7 +53,7 @@ gets a `radio` table and may define `on_frame`:
 
 | Call | Meaning |
 |---|---|
-| `radio.transmit{protocol=, channel=, payload=, [to=], [t=]}` | Sends a frame (`protocol` is `"zigbee"` or `"ble"`, `payload` a string or a list of bytes, `to` a node name or broadcast, `t` the start time, default now). Returns the frame id and its end time. |
+| `radio.transmit{protocol=, channel=, payload=, [to=], [t=], [ll=], [access_address=], [crc_init=]}` | Sends a frame (`protocol` is `"zigbee"` or `"ble"`, `payload` a string or a list of bytes, `to` a node name or broadcast, `t` the start time, default now). For BLE, `ll = true` says the payload is a whole link-layer PDU (2-byte header included), which the virtual BLE host and the nRF52840 RADIO require; `access_address` and `crc_init` default to the advertising channel's (`0x8E89BED6`, `0x555555`). Returns the frame id and its end time. |
 | `radio.listen(protocol, channel)` / `radio.listen(nil)` | Tunes the receiver or turns it off. |
 | `radio.set_power(dbm)` | Changes the node's TX power. |
 | `radio.airtime(protocol, bytes)` | Time on air in ns. |

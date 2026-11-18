@@ -316,6 +316,7 @@ terminals or params are errors. Every controllable value is an endpoint named
 | `ds18b20` | `dq` (open-drain net with pull-up) | `rom` (serial, default derived from the part name), `temperature_c` (25), `resolution` (12) | `temperature_c` |
 | `ntc` | `out` (analog source on the net) | `r25` (10k), `beta` (3950), `r_series` (10k), `series` (`pullup`: fixed resistor to the supply, NTC to ground; or `pulldown`), `temp_c` (25), `supply_mv` (3300) | `temp_c`, `mv` (read-only) |
 | `script` | whatever the script uses (all wired terminals) | any (`params` table in the script) | whatever the script `expose()`s |
+| `ble_host` | none (needs `radio:` with `ble`) | `address` (`C0:DE:00:00:00:01`, most significant byte first), `seed` (0, added to `world.seed`) | `hci` (kind `hci`: H4 bytes both ways), see [ble.md](ble.md) |
 | `i2c_regs` | `sda`, `scl` (open-drain nets with pull-ups) | `address` (7-bit, required), `size` (256), `init` (`"00=aa,01=bb"`) | `regNN` (hex register) |
 
 `ds18b20` implements the ROM commands (Read, Match, Skip, Search, Alarm

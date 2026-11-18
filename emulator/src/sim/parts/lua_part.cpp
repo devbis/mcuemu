@@ -496,11 +496,27 @@ int LuaPart::radio_transmit(lua_State *L) {
                                     : static_cast<std::uint64_t>(luaL_checkinteger(L, -1));
     lua_pop(L, 1);
 
+    // BLE link information: `ll = true` says the payload is a whole link-layer
+    // PDU (header included), which the BLE host and the nRF52840 RADIO need;
+    // the access address and CRC seed default to the advertising channel's.
+    mcuemu::BleLinkInfo link;
+    lua_getfield(L, 1, "ll");
+    link.ll_framed = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "access_address");
+    if (!lua_isnil(L, -1))
+        link.access_address = static_cast<std::uint32_t>(luaL_checkinteger(L, -1));
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "crc_init");
+    if (!lua_isnil(L, -1))
+        link.crc_init = static_cast<std::uint32_t>(luaL_checkinteger(L, -1)) & 0xFFFFFFu;
+    lua_pop(L, 1);
+
     std::uint64_t id = 0;
     try {
         id = part->air_->transmit(part->radio_node_, destination, protocol,
                                   static_cast<std::uint8_t>(channel), start,
-                                  std::move(payload));
+                                  std::move(payload), 0, link);
     } catch (const std::exception &error) {
         return luaL_error(L, "radio.transmit(): %s", error.what());
     }
@@ -598,6 +614,12 @@ void LuaPart::deliver_frame(mcuemu::RadioProtocol protocol, std::uint8_t channel
         lua_pushlstring(L_, reinterpret_cast<const char *>(frame.payload.data()),
                         frame.payload.size());
         lua_setfield(L_, -2, "payload");
+        if (protocol == mcuemu::RadioProtocol::Ble) {
+            lua_pushboolean(L_, frame.ble.ll_framed);
+            lua_setfield(L_, -2, "ll");
+            lua_pushinteger(L_, static_cast<lua_Integer>(frame.ble.access_address));
+            lua_setfield(L_, -2, "access_address");
+        }
         lua_pushinteger(L_, frame.rssi_dbm);
         lua_setfield(L_, -2, "rssi_dbm");
         lua_pushinteger(L_, static_cast<lua_Integer>(frame.start_ns));

@@ -1,0 +1,38 @@
+# The virtual BLE host scanning a scripted advertiser. The host is an HCI
+# controller: its HCI stream is the endpoint lab.host.hci, served here on TCP
+# port 9000, so a host stack can drive it (Bumble: tcp-client:127.0.0.1:9000).
+#
+#   build/mcuemu sim examples/ble_host.yaml --speed 1 --for 10m
+#   python3 scripts/ble_scan.py            # in another terminal, needs `pip install bumble`
+#
+# `--speed 1` paces virtual time with the wall clock so the stack can talk to
+# the simulation; without it the run would end at once. The nRF52840 below is only
+# there because a device needs an MCU (any local image will do, it idles in a
+# Zigbee scan); the images are not in the repository, see examples/README.md.
+version: 1
+
+world:
+  seed: 1
+  radio:
+    - id: air0
+
+devices:
+  - id: lab
+    mcus:
+      - id: m
+        model: nrf52840
+        firmware: ../firmware/nrf52840-sensor.bin
+    parts:
+      - id: beacon
+        type: script
+        script: parts/ble_beacon.lua
+        radio: { air: air0, position: [2, 0, 0], tx_power_dbm: 0, protocols: [ble] }
+        params: { name: mcuemu, interval_ms: 100 }
+      - id: host
+        type: ble_host
+        radio: { air: air0, position: [0, 0, 0], protocols: [ble] }
+        params: { address: "C0:DE:00:00:00:01" }
+
+attach:
+  - { endpoint: lab.host.hci, sink: "tcp:9000" }
+  - { endpoint: air0, sink: "pcap:ble-air.pcap,ble" }

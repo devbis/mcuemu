@@ -258,6 +258,7 @@ add_library(simcore
     emulator/src/sim/parts/i2c_slave.cpp
     emulator/src/sim/parts/builtin.cpp
     emulator/src/sim/parts/lua_part.cpp
+    emulator/src/sim/parts/ble_host_part.cpp
     emulator/src/sim/config.cpp
     emulator/src/sim/system.cpp
     emulator/src/sim/cli.cpp
@@ -271,6 +272,7 @@ add_library(simcore
     emulator/src/sim/esp32_mcu.cpp
     emulator/src/sim/bl702_mcu.cpp
     emulator/src/sim/phy6252_mcu.cpp
+    emulator/src/sim/ble_host.cpp
 )
 target_include_directories(simcore PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(simcore PRIVATE ${MCUEMU_WARNING_FLAGS})
@@ -335,9 +337,9 @@ if(MCUEMU_BUILD_TESTS)
         tests/nrf52/test_cortexm.cpp
         tests/nrf52/test_chip.cpp
         tests/nrf52/test_radio.cpp
+        tests/nrf52/test_radio_ble.cpp
     )
     target_include_directories(nrf52emu-tests PRIVATE tests/nrf52)
-        tests/nrf52/test_radio_ble.cpp
     target_link_libraries(nrf52emu-tests PRIVATE nrf52emu)
     add_test(NAME nrf52emu-tests COMMAND nrf52emu-tests)
 
@@ -375,9 +377,6 @@ if(MCUEMU_BUILD_TESTS)
     target_link_libraries(efr32emu-tests PRIVATE efr32emu)
     add_test(NAME efr32emu-tests COMMAND efr32emu-tests)
 
-    add_executable(simcore-tests
-        tests/sim/test_sim.cpp
-        tests/sim/test_config.cpp
     add_executable(bleemu-tests
         tests/ble/test_main.cpp
         tests/ble/test_ll.cpp
@@ -385,11 +384,15 @@ if(MCUEMU_BUILD_TESTS)
     target_link_libraries(bleemu-tests PRIVATE bleemu)
     add_test(NAME bleemu-tests COMMAND bleemu-tests)
 
+    add_executable(simcore-tests
+        tests/sim/test_sim.cpp
+        tests/sim/test_config.cpp
         tests/sim/test_parts.cpp
         tests/sim/test_periph.cpp
         tests/sim/test_lua.cpp
         tests/sim/test_radio_medium.cpp
         tests/sim/test_attach.cpp
+        tests/sim/test_ble_host.cpp
         tests/sim/test_nrf52.cpp
         tests/sim/test_stm32wb55.cpp
         tests/sim/test_efr32.cpp

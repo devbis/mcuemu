@@ -4,18 +4,23 @@
 #include "sim/server.hpp"
 #include "sim/system.hpp"
 
+#include <algorithm>
+#include <chrono>
 #include <csignal>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace sim {
 
 void print_sim_usage(std::ostream &out) {
-    out << "       mcuemu sim SYSTEM.yaml [--for DURATION] [--quantum DURATION]\n"
+    out << "       mcuemu sim SYSTEM.yaml [--for DURATION] [--quantum DURATION] [--speed X]\n"
            "       [--trace-nets] [--attach ENDPOINT=SINK]... [--list-endpoints]\n"
            "       [--trace-uart PATTERN[=hex|text]]...\n"
            "       sinks: stdout, text, hex[:GAP], file:PATH, tcp:PORT, vcd:PATH, pcap:PATH[,ble]\n"
+           "       --speed X paces virtual time at X times the wall clock (1 = real time) so\n"
+           "       an outside program can talk to the system over a tcp: sink; Ctrl-C stops\n"
            "       --trace-uart prints the bytes of every UART endpoint whose name contains\n"
            "       PATTERN ('*' for all) as hex lines, one per frame (default), or as text lines\n";
 }
@@ -86,6 +91,7 @@ int serve_command(int argc, char **argv) {
 int sim_command(int argc, char **argv) {
     std::string path;
     std::optional<std::uint64_t> duration, quantum;
+    double speed = 0;
     bool trace_nets = false;
     bool list_endpoints = false;
     std::vector<std::string> uart_patterns;
@@ -96,6 +102,17 @@ int sim_command(int argc, char **argv) {
             duration = parse_duration_ns(argv[++i]);
         else if (arg == "--quantum" && i + 1 < argc)
             quantum = parse_duration_ns(argv[++i]);
+        else if (arg == "--speed" && i + 1 < argc) {
+            try {
+                std::size_t used = 0;
+                const std::string text = argv[++i];
+                speed = std::stod(text, &used);
+                if (used != text.size() || speed < 0)
+                    throw std::invalid_argument("negative");
+            } catch (const std::exception &) {
+                throw std::invalid_argument("--speed must be a number >= 0 (1 = real time, 0 = as fast as possible)");
+            }
+        }
         else if (arg == "--trace-nets")
             trace_nets = true;
         else if (arg == "--list-endpoints")
@@ -184,7 +201,23 @@ int sim_command(int argc, char **argv) {
         }
     }
 
-    world.run_until(*run_for);
+    if (speed > 0) {
+        std::signal(SIGINT, request_stop);
+        std::signal(SIGTERM, request_stop);
+        // Paced: virtual time follows the wall clock times `speed`, in 100 us
+        // slices (sinks such as tcp: are polled between them), so an outside
+        // program (a BLE host stack on an HCI socket) can talk to the system.
+        const auto wall_start = std::chrono::steady_clock::now();
+        const std::uint64_t virtual_start = world.now();
+        while (world.now() < *run_for && !g_stop_requested) {
+            world.run_until(std::min(*run_for, world.now() + 100000));
+            std::this_thread::sleep_until(
+                wall_start + std::chrono::nanoseconds(static_cast<std::int64_t>(
+                                 static_cast<double>(world.now() - virtual_start) / speed)));
+        }
+    } else {
+        world.run_until(*run_for);
+    }
     system->session().finish();
     std::cout << "simulated " << world.now() << " ns\n";
     bool faulted = false;
