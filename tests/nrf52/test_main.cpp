@@ -32,6 +32,12 @@ void test_nrf52_radio_frame_exchange();
 void test_nrf52_radio_address_event_comes_before_the_frame_ends();
 void test_nrf52_radio_cca_sees_a_frame_on_air();
 void test_nrf52_radio_ramp_and_state();
+void test_nrf52_ble_advertising_frame_exchange();
+void test_nrf52_ble_wrong_crc_init_and_wrong_address();
+void test_nrf52_ble_tifs_reply();
+void test_nrf52_ble_device_match_and_bit_counter();
+void test_nrf52_ble_2m_phy_and_invalid_channel();
+void test_nrf52_ble_disable_abandons_a_packet_in_progress();
 } // namespace mcuemu_tests
 
 // Names each test on stderr before it runs, so a crash in CI shows where.
@@ -72,6 +78,12 @@ int main() {
     RUN(test_nrf52_radio_address_event_comes_before_the_frame_ends);
     RUN(test_nrf52_radio_cca_sees_a_frame_on_air);
     RUN(test_nrf52_radio_ramp_and_state);
+    RUN(test_nrf52_ble_advertising_frame_exchange);
+    RUN(test_nrf52_ble_wrong_crc_init_and_wrong_address);
+    RUN(test_nrf52_ble_tifs_reply);
+    RUN(test_nrf52_ble_device_match_and_bit_counter);
+    RUN(test_nrf52_ble_2m_phy_and_invalid_channel);
+    RUN(test_nrf52_ble_disable_abandons_a_packet_in_progress);
     if (failures != 0) {
         std::cerr << failures << " check(s) failed\n";
         return 1;

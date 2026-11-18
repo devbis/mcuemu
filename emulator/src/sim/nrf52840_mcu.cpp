@@ -130,9 +130,9 @@ void Nrf52840Mcu::drive_pad(unsigned pad) {
 void Nrf52840Mcu::attach_radio(mcuemu::VirtualAir &air, const std::string &node,
                                const std::vector<std::string> &protocols) {
     for (const std::string &protocol : protocols)
-        if (protocol != "zigbee")
+        if (protocol != "zigbee" && protocol != "ble")
             throw std::invalid_argument("nrf52840: '" + protocol +
-                                        "' is not connected to the RADIO yet (only zigbee)");
+                                        "' is not connected to the RADIO (zigbee or ble)");
     chip_.connect_radio(air, node);
 }
 

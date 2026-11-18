@@ -360,7 +360,8 @@ Profile with `sample <pid> 3 -file out.txt` rather than guessing. What mattered:
 - UART timing for the CA51F253L3 RX path is not bit-accurate.
 - The plug example uses the pins of the Zbeacon TS011F board. Without a coordinator the plug firmware only scans and requests steering, so the relay does not react to the button.
 - Realtime pacing cannot reach 1x for busy firmware; use `speed` below 1.
-- nRF52840: the RADIO is 802.15.4 only (no BLE), no SPIM/PWM/CCM/USBD; one
+- nRF52840: the RADIO does 802.15.4 and BLE 1M/2M at register level (no whitening mismatch, no
+  long range, CTE or CCM; see docs/nrf52840.md), no SPIM/PWM/USBD; one
   cycle per instruction; lazy FP stacking is not modelled (eager stacking is
   architecturally invisible).
 - BL702: no GPIO, ADC, I2C, SPI, PWM, USB or PDS/HBN; the RF calibration is skipped (its flags

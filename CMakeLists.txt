@@ -180,7 +180,7 @@ add_library(nrf52emu
 target_include_directories(nrf52emu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/emulator/src)
 target_include_directories(nrf52emu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/emulator/include)
 target_compile_options(nrf52emu PRIVATE ${MCUEMU_WARNING_FLAGS})
-target_link_libraries(nrf52emu PUBLIC cortexm mcuemu-core)
+target_link_libraries(nrf52emu PUBLIC cortexm mcuemu-core bleemu)
 
 add_library(efr32emu
     emulator/src/efr32/efr32mg21.cpp
@@ -337,6 +337,7 @@ if(MCUEMU_BUILD_TESTS)
         tests/nrf52/test_radio.cpp
     )
     target_include_directories(nrf52emu-tests PRIVATE tests/nrf52)
+        tests/nrf52/test_radio_ble.cpp
     target_link_libraries(nrf52emu-tests PRIVATE nrf52emu)
     add_test(NAME nrf52emu-tests COMMAND nrf52emu-tests)
 

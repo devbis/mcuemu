@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 #include "mcuemu/radio.hpp"
@@ -448,6 +449,27 @@ private:
     void start_cca();
     void finish_cca(std::uint64_t ns);
     void start_ed();
+
+    // ---- BLE (MODE 3 = Ble_1Mbit, 4 = Ble_2Mbit) ----
+    bool ble_mode() const { return mode_ == 3 || mode_ == 4; }
+    int ble_channel() const; // from FREQUENCY; -1 when it is not a BLE channel
+    std::uint64_t ble_bit_ns() const { return mode_ == 4 ? 500 : 1000; }
+    std::uint64_t ble_address_ns() const; // preamble + access address on air
+    std::uint32_t logical_access_address(unsigned logical) const;
+    int match_access_address(std::uint32_t access_address) const;
+    void start_ble_tx();
+    void begin_transmit_ble(std::uint64_t ns);
+    void poll_air_ble(std::uint64_t ns);
+    void ble_rx_payload(const mcuemu::RadioFrame &frame);
+    void ble_rx_end(const mcuemu::RadioFrame &frame);
+    void ble_device_match(const mcuemu::RadioFrame &frame);
+    void start_bit_counter();
+    // Deferred actions at exact virtual times (events inside a packet, a TX
+    // start delayed by TIFS). Run from service() in time order.
+    void schedule(std::uint64_t ns, std::function<void()> action);
+    void clear_schedule();
+    std::uint64_t cycle_for_ns(std::uint64_t ns) const;
+
     std::uint8_t energy_at(std::uint64_t from_ns, std::uint64_t to_ns, bool strongest_only) const;
     std::uint64_t ramp_cycles() const;
     std::uint8_t channel() const;
@@ -462,6 +484,23 @@ private:
     std::uint32_t crccnf_{0}, crcpoly_{0}, crcinit_{0}, modecnf0_{0}, sfd_{0xa7};
     std::uint32_t edcnt_{0}, edsample_{0}, ccactrl_{0}, crcstatus_{0}, rxcrc_{0}, rssisample_{0};
     std::uint32_t tifs_{0}, bcc_{0}, power_{1};
+    // BLE registers (inferred from the product specification, no silicon test).
+    std::uint32_t base_[2]{}, prefix_[2]{}, txaddress_{0}, rxaddresses_{0}, datawhiteiv_{0x40};
+    std::uint32_t dab_[8]{}, dap_[8]{}, dacnf_{0}, rxmatch_{0}, dai_{0};
+    struct Timed {
+        std::uint64_t cycle;
+        std::uint64_t ns;
+        std::uint64_t seq;
+        std::function<void()> action;
+    };
+    std::vector<Timed> timeline_;
+    std::uint64_t timeline_seq_{0};
+    bool rx_locked_{false};            // synchronised to a BLE frame that has not ended
+    int rx_rssi_dbm_{-100};
+    std::uint32_t rx_dma_ptr_{0};      // PACKETPTR when the frame was locked
+    std::uint64_t last_end_ns_{0};     // end of the last BLE packet (TIFS reference)
+    bool last_end_valid_{false};
+    std::uint64_t bc_generation_{0};   // a bit-counter run is cancelled by bumping this
     std::uint64_t phase_end_{Never};       // ramp-up or ramp-down completes (cycles)
     std::uint64_t tx_end_ns_{0};
     bool tx_active_{false};
