@@ -18,9 +18,9 @@ std::uint32_t Uarte::event_register(unsigned bit) {
     case Ncts: return 0x104;
     case RxDrdy: return 0x108;
     case EndRx: return 0x110;
-    case TxDrdy: return 0x120;
+    case TxDrdy: return 0x11c;
     case Error: return 0x124;
-    case EndTx: return 0x128;
+    case EndTx: return 0x120;
     case RxTo: return 0x144;
     case RxStarted: return 0x14c;
     case TxStarted: return 0x150;
@@ -125,7 +125,9 @@ void Uarte::task(std::uint32_t offset) {
         tx_active_ = true;
         tx_amount_ = 0;
         raise(TxStarted);
-        tx_next_ = now() + byte_cycles();
+        // A zero-length transfer ends at once (the Zephyr driver starts one to get TXSTOPPED);
+        // only a byte takes bit times.
+        tx_next_ = tx_max_ == 0 ? now() : now() + byte_cycles();
         request_service(tx_next_);
         break;
     case 0x00c: // STOPTX

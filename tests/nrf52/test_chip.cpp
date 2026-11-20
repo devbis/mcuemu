@@ -288,7 +288,7 @@ void test_nrf52_uarte_transmit_and_receive() {
     c.run_to_us(300);
     CHECK(c.chip.uart_take_tx(0).size() == 3); // 86.8 us per byte
     c.run_to_us(1000);
-    CHECK(c.read(Uarte0 + 0x128) == 1);        // ENDTX
+    CHECK(c.read(Uarte0 + 0x120) == 1);        // ENDTX
     const std::vector<std::uint8_t> rest = c.chip.uart_take_tx(0);
     CHECK(std::string(rest.begin(), rest.end()) == "lo");
 
