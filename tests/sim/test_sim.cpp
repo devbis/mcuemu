@@ -488,6 +488,8 @@ void test_stm32wb55_cpu2_zero_based_flash_and_sram_aliases();
 void test_stm32wb55_cpu1_zero_based_vtor_flash_alias();
 void test_stm32wb55_cpu2_rf_indirect_register_transfer();
 void test_stm32wb55_thread_rcp_single_byte_rf_register_access();
+void test_stm32wb55_official_rcp_radio_ready_and_power_probe();
+void test_stm32wb55_cpu2_mac_aliases_and_tx_command();
 void test_stm32wb55_cpu2_ipcc_channel_directions();
 void test_stm32wb55_cpu1_clears_cpu2_ipcc_receive_flag();
 void test_stm32wb55_pwr_clear_registers_do_not_read_back_commands();
@@ -562,6 +564,8 @@ int main() {
     RUN(test_stm32wb55_cpu1_zero_based_vtor_flash_alias);
     RUN(test_stm32wb55_cpu2_rf_indirect_register_transfer);
     RUN(test_stm32wb55_thread_rcp_single_byte_rf_register_access);
+    RUN(test_stm32wb55_official_rcp_radio_ready_and_power_probe);
+    RUN(test_stm32wb55_cpu2_mac_aliases_and_tx_command);
     RUN(test_stm32wb55_cpu2_ipcc_channel_directions);
     RUN(test_stm32wb55_cpu1_clears_cpu2_ipcc_receive_flag);
     RUN(test_stm32wb55_pwr_clear_registers_do_not_read_back_commands);

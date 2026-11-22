@@ -78,6 +78,15 @@ private:
     std::uint32_t read_cpu2_mmio(std::uint32_t address, unsigned size);
     void write_cpu2_mmio(std::uint32_t address, std::uint32_t value, unsigned size);
     void execute_cpu2_rf_register_command(std::uint32_t command);
+    std::uint16_t cpu2_mac_read_register(unsigned index, std::uint64_t now_ns);
+    void cpu2_mac_write_register(unsigned index, std::uint16_t value,
+                                 std::uint64_t now_ns);
+    void cpu2_mac_update_irq();
+    void cpu2_mac_write_command(std::uint16_t command, std::uint64_t now_ns);
+    void cpu2_mac_advance(std::uint64_t now_ns);
+    void cpu2_mac_poll_radio(std::uint64_t now_ns);
+    void cpu2_mac_receive_frame(const mcuemu::RadioFrame &frame);
+    std::uint32_t cpu2_mac_counter(std::uint64_t now_ns) const;
     void ipcc_command(unsigned channel);
     void complete_system_command();
     void start_cpu2();
@@ -123,6 +132,10 @@ private:
     std::uint32_t cpu2_reset_vector_offset_{0};
     std::map<std::uint32_t, std::uint32_t> registers_;
     std::array<std::uint8_t, 0x7e> cpu2_rf_indirect_registers_{};
+    std::array<std::uint16_t, 0x100> cpu2_mac_registers_{};
+    std::deque<std::uint8_t> cpu2_mac_rx_fifo_;
+    std::vector<std::uint8_t> cpu2_mac_tx_fifo_;
+    std::array<bool, 4> cpu2_mac_compare_fired_{};
     std::uint32_t ipcc_c1cr_{0};
     std::uint32_t ipcc_c1mr_{0xffffffffu};
     std::uint32_t ipcc_c2cr_{0};
@@ -153,6 +166,16 @@ private:
     std::uint32_t cpu2_model_pending_channels_{0};
     bool cpu2_started_{false};
     bool cpu2_stopped_{false};
+    bool cpu2_mac_tx_has_phr_{false};
+    bool cpu2_mac_tx_fifo_busy_{false};
+    bool cpu2_mac_tx_pending_{false};
+    bool cpu2_mac_tx_active_{false};
+    bool cpu2_mac_rssi_valid_{false};
+    std::uint8_t cpu2_mac_tx_phr_{};
+    std::int8_t cpu2_mac_rssi_dbm_{-100};
+    std::uint64_t cpu2_mac_radio_poll_ns_{0};
+    std::uint64_t cpu2_mac_tx_start_ns_{0};
+    std::uint64_t cpu2_mac_tx_finish_ns_{0};
     cortexm::RunResult cpu2_stop_result_{};
     std::uint64_t cpu2_boot_time_ns_{0};
     std::uint64_t cpu2_boot_cycle_{0};

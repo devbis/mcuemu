@@ -132,7 +132,7 @@ void test_stm32wb55_thread_rcp_single_byte_rf_register_access() {
                              0x4907, // ldr r1, [pc, #28] -> RF command register
                              0x4a07, // ldr r2, [pc, #28] -> busy + descriptor offset
                              0x600a, // str r2, [r1]: write one RF register byte
-                             0x2382, // movs r3, #0x82: read one byte from RF register 0x2d
+                             0x2382, // movs r3, #0x82: read one byte from RF register 0x5c
                              0x7003, // strb r3, [r0]
                              0x600a, // str r2, [r1]: submit read descriptor
                              0x7883, // ldrb r3, [r0, #2]
@@ -147,7 +147,10 @@ void test_stm32wb55_thread_rcp_single_byte_rf_register_access() {
 
     stm32wb55emu::Stm32wb55 chip;
     chip.load_cpu2_firmware(image, 0x000da000);
-    const std::uint8_t descriptor[] = {2, 0x2d, 0x60, 0};
+    chip.write(0x58000164, 1u << 1, 4); // Enable the CPU2 802.15.4 register window.
+    chip.write(0x60000404, 1, 4); // Power the RF bus.
+    chip.write(0x60001100, 1, 4); // R100.0 enables receive in the inferred MAC map.
+    const std::uint8_t descriptor[] = {2, 0x5c, 0x60, 0};
     CHECK(chip.core().write_memory(0x20030100, descriptor, sizeof(descriptor)));
     chip.write(0x5800040c, 1u << 15, 4); // CPU1 sets C2BOOT.
 
@@ -155,8 +158,51 @@ void test_stm32wb55_thread_rcp_single_byte_rf_register_access() {
     CHECK(result.reason == cortexm::StopReason::Deadline);
     std::uint8_t readback = 0;
     CHECK(chip.core().read_memory(0x20030120, &readback, sizeof(readback)));
-    CHECK(readback == 0x60);
+    CHECK(readback == 0x1a);
     CHECK((chip.read(0x6000000c, 4) & (1u << 16)) == 0);
+}
+
+void test_stm32wb55_official_rcp_radio_ready_and_power_probe() {
+    stm32wb55emu::Stm32wb55 chip;
+    CHECK(chip.read(0x600013ec, 4) == 0); // Clock-gated MAC status.
+
+    chip.write(0x58000164, 1u << 1, 4);
+    CHECK(chip.read(0x600013ec, 4) == 0x80); // RCP init polls this ready bit.
+    CHECK(chip.read(0x6000000c, 4) == 0); // The unpowered RF bus does not retain a probe.
+
+    chip.write(0x60000404, 1, 4); // RF control bit 0 enables the bus.
+    chip.write(0x6000000c, 0xa5a5, 4);
+    CHECK(chip.read(0x6000000c, 4) == 0xa5a5);
+
+    chip.write(0x60000404, 0, 4);
+    CHECK(chip.read(0x6000000c, 4) == 0);
+}
+
+void test_stm32wb55_cpu2_mac_aliases_and_tx_command() {
+    stm32wb55emu::Stm32wb55 chip;
+    mcuemu::VirtualAir air;
+    air.set_node("wb55", {});
+    chip.connect_radio(air, "wb55");
+    chip.write(0x58000164, 1u << 1, 4);
+    chip.write(0x60000404, 1, 4);
+
+    chip.write(0x60001500, 1, 4); // R500 sets R100.0 (RX on).
+    chip.write(0x60001500, 0x8000, 4); // R500 sets R100.15 (hardware FCS).
+    CHECK(chip.read(0x60001100, 4) == 0x8001);
+    chip.write(0x60001900, 1, 4); // R900 clears R100.0.
+    CHECK(chip.read(0x60001100, 4) == 0x8000);
+    chip.write(0x60001500, 1, 4);
+
+    const std::uint8_t mpdu[] = {0x41, 0x88, 0x5a, 0xff, 0xff};
+    chip.write(0x600013fc, (7u << 8) | 0x16u, 4); // PHR includes the two FCS bytes.
+    for (const std::uint8_t byte : mpdu)
+        chip.write(0x600013fc, (static_cast<std::uint32_t>(byte) << 8) | 0x16u, 4);
+    CHECK(chip.read(0x60001048, 4) == 0x8000); // TX FIFO has a complete frame.
+    chip.write(0x600013fc, 0x04, 4); // Transmit now.
+
+    CHECK(air.frames().size() == 1);
+    CHECK(air.frames().front().channel == 11);
+    CHECK(air.frames().front().payload == std::vector<std::uint8_t>(mpdu, mpdu + sizeof(mpdu)));
 }
 
 void test_stm32wb55_cpu2_ipcc_channel_directions() {
@@ -295,19 +341,19 @@ void test_stm32wb55_cpu2_802154_window_clock_gate() {
     chip.write(0x58000164, 1u << 1, 4); // RCC_C2APB3ENR.802EN.
     CHECK(chip.read(0x60001100, 4) == 0); // The disabled write was ignored.
     chip.write(0x60001100, 0x12345678, 4);
-    CHECK(chip.read(0x60001100, 4) == 0x12345678);
+    CHECK(chip.read(0x60001100, 4) == 0x5678);
 
     chip.write(0x58000164, 0, 4);
     CHECK(chip.read(0x60001100, 4) == 0);
     chip.write(0x58000164, 1u << 1, 4);
-    CHECK(chip.read(0x60001100, 4) == 0x12345678);
+    CHECK(chip.read(0x60001100, 4) == 0x5678);
 }
 
 void test_stm32wb55_cpu2_rf_reset_status_and_registers() {
     stm32wb55emu::Stm32wb55 chip;
     chip.write(0x58000164, 1u << 1, 4);
     chip.write(0x60001100, 0x12345678, 4);
-    CHECK(chip.read(0x60001100, 4) == 0x12345678);
+    CHECK(chip.read(0x60001100, 4) == 0x5678);
 
     chip.write(0x58000044, 1, 4); // RCC_APB3RSTR.RFRST.
     CHECK(chip.read(0x58000094, 4) & (1u << 16)); // RCC_CSR.RFRSTS.
@@ -318,7 +364,7 @@ void test_stm32wb55_cpu2_rf_reset_status_and_registers() {
     CHECK((chip.read(0x58000094, 4) & (1u << 16)) == 0);
     CHECK(chip.read(0x60001100, 4) == 0);
     chip.write(0x60001100, 0x87654321, 4);
-    CHECK(chip.read(0x60001100, 4) == 0x87654321);
+    CHECK(chip.read(0x60001100, 4) == 0x4321);
 }
 
 void test_stm32wb55_rcc_prescaler_applied_flags() {

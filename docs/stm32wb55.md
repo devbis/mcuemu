@@ -100,14 +100,29 @@ RCC clock-prescaler writes set the corresponding `HPREF`, `C2HPREF`,
 finish its clock setup; the model treats application as immediate and does not
 simulate prescaler transition latency.
 The CPU2 APB3 RF-control aperture is mapped. PHY v1.25.0's indirect register
-command through `0x6000000c` is also emulated: it reads or writes a byte register
-array using a descriptor in SRAM2 and clears the command busy bit. This command
-completes synchronously because its hardware latency is unknown. Direct
-802.15.4 control registers at `0x60001000..0x60001fff` retain masked writes, but
-are accessible only while `RCC_C2APB3ENR.802EN` is set; disabling that clock hides
-the stored values and ignores writes, while preserving register contents. Their
-radio side effects, RF timing, and packet transfer are not modeled. As observed
-in the PHY reset helper and confirmed by the RCC register definitions,
+command through `0x6000000c` reads or writes a byte register array using a
+descriptor in SRAM2 and clears the command busy bit. This command completes
+synchronously because its hardware latency is unknown. The official Thread RCP
+polls bit 7 at `0x600013ec`; the model returns that ready bit while the 802.15.4
+window is clocked. The decompiled PHY also probes the RF bus by writing `0xa5a5`
+to `0x6000000c` after setting bit 0 at `0x60000404`; the model exposes the probe
+value only while that bit is set. These readiness and power semantics are
+inferred from firmware control flow.
+
+The 16-bit MAC register window and its write-one SET/CLR aliases are available
+only while `RCC_C2APB3ENR.802EN` is set. Disabling that clock hides stored values
+and ignores writes, while preserving register contents. The current radio path
+models the Thread RCP's TX byte FIFO and immediate/delayed transmit commands,
+places transmitted MPDUs on the shared `VirtualAir`, and delivers completed
+frames to the RX FIFO with the PHR, calculated FCS, header fields, RSSI, event
+flags, and IRQ8/IRQ22 mask behavior. The 16-us MAC counter and compare flags are
+also modeled. RF calibration, energy detection, CCA/CSMA behavior, collision
+feedback to this MAC, and hardware-accurate SFD/header/end timing are not yet
+modeled; RX event flags are raised together when a complete air frame is polled.
+The direct register mapping, state values, and these behaviors are inferred from
+the decrypted firmware and `firmware-src/stm32wb55-cpu2/REGISTERS.md`, not from
+an ST register specification. As observed in the PHY reset helper and confirmed
+by the RCC register definitions,
 `RCC_APB3RSTR.RFRST` resets the modeled RF register window, gates its accesses,
 and drives `RCC_CSR.RFRSTS` until reset is released.
 Unimplemented peripheral registers read as zero or retain writes.
@@ -125,9 +140,13 @@ a busy flag. The descriptor contains a length/direction byte, a register index,
 data bytes, and a trailing zero. Its register helper accepts indices below
 `0x7d` and transfers up to `0x7d` bytes. The emulator models this indirect
 register transport with a 126-byte register array. This mapping is inferred
-from the decrypted image, not documented by ST. The separate direct register
-accesses at `0x60001000 + 4 * index` are preserved as ordinary masked
-read-modify-write storage until their side effects can be identified.
+from the decrypted image, not documented by ST. Direct register accesses at
+`0x60001000 + 4 * index` use only their low 16 bits. The model also implements
+the documented-in-`REGISTERS.md` observed SET/CLR aliases, command/FIFO ports,
+event masks, and radio state dependency: indirect RF register `0x5c` reads as
+`0x1a` when the RF bus is powered and direct register `R100.0` is set, `0x04`
+when powered with RX disabled, and zero while unpowered. The names and state
+mapping are inferred from the PHY/RCP code.
 
 The PHY reads the FLASH option registers `OPTR`, `IPCCBR`, `SFR`, and `SRRVR`
 while validating shared-memory pointers and locating the CPU2 reset vector.
