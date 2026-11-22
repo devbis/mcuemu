@@ -491,6 +491,8 @@ void test_stm32wb55_thread_rcp_single_byte_rf_register_access();
 void test_stm32wb55_official_rcp_radio_ready_and_power_probe();
 void test_stm32wb55_cpu2_mac_aliases_and_tx_command();
 void test_stm32wb55_cpu2_ipcc_channel_directions();
+void test_stm32wb55_cpu1_ipcc_tx_free_waits_for_channel_clear();
+void test_stm32wb55_cpu2_ipcc_tx_free_waits_for_channel_clear();
 void test_stm32wb55_cpu1_clears_cpu2_ipcc_receive_flag();
 void test_stm32wb55_pwr_clear_registers_do_not_read_back_commands();
 void test_stm32wb55_cpu2_802154_window_clock_gate();
@@ -567,6 +569,8 @@ int main() {
     RUN(test_stm32wb55_official_rcp_radio_ready_and_power_probe);
     RUN(test_stm32wb55_cpu2_mac_aliases_and_tx_command);
     RUN(test_stm32wb55_cpu2_ipcc_channel_directions);
+    RUN(test_stm32wb55_cpu1_ipcc_tx_free_waits_for_channel_clear);
+    RUN(test_stm32wb55_cpu2_ipcc_tx_free_waits_for_channel_clear);
     RUN(test_stm32wb55_cpu1_clears_cpu2_ipcc_receive_flag);
     RUN(test_stm32wb55_pwr_clear_registers_do_not_read_back_commands);
     RUN(test_stm32wb55_cpu2_802154_window_clock_gate);

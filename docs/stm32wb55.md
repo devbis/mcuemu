@@ -114,11 +114,13 @@ only while `RCC_C2APB3ENR.802EN` is set. Disabling that clock hides stored value
 and ignores writes, while preserving register contents. The current radio path
 models the Thread RCP's TX byte FIFO and immediate/delayed transmit commands,
 places transmitted MPDUs on the shared `VirtualAir`, and delivers completed
-frames to the RX FIFO with the PHR, calculated FCS, header fields, RSSI, event
-flags, and IRQ8/IRQ22 mask behavior. The 16-us MAC counter and compare flags are
-also modeled. RF calibration, energy detection, CCA/CSMA behavior, collision
-feedback to this MAC, and hardware-accurate SFD/header/end timing are not yet
-modeled; RX event flags are raised together when a complete air frame is polled.
+frames to the RX FIFO with calculated FCS, header fields, RSSI, event flags, and
+IRQ8/IRQ22 mask behavior. `R008` reports the PSDU length including FCS; the FIFO
+contains those PSDU/FCS bytes without the PHY length byte. The 16-us MAC counter
+and compare flags are also modeled. RF calibration, energy detection, CCA/CSMA
+behavior, collision feedback to this MAC, and hardware-accurate SFD/header/end
+timing are not yet modeled; RX event flags are raised together when a complete
+air frame is polled.
 The direct register mapping, state values, and these behaviors are inferred from
 the decrypted firmware and `firmware-src/stm32wb55-cpu2/REGISTERS.md`, not from
 an ST register specification. As observed in the PHY reset helper and confirmed
@@ -185,12 +187,15 @@ bit 16 starts the command, bit 7 of the descriptor header selects reads, and
 the remaining bytes carry the register index and data. The model tests the
 RCP's one-byte write/read sequence as well as multi-byte PHY transfers.
 
-A 12-second simulation was run with this RCP image and the Zephyr CPU1 image;
-the run completed, but the capture had no WB55 association. With a raw
-CPU2 image configured, RF register writes are not yet connected to the virtual
-radio, so this run does not establish end-to-end radio behavior. The direct
-802.15.4 window retains ordinary writes and has no modeled RF timing or packet
-transfer yet.
+A 30-second simulation with this RCP image and the Zephyr CPU1 image captured
+the association request and successful response at 7.30 s and 7.80 s. The
+capture also contains NWK traffic in both directions. CPU1 then faults at
+14.922 s on a halfword write to address `0x00000000` from PC `0x08029834`, so
+long-running operation is not established. The RX FIFO length correction was
+identified from the driver's Spinel `STREAM_RAW` format: the old model exposed
+the PHR byte through `R3e8`, shifting the frame and leaving the final FCS byte
+unread. The driver source is in the Zephyr checkout at
+`drivers/ieee802154/ieee802154_stm32wb.c`.
 
 The Zephyr source used for the join run also needed a null-index guard in
 `subsys/zigbee/nwk/nwk_addr_map.c`: the end-device leave path calls

@@ -9,6 +9,7 @@
 #include <deque>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -85,7 +86,8 @@ private:
     void cpu2_mac_write_command(std::uint16_t command, std::uint64_t now_ns);
     void cpu2_mac_advance(std::uint64_t now_ns);
     void cpu2_mac_poll_radio(std::uint64_t now_ns);
-    void cpu2_mac_receive_frame(const mcuemu::RadioFrame &frame);
+    void cpu2_mac_receive_frame(const mcuemu::RadioFrame &frame,
+                                std::uint64_t now_ns);
     std::uint32_t cpu2_mac_counter(std::uint64_t now_ns) const;
     void ipcc_command(unsigned channel);
     void complete_system_command();
@@ -134,6 +136,7 @@ private:
     std::array<std::uint8_t, 0x7e> cpu2_rf_indirect_registers_{};
     std::array<std::uint16_t, 0x100> cpu2_mac_registers_{};
     std::deque<std::uint8_t> cpu2_mac_rx_fifo_;
+    std::optional<mcuemu::RadioFrame> cpu2_mac_rx_pending_frame_;
     std::vector<std::uint8_t> cpu2_mac_tx_fifo_;
     std::array<bool, 4> cpu2_mac_compare_fired_{};
     std::uint32_t ipcc_c1cr_{0};
@@ -174,6 +177,7 @@ private:
     std::uint8_t cpu2_mac_tx_phr_{};
     std::int8_t cpu2_mac_rssi_dbm_{-100};
     std::uint64_t cpu2_mac_radio_poll_ns_{0};
+    std::uint64_t cpu2_mac_rx_next_event_ns_{0};
     std::uint64_t cpu2_mac_tx_start_ns_{0};
     std::uint64_t cpu2_mac_tx_finish_ns_{0};
     cortexm::RunResult cpu2_stop_result_{};

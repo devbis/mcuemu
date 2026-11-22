@@ -469,9 +469,12 @@ Zigbee RF path; `ble` on it is rejected (its BLE registers are not modeled),
 so BLE traffic comes from scripted parts, which can use the `radio` API in
 [scripting.md](scripting.md). `nrf52840`, `efr32mg21`, `esp32c6` and `bl702` connect an 802.15.4 radio (`zigbee`)
 and reject `ble`. `cc2530f256` connects its IEEE 802.15.4 radio (`zigbee`
-only, default 32 MHz clock). `stm32wb55` connects the host-side Thread RCP
-compatibility radio only when `cpu2_firmware` is absent; with a CPU2 image, the
-wireless PHY is not yet modeled. `ca51f253l3` has no radio. The experimental `phy6252` model
+only, default 32 MHz clock). `stm32wb55` connects the built-in Thread RCP
+compatibility radio when `cpu2_firmware` is absent. With a raw CPU2 image, the
+emulator models the Thread RCP's 802.15.4 MAC TX/RX path over shared air, with
+limited timing and radio behavior; the official RCP has been seen to associate
+and exchange NWK frames with a Zephyr CPU1 image. `ca51f253l3` has no radio. The
+experimental `phy6252` model
 connects its Zephyr PB-03F 802.15.4 path to shared `zigbee` air; this PHY
 behavior is inferred from the Zephyr driver and is not hardware-verified.
 

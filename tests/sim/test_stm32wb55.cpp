@@ -254,6 +254,128 @@ void test_stm32wb55_cpu2_ipcc_channel_directions() {
     CHECK(marker == 0x5a);
 }
 
+void test_stm32wb55_cpu1_ipcc_tx_free_waits_for_channel_clear() {
+    std::vector<std::uint8_t> image(0x174, 0);
+    put32(image, 0, 0x2003d100);
+    put32(image, 4, 0x08000101);
+    put32(image, (16 + 45) * 4, 0x08000161); // CPU1 IPCC TX IRQ45.
+
+    const auto reset = words({0x480f, // C1SCR
+                              0x4910, // set channel 1 occupied
+                              0x6001,
+                              0x4810, // C1CR
+                              0x4910, // TXFIE
+                              0x6001,
+                              0x4810, // C1MR
+                              0x4911, // mask all except TXF channel 1
+                              0x6001,
+                              0x4811, // NVIC ISER1
+                              0x4911, // IRQ45
+                              0x6001,
+                              0xe7fe}); // wait
+    std::memcpy(image.data() + 0x100, reset.data(), reset.size());
+    put32(image, 0x140, 0x58000c08);
+    put32(image, 0x144, 1u << 16);
+    put32(image, 0x148, 0x58000c00);
+    put32(image, 0x14c, 1u << 16);
+    put32(image, 0x150, 0x58000c04);
+    put32(image, 0x154, 0xfffeffffu);
+    put32(image, 0x158, 0xe000e104);
+    put32(image, 0x15c, 1u << (45 - 32));
+
+    const auto handler = words({0x4803, // marker address
+                                0x215a,
+                                0x6001,
+                                0x4770});
+    std::memcpy(image.data() + 0x160, handler.data(), handler.size());
+    put32(image, 0x170, 0x20030120);
+
+    stm32wb55emu::Stm32wb55 chip;
+    chip.load_firmware(image);
+    std::vector<std::uint8_t> cpu2_image(0x18, 0);
+    put32(cpu2_image, 0, 0x2003d100);
+    put32(cpu2_image, 4, 0x00000009);
+    const auto cpu2_reset = words({0x4802, // C2SCR
+                                   0x2101, // clear CPU1-to-CPU2 channel 1
+                                   0x6001,
+                                   0xe7fe});
+    std::memcpy(cpu2_image.data() + 8, cpu2_reset.data(), cpu2_reset.size());
+    put32(cpu2_image, 0x14, 0x58000c18);
+    chip.load_cpu2_firmware(cpu2_image, 0x000da000);
+    chip.reset();
+    CHECK(chip.core().run(2000).reason == cortexm::StopReason::Deadline);
+    std::uint32_t marker = 0;
+    CHECK(chip.core().read_memory(0x20030120, &marker, sizeof(marker)));
+    CHECK(chip.read(0x58000c0c, 4) & 1u);
+    CHECK(marker == 0); // A busy sender's channel must not raise TX-free.
+
+    chip.write(0x5800040c, 1u << 15, 4); // Boot CPU2; its reset handler clears channel 1.
+    const std::uint64_t cpu2_target_ns =
+        chip.core().cycles_to_ns(chip.core().cycles()) + 5000;
+    CHECK(chip.run_cpu2_until(cpu2_target_ns).reason == cortexm::StopReason::Deadline);
+    CHECK((chip.read(0x58000c0c, 4) & 1u) == 0);
+    CHECK(chip.core().interrupt_pending());
+    CHECK(chip.core().run(chip.core().cycles() + 2000).reason ==
+          cortexm::StopReason::Deadline);
+    CHECK(chip.core().read_memory(0x20030120, &marker, sizeof(marker)));
+    CHECK(marker == 0x5a);
+}
+
+void test_stm32wb55_cpu2_ipcc_tx_free_waits_for_channel_clear() {
+    std::vector<std::uint8_t> image(0x140, 0);
+    put32(image, 0, 0x2003d100);
+    put32(image, 4, 0x00000009); // CPU2 reset handler at the zero alias.
+    put32(image, (16 + 19) * 4, 0x00000121); // CPU2 IPCC IRQ19.
+
+    const auto reset = words({0x480d, // C2SCR
+                              0x490e, // set CPU2-to-CPU1 channel 1 occupied
+                              0x6001,
+                              0x480e, // C2CR
+                              0x490e, // TXFIE
+                              0x6001,
+                              0x480e, // C2MR
+                              0x490f, // unmask only TXF channel 1
+                              0x6001,
+                              0x480f, // NVIC ISER
+                              0x490f, // IRQ19
+                              0x6001,
+                              0xe7fe}); // wait
+    std::memcpy(image.data() + 8, reset.data(), reset.size());
+    put32(image, 0x40, 0x58000c18);
+    put32(image, 0x44, 1u << 16);
+    put32(image, 0x48, 0x58000c10);
+    put32(image, 0x4c, 1u << 16);
+    put32(image, 0x50, 0x58000c14);
+    put32(image, 0x54, ~(1u << 16));
+    put32(image, 0x58, 0xe000e100);
+    put32(image, 0x5c, 1u << 19);
+
+    const auto handler = words({0x4805, // disable the TX-free interrupt
+                                0x2100,
+                                0x6001,
+                                0x4805, // marker address
+                                0x215a,
+                                0x6001,
+                                0x4770});
+    std::memcpy(image.data() + 0x120, handler.data(), handler.size());
+    put32(image, 0x138, 0x58000c10);
+    put32(image, 0x13c, 0x20030120);
+
+    stm32wb55emu::Stm32wb55 chip;
+    chip.load_cpu2_firmware(image, 0x000da000);
+    chip.write(0x5800040c, 1u << 15, 4); // CPU1 sets C2BOOT.
+    CHECK(chip.run_cpu2_until(5000).reason == cortexm::StopReason::Deadline);
+    std::uint32_t marker = 0;
+    CHECK(chip.core().read_memory(0x20030120, &marker, sizeof(marker)));
+    CHECK(marker == 0); // An occupied channel is not TX-free.
+    CHECK(chip.read(0x58000c1c, 4) & 1u);
+
+    chip.write(0x58000c08, 1, 4); // CPU1 acknowledges CPU2's channel 1.
+    CHECK(chip.run_cpu2_until(10000).reason == cortexm::StopReason::Deadline);
+    CHECK(chip.core().read_memory(0x20030120, &marker, sizeof(marker)));
+    CHECK(marker == 0x5a);
+}
+
 void test_stm32wb55_cpu1_clears_cpu2_ipcc_receive_flag() {
     std::vector<std::uint8_t> cpu1_image(0x168, 0);
     put32(cpu1_image, 0, 0x2003d100);

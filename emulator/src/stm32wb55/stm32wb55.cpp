@@ -25,6 +25,8 @@ constexpr std::uint32_t PwrSr1 = PwrBase + 0x10;
 constexpr std::uint32_t PwrScr = PwrBase + 0x18;
 constexpr std::uint32_t PwrExtScr = PwrBase + 0x88;
 constexpr std::uint32_t IpccBase = 0x58000c00;
+constexpr std::uint32_t IpccChannelMask = 0x3fu;
+constexpr std::uint32_t IpccTxChannelMask = IpccChannelMask << 16;
 constexpr std::uint32_t RngBase = 0x58001000;
 constexpr std::uint32_t HsemBase = 0x58001400;
 constexpr std::uint32_t FlashControlBase = 0x58004000;
@@ -71,6 +73,11 @@ constexpr std::uint32_t RngEnable = 1u << 2;
 constexpr std::uint32_t RngInterruptEnable = 1u << 3;
 constexpr std::uint64_t RngReadyTimeNs = 1000; // modeled 64 cycles at the 64 MHz CPU1 clock.
 constexpr std::uint64_t Never = std::numeric_limits<std::uint64_t>::max();
+
+bool ipcc_tx_free_pending(std::uint32_t status, std::uint32_t mask) {
+    const std::uint32_t free_channels = ~status & IpccChannelMask;
+    return ((free_channels << 16) & ~mask & IpccTxChannelMask) != 0;
+}
 constexpr std::uint32_t RadioPollCycles = 1280; // 20 us at 64 MHz.
 constexpr std::uint64_t RadioAckTurnaroundNs = 192000; // 12 symbols at 2.4 GHz.
 
@@ -384,6 +391,8 @@ void Stm32wb55::reset() {
     cpu2_rf_indirect_registers_.fill(0);
     cpu2_mac_registers_.fill(0);
     cpu2_mac_rx_fifo_.clear();
+    cpu2_mac_rx_pending_frame_.reset();
+    cpu2_mac_rx_next_event_ns_ = 0;
     cpu2_mac_tx_fifo_.clear();
     cpu2_mac_compare_fired_.fill(false);
     cpu2_mac_tx_has_phr_ = false;
@@ -898,6 +907,8 @@ void Stm32wb55::write_mmio(std::uint32_t address, std::uint32_t value, unsigned 
             cpu2_rf_indirect_registers_.fill(0);
             cpu2_mac_registers_.fill(0);
             cpu2_mac_rx_fifo_.clear();
+            cpu2_mac_rx_pending_frame_.reset();
+            cpu2_mac_rx_next_event_ns_ = 0;
             cpu2_mac_tx_fifo_.clear();
             cpu2_mac_compare_fired_.fill(false);
             cpu2_mac_tx_has_phr_ = false;
@@ -1056,6 +1067,8 @@ void Stm32wb55::cpu2_mac_write_command(std::uint16_t command, std::uint64_t now_
     }
     if (opcode == 0x15) { // Release/drop the current RX FIFO contents.
         cpu2_mac_rx_fifo_.clear();
+        cpu2_mac_rx_pending_frame_.reset();
+        cpu2_mac_rx_next_event_ns_ = 0;
         return;
     }
     if (opcode == 0x14) { // Abort a failed sequencer operation.
@@ -1092,6 +1105,30 @@ std::uint32_t Stm32wb55::cpu2_mac_counter(std::uint64_t now_ns) const {
 }
 
 void Stm32wb55::cpu2_mac_advance(std::uint64_t now_ns) {
+    if (cpu2_mac_rx_pending_frame_ && now_ns >= cpu2_mac_rx_next_event_ns_) {
+        const mcuemu::RadioFrame &frame = *cpu2_mac_rx_pending_frame_;
+        cpu2_mac_registers_[0x14] =
+            frame.payload.size() >= 2 ? get16(frame.payload.data()) : 0;
+        cpu2_mac_registers_[0x15] = frame.payload.size() >= 3 ? frame.payload[2] : 0;
+        const std::uint8_t phr = static_cast<std::uint8_t>(frame.payload.size() + 2);
+        cpu2_mac_registers_[0x02] = phr;
+        cpu2_mac_registers_[0x03] = static_cast<std::uint16_t>(
+            (static_cast<std::uint8_t>(frame.rssi_dbm) & 0xffu) << 4);
+        // R008 carries the PHR length. R3e8 exposes the PSDU and FCS, without
+        // the PHY length byte, so the RCP consumes exactly that many bytes.
+        cpu2_mac_rx_fifo_.insert(cpu2_mac_rx_fifo_.end(), frame.payload.begin(),
+                                 frame.payload.end());
+        const std::uint16_t fcs = ieee802154_fcs(frame.payload);
+        cpu2_mac_rx_fifo_.push_back(static_cast<std::uint8_t>(fcs));
+        cpu2_mac_rx_fifo_.push_back(static_cast<std::uint8_t>(fcs >> 8));
+        // The RCP defers E0.0 until E0.2 is handled, so latch E0.2, E0.3 and
+        // E0.0 together for one IRQ8 pass to parse and drain this frame.
+        cpu2_mac_registers_[0x2d] |= (1u << 3) | (1u << 2) | 1u;
+        cpu2_mac_rx_pending_frame_.reset();
+        cpu2_mac_rx_next_event_ns_ = 0;
+        cpu2_mac_update_irq();
+    }
+
     if (cpu2_mac_tx_pending_ && now_ns >= cpu2_mac_tx_start_ns_) {
         const std::size_t expected = cpu2_mac_tx_phr_ -
                                      ((cpu2_mac_registers_[0x40] & 0x8000u) ? 2u : 0u);
@@ -1167,27 +1204,19 @@ void Stm32wb55::cpu2_mac_poll_radio(std::uint64_t now_ns) {
     const auto frames = air_->receive(radio_node_, mcuemu::RadioProtocol::Zigbee802154,
                                       channel, now_ns, after);
     for (const auto &frame : frames)
-        cpu2_mac_receive_frame(frame);
+        cpu2_mac_receive_frame(frame, now_ns);
 }
 
-void Stm32wb55::cpu2_mac_receive_frame(const mcuemu::RadioFrame &frame) {
-    if (frame.payload.size() + 2 > 127 || !cpu2_mac_rx_fifo_.empty())
+void Stm32wb55::cpu2_mac_receive_frame(const mcuemu::RadioFrame &frame,
+                                        std::uint64_t now_ns) {
+    if (frame.payload.size() + 2 > 127 || !cpu2_mac_rx_fifo_.empty() ||
+        cpu2_mac_rx_pending_frame_)
         return;
-    const std::uint8_t phr = static_cast<std::uint8_t>(frame.payload.size() + 2);
-    cpu2_mac_registers_[0x02] = phr;
-    cpu2_mac_registers_[0x03] = static_cast<std::uint16_t>(
-        (static_cast<std::uint8_t>(frame.rssi_dbm) & 0xffu) << 4);
-    cpu2_mac_registers_[0x14] = frame.payload.size() >= 2 ? get16(frame.payload.data()) : 0;
-    cpu2_mac_registers_[0x15] = frame.payload.size() >= 3 ? frame.payload[2] : 0;
+    cpu2_mac_rx_pending_frame_ = frame;
+    cpu2_mac_rx_next_event_ns_ = now_ns + Cpu2MacSymbolNs;
     cpu2_mac_rssi_dbm_ = static_cast<std::int8_t>(frame.rssi_dbm);
     cpu2_mac_rssi_valid_ = true;
-    cpu2_mac_rx_fifo_.push_back(phr);
-    cpu2_mac_rx_fifo_.insert(cpu2_mac_rx_fifo_.end(), frame.payload.begin(), frame.payload.end());
-    const std::uint16_t fcs = ieee802154_fcs(frame.payload);
-    cpu2_mac_rx_fifo_.push_back(static_cast<std::uint8_t>(fcs));
-    cpu2_mac_rx_fifo_.push_back(static_cast<std::uint8_t>(fcs >> 8));
     cpu2_mac_registers_[0x2e] |= 1u << 15; // E1.15: RX SFD.
-    cpu2_mac_registers_[0x2d] |= (1u << 3) | 1u; // E0.3 header, then E0.0 frame end.
     cpu2_mac_update_irq();
 }
 
@@ -1486,7 +1515,7 @@ void Stm32wb55::signal_cpu1_rx(unsigned) {
 
 void Stm32wb55::signal_cpu1_tx(unsigned) {
     const bool pending = (ipcc_c1cr_ & (1u << 16)) &&
-                         ((~c1toc2sr_) & ~ipcc_c1mr_ & 0x003f0000u);
+                         ipcc_tx_free_pending(c1toc2sr_, ipcc_c1mr_);
     core_->set_irq_line(IpccTxIrq, pending);
     if (cpu2_started_)
         core_->request_service(core_->cycles() + 1);
@@ -1498,7 +1527,7 @@ void Stm32wb55::signal_cpu2_rx(unsigned) {
     const bool rx_pending = (ipcc_c2cr_ & 1u) &&
                             (c1toc2sr_ & ~ipcc_c2mr_ & 0x003fu);
     const bool tx_pending = (ipcc_c2cr_ & (1u << 16)) &&
-                            ((~c2toc1sr_) & ~ipcc_c2mr_ & 0x003f0000u);
+                            ipcc_tx_free_pending(c2toc1sr_, ipcc_c2mr_);
     cpu2_core_->set_irq_line(Cpu2IpccIrq, rx_pending || tx_pending);
 }
 
