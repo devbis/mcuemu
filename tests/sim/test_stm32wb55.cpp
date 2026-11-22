@@ -72,4 +72,22 @@ void test_stm32wb55_cpu2_802154_window_clock_gate() {
     CHECK(chip.read(0x60001100, 4) == 0x12345678);
 }
 
+void test_stm32wb55_cpu2_rf_reset_status_and_registers() {
+    stm32wb55emu::Stm32wb55 chip;
+    chip.write(0x58000164, 1u << 1, 4);
+    chip.write(0x60001100, 0x12345678, 4);
+    CHECK(chip.read(0x60001100, 4) == 0x12345678);
+
+    chip.write(0x58000044, 1, 4); // RCC_APB3RSTR.RFRST.
+    CHECK(chip.read(0x58000094, 4) & (1u << 16)); // RCC_CSR.RFRSTS.
+    CHECK(chip.read(0x60001100, 4) == 0);
+    chip.write(0x60001100, 0x87654321, 4); // Writes during reset are ignored.
+
+    chip.write(0x58000044, 0, 4);
+    CHECK((chip.read(0x58000094, 4) & (1u << 16)) == 0);
+    CHECK(chip.read(0x60001100, 4) == 0);
+    chip.write(0x60001100, 0x87654321, 4);
+    CHECK(chip.read(0x60001100, 4) == 0x87654321);
+}
+
 } // namespace mcuemu_tests

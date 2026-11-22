@@ -69,7 +69,10 @@ completes synchronously because its hardware latency is unknown. Direct
 802.15.4 control registers at `0x60001000..0x60001fff` retain masked writes, but
 are accessible only while `RCC_C2APB3ENR.802EN` is set; disabling that clock hides
 the stored values and ignores writes, while preserving register contents. Their
-radio side effects, RF timing, and packet transfer are not modeled.
+radio side effects, RF timing, and packet transfer are not modeled. As observed
+in the PHY reset helper and confirmed by the RCC register definitions,
+`RCC_APB3RSTR.RFRST` resets the modeled RF register window, gates its accesses,
+and drives `RCC_CSR.RFRSTS` until reset is released.
 Unimplemented peripheral registers read as zero or retain writes.
 
 ### Inferred PHY register transport

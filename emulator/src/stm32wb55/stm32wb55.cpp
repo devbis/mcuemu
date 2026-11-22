@@ -14,6 +14,10 @@ constexpr std::uint32_t SystemMemorySize = 0x10000;
 constexpr std::uint32_t Cpu2ModelVector = SystemMemoryBase + 0xf000;
 constexpr std::uint32_t Cpu2ModelCode = SystemMemoryBase + 0xf100;
 constexpr std::uint32_t RccBase = 0x58000000;
+constexpr std::uint32_t RccApb3Reset = RccBase + 0x44;
+constexpr std::uint32_t RccCsr = RccBase + 0x94;
+constexpr std::uint32_t RccApb3RfReset = 1u << 0;
+constexpr std::uint32_t RccCsrRfResetStatus = 1u << 16;
 constexpr std::uint32_t RccCpu2Apb3Enable = RccBase + 0x164;
 constexpr std::uint32_t RccCpu2Apb3Ieee802154Enable = 1u << 1;
 constexpr std::uint32_t PwrBase = 0x58000400;
@@ -31,6 +35,8 @@ constexpr std::uint32_t FlashSrrvrCpu2BootFromFlash = 1u << 31;
 constexpr std::uint32_t FlashSrrvrBootVectorMask = 0x3ffffu;
 constexpr std::uint32_t Cpu2PhyCommand = 0x6000000c;
 constexpr std::uint32_t Cpu2PhyCommandBusy = 1u << 16;
+constexpr std::uint32_t Cpu2Apb3Base = 0x60000000;
+constexpr std::uint32_t Cpu2Apb3End = 0x60002000;
 constexpr std::uint32_t Cpu2Ieee802154Base = 0x60001000;
 constexpr std::uint32_t Cpu2Ieee802154End = 0x60002000;
 constexpr std::uint32_t Apb3ReservedBase = 0x60000800;
@@ -359,6 +365,7 @@ void Stm32wb55::reset() {
     rng_next_ready_ns_ = 0;
     rng_data_ready_ = false;
     registers_.clear();
+    cpu2_phy_indirect_registers_.fill(0);
     registers_[FlashControlBase + 0x3c] = 0;
     registers_[RccBase] = (1u << 1) | (1u << 10) | (1u << 17) | (1u << 25);
     registers_[RccBase + 0x98] = 1u << 1;
@@ -442,6 +449,9 @@ void Stm32wb55::write_cpu2_mmio(std::uint32_t address, std::uint32_t value, unsi
 std::uint32_t Stm32wb55::read_mmio(std::uint32_t address, unsigned size) {
     cortexm::Core &bus_core = mmio_core_ ? *mmio_core_ : *core_;
     if (address >= Apb3ReservedBase && address < Apb3ReservedEnd)
+        return lane_read(0, address, size);
+    if (address >= Cpu2Apb3Base && address < Cpu2Apb3End &&
+        (registers_[RccApb3Reset] & RccApb3RfReset))
         return lane_read(0, address, size);
     if (address >= Cpu2Ieee802154Base && address < Cpu2Ieee802154End &&
         !(registers_[RccCpu2Apb3Enable] & RccCpu2Apb3Ieee802154Enable))
@@ -561,6 +571,9 @@ void Stm32wb55::write_mmio(std::uint32_t address, std::uint32_t value, unsigned 
     const bool from_cpu2 = mmio_core_ == cpu2_core_.get();
     const std::uint32_t base = address & ~3u;
     if (address >= Apb3ReservedBase && address < Apb3ReservedEnd)
+        return;
+    if (address >= Cpu2Apb3Base && address < Cpu2Apb3End &&
+        (registers_[RccApb3Reset] & RccApb3RfReset))
         return;
     if (address >= Cpu2Ieee802154Base && address < Cpu2Ieee802154End &&
         !(registers_[RccCpu2Apb3Enable] & RccCpu2Apb3Ieee802154Enable))
@@ -765,6 +778,22 @@ void Stm32wb55::write_mmio(std::uint32_t address, std::uint32_t value, unsigned 
         if (updated & 1u) updated |= 2u;
     } else if (base == RccBase + 0x98) {
         if (updated & 1u) updated |= 2u;
+    } else if (base == RccApb3Reset) {
+        const bool was_in_reset = (registers_[base] & RccApb3RfReset) != 0;
+        const bool in_reset = (updated & RccApb3RfReset) != 0;
+        if (in_reset && !was_in_reset) {
+            auto reg = registers_.lower_bound(Cpu2Apb3Base);
+            while (reg != registers_.end() && reg->first < Cpu2Apb3End)
+                reg = registers_.erase(reg);
+            cpu2_phy_indirect_registers_.fill(0);
+        }
+        if (in_reset)
+            registers_[RccCsr] |= RccCsrRfResetStatus;
+        else
+            registers_[RccCsr] &= ~RccCsrRfResetStatus;
+    } else if (base == RccCsr) {
+        updated = (updated & ~RccCsrRfResetStatus) |
+                  (registers_[base] & RccCsrRfResetStatus);
     }
     registers_[base] = updated;
 
