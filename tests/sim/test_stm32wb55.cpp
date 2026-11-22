@@ -17,19 +17,24 @@ void put32(std::vector<std::uint8_t> &bytes, std::size_t offset, std::uint32_t v
 
 void test_stm32wb55_cpu2_zero_based_flash_and_sram_aliases() {
     constexpr std::uint32_t install_offset = 0x000dd000;
-    std::vector<std::uint8_t> image(24, 0);
+    std::vector<std::uint8_t> image(32, 0);
     put32(image, 0, 0x2003d100); // CPU2 stack in SRAM2.
     put32(image, 4, 0x00000009); // reset handler at CPU2 code alias address 0x8.
-    const auto code = words({0x4802, // ldr r0, [pc, #8] -> alias SRAM at 0x10000010
-                             0x215a, // movs r1, #0x5a
+    const auto code = words({0x4803, // ldr r0, [pc, #12] -> reference table at 0x10000000
+                             0x6801, // ldr r1, [r0]
+                             0x4803, // ldr r0, [pc, #12] -> alias SRAM at 0x10000010
                              0x6001, // str r1, [r0]
                              0xe7fe}); // b .
     std::memcpy(image.data() + 8, code.data(), code.size());
-    put32(image, 20, 0x10000010);
+    put32(image, 24, 0x10000000);
+    put32(image, 28, 0x10000010);
 
     stm32wb55emu::Stm32wb55 chip;
     chip.load_cpu2_firmware(image, install_offset);
     CHECK(chip.cpu2_has_vector_table());
+    const std::uint32_t device_info_table = 0x200300b8;
+    CHECK(chip.core().write_memory(0x20030000, &device_info_table,
+                                   sizeof(device_info_table)));
     chip.write(0x5800040c, 1u << 15, 4); // CPU1 sets C2BOOT.
     const auto result = chip.run_cpu2_until(2000);
     CHECK(result.reason == cortexm::StopReason::Deadline);
@@ -37,7 +42,7 @@ void test_stm32wb55_cpu2_zero_based_flash_and_sram_aliases() {
 
     std::uint32_t value = 0;
     CHECK(chip.core().read_memory(0x20030010, &value, sizeof(value)));
-    CHECK(value == 0x5a);
+    CHECK(value == device_info_table);
 
     std::uint32_t installed_word = 0;
     CHECK(chip.core().read_memory(stm32wb55emu::Stm32wb55::FlashBase + install_offset,

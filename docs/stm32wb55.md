@@ -46,6 +46,25 @@ of the empty shared reference table at `0x20030000` and writes the `0x3de96f61`
 failure sentinel there. This confirms CPU2 alias execution, but not PHY
 initialization; a compatible CPU1 host must populate the IPCC/mailbox table.
 
+The PHY reads `FLASH_IPCCBR.IPCCDBA` and uses
+`0x20030000 + 4 * IPCCDBA` as the table base. With the modeled default
+`IPCCDBA = 0`, this is the usual CubeWB `TL_RefTable` location. Its ten entries
+point, in order, to the device-info, BLE, Thread, system, memory-manager,
+traces, 802.15.4 MAC, Zigbee, LLD-tests, and BLE LLD tables. During startup the
+PHY validates the 0x20-byte device-info table and also consumes system command
+and queue pointers, a memory pool and its size, a trace queue, and LLD-test
+buffers. The CPU1 side must initialize the linked-list queue heads as well as
+the pointers; a zero-filled table or just a valid entry 0 is insufficient.
+CubeWB's transport does this through `TL_Init`, `TL_SYS_Init`, `TL_MM_Init`,
+and the relevant stack-specific table initializers.
+
+A scratch boot with a synthetic reference table, valid pool and self-linked
+system queue advanced the raw PHY past `0x90ae` and into its low-power `WFI`
+path near `0xf7e0`. This verifies the model's shared SRAM path and the PHY's
+early mailbox-dependent startup. It does not initialize the 802.15.4 MAC or
+provide the CPU1 command service needed for on-air operation; the matching
+Thread/Zigbee host stack is still required for that.
+
 The emulator expects executable bytes with a Cortex-M vector table. It does not
 unpack encrypted STM32 wireless-firmware packages distributed for the Firmware
 Upgrade Service (FUS); those packages do not contain directly executable CPU2
