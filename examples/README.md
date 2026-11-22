@@ -70,7 +70,7 @@ No firmware image is stored in the repository. Put the images where the
 | nRF52840 board | `nrf52840-sensor.bin`, the Embassy Zigbee sensor image of `zigbee-rs` (built for the nRF52840-DK; the CI artifact `nrf52840-sensor-firmware`) | `firmware/nrf52840-sensor.bin` |
 | EFR32MG21 board | `efr32mg21-sensor.bin` of `zigbee-rs` (BRD4181A; the CI artifact `efr32mg21-sensor-firmware`) | `firmware/efr32mg21-sensor.bin` (used by `efr32mg21_zigbee.yaml`) |
 | STM32WB55 Zephyr CPU1 | `zephyr.bin` built for `weact_stm32wb55_core` with the Zigbee ED config | `firmware/stm32wb55-zigbee-shell.bin` (used by `stm32wb55_zigbee.yaml`; see the Zephyr source fix in `docs/stm32wb55.md`) |
-| STM32WB55 CPU2 | Optional raw executable CPU2 image linked for the address in `cpu2_firmware.offset`; ST FUS wireless-stack packages are encrypted and cannot be loaded directly | `firmware/stm32wb55-cpu2.bin` (optional; configured separately from the Zigbee join example) |
+| STM32WB55 CPU2 | Optional raw CPU2 image installed at the physical flash offset in `cpu2_firmware.offset`; M0+ images may execute through the zero-based code alias. ST FUS wireless-stack packages are encrypted and cannot be loaded directly | `firmware/stm32wb55-cpu2.bin` (optional; configured separately from the Zigbee join example) |
 | CC2530 Z-Stack router | `DIYRuZ_Motion_Router.hex` 0.0.5 from the `koptserg/motion` releases | `firmware/DIYRuZ_Motion_Router.hex` (used by `cc2530_zigbee.yaml`) |
 | nRF52840 board with SHT31 | the `sensor-sht31` variant of the same image (CI artifact `nrf52840-sensor-sht31-firmware`) | `firmware/nrf52840-sensor-sht31.bin` (used by `nrf52840_zigbee.yaml`) |
 

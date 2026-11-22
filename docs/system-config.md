@@ -99,11 +99,12 @@ the file); numbers may be decimal or `0x` hex. Only `tlsr8258` accepts more
 than a single image at offset 0.
 
 `stm32wb55` accepts a separate `cpu2_firmware:` image (or list of image
-pieces), loaded into the same flash address space as CPU1. CPU2 starts when
-CPU1 sets C2BOOT. The image must be a raw executable linked for the selected
-flash offset; encrypted STM32 wireless-stack packages are not decoded by the
-emulator. When no CPU2 image is configured, CPU2 execution is skipped and a
-host-side Thread RCP compatibility model handles the IPCC commands instead.
+pieces), loaded into the same flash as CPU1. CPU2 starts when CPU1 sets C2BOOT.
+`offset` selects the physical flash install location. The loader supports both
+images whose vectors point into physical flash and M0+ images whose code is
+exposed through the `0x00000000` alias. Encrypted STM32 wireless-stack packages
+are not decoded by the emulator. When no CPU2 image is configured, the built-in
+Thread RCP compatibility model handles IPCC commands in CPU2's time domain.
 See [`stm32wb55.md`](stm32wb55.md) for the current CPU/peripheral coverage.
 
 For `phy6252`, `efuse:` optionally supplies a raw 32-byte external dump, four

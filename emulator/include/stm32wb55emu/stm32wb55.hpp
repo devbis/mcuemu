@@ -3,6 +3,7 @@
 #include "cortexm/core.hpp"
 #include "mcuemu/radio.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -76,6 +77,7 @@ private:
     void write_mmio(std::uint32_t address, std::uint32_t value, unsigned size);
     std::uint32_t read_cpu2_mmio(std::uint32_t address, unsigned size);
     void write_cpu2_mmio(std::uint32_t address, std::uint32_t value, unsigned size);
+    void execute_cpu2_phy_register_command(std::uint32_t command);
     void ipcc_command(unsigned channel);
     void complete_system_command();
     void start_cpu2();
@@ -116,7 +118,11 @@ private:
     std::uint8_t *flash_{nullptr};
     std::uint8_t *ram_{nullptr};
     std::uint8_t *system_memory_{nullptr};
+    std::uint32_t cpu2_vector_table_address_{0};
+    std::uint32_t cpu2_flash_offset_{0};
+    std::uint32_t cpu2_reset_vector_offset_{0};
     std::map<std::uint32_t, std::uint32_t> registers_;
+    std::array<std::uint8_t, 0x7e> cpu2_phy_indirect_registers_{};
     std::uint32_t ipcc_c1cr_{0};
     std::uint32_t ipcc_c1mr_{0xffffffffu};
     std::uint32_t ipcc_c2cr_{0};
@@ -139,9 +145,9 @@ private:
     std::uint16_t short_address_{0xffff};
     std::uint32_t code_end_{0};
     std::uint32_t vector_table_offset_{0};
-    std::uint32_t cpu2_vector_table_offset_{0};
     bool cpu2_image_loaded_{false};
     bool cpu2_vector_table_found_{false};
+    bool cpu2_code_alias_mapped_{false};
     bool cpu2_model_active_{false};
     bool cpu2_model_boot_pending_{false};
     std::uint32_t cpu2_model_pending_channels_{0};

@@ -378,6 +378,7 @@ if(MCUEMU_BUILD_TESTS)
         tests/sim/test_radio_medium.cpp
         tests/sim/test_attach.cpp
         tests/sim/test_nrf52.cpp
+        tests/sim/test_stm32wb55.cpp
         tests/sim/test_efr32.cpp
         tests/sim/test_bl702.cpp
         tests/sim/test_control.cpp

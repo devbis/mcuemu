@@ -19,6 +19,15 @@ constexpr std::uint32_t IpccBase = 0x58000c00;
 constexpr std::uint32_t RngBase = 0x58001000;
 constexpr std::uint32_t HsemBase = 0x58001400;
 constexpr std::uint32_t FlashControlBase = 0x58004000;
+constexpr std::uint32_t FlashOptionSecurityEnable = 1u << 8;
+constexpr std::uint32_t FlashSrrvrBackupSramSecure = 1u << 23;
+constexpr std::uint32_t FlashSrrvrNonBackupSramSecure = 1u << 30;
+constexpr std::uint32_t FlashSrrvrCpu2BootFromFlash = 1u << 31;
+constexpr std::uint32_t FlashSrrvrBootVectorMask = 0x3ffffu;
+constexpr std::uint32_t Cpu2PhyCommand = 0x6000000c;
+constexpr std::uint32_t Cpu2PhyCommandBusy = 1u << 16;
+constexpr std::uint32_t Apb3ReservedBase = 0x60000800;
+constexpr std::uint32_t Apb3ReservedEnd = 0x60001000;
 constexpr std::uint32_t IpccRxIrq = 44;
 constexpr std::uint32_t IpccTxIrq = 45;
 constexpr std::uint32_t LptimIrq = 47;
@@ -121,6 +130,8 @@ Stm32wb55::Stm32wb55() {
     cpu2_core_->map_memory_alias(FlashBase, FlashSize, false, flash_);
     cpu2_core_->map_memory_alias(RamBase, RamSize, true, ram_);
     cpu2_core_->map_memory_alias(SystemMemoryBase, SystemMemorySize, false, system_memory_);
+    // CPU2 sees the secured SRAM2a/SRAM2b through the 0x10000000 alias too.
+    cpu2_core_->map_memory_alias(0x10000000, 0x10000, true, ram_ + 0x30000);
     cpu2_bus_ = std::make_unique<Cpu2Bus>(*this);
     std::memset(flash_, 0xff, FlashSize);
     std::memset(ram_, 0, RamSize);
@@ -157,6 +168,9 @@ Stm32wb55::Stm32wb55() {
     core_->set_service_handler([this](std::uint64_t now) { return service(now); });
     cpu2_core_->map_mmio(0x40000000, 0x10000000, *cpu2_bus_);
     cpu2_core_->map_mmio(0x58000000, 0x01000000, *cpu2_bus_);
+    // RM0434 assigns APB3 to the CPU2 radio controls. Its register-level
+    // description is incomplete, so retain the documented address window.
+    cpu2_core_->map_mmio(0x60000000, 0x00002000, *cpu2_bus_);
     cpu2_core_->set_service_handler([this](std::uint64_t now) { return service_cpu2(now); });
     const auto flash_write = [this](std::uint32_t address, unsigned size,
                                     std::uint32_t value) {
@@ -220,7 +234,7 @@ cortexm::RunResult Stm32wb55::run_cpu2_until(std::uint64_t target_ns) {
     while (cpu2_core_->cycles() < target) {
         const cortexm::RunResult result = cpu2_core_->run(target);
         if (result.reason == cortexm::StopReason::Reset) {
-            cpu2_core_->reset(FlashBase + cpu2_vector_table_offset_);
+            cpu2_core_->reset(cpu2_vector_table_address_);
             continue;
         }
         if (result.reason == cortexm::StopReason::StepLimit)
@@ -275,18 +289,40 @@ void Stm32wb55::load_cpu2_firmware(const std::vector<std::uint8_t> &image,
         throw std::runtime_error("CPU2 firmware does not fit in the 1 MiB STM32WB55 flash");
     std::copy(image.begin(), image.end(), flash_ + offset);
     code_end_ = std::max(code_end_, offset + static_cast<std::uint32_t>(image.size()));
+    cpu2_flash_offset_ = offset;
+    cpu2_reset_vector_offset_ = offset;
     if (!cpu2_vector_table_found_)
-        cpu2_vector_table_offset_ = offset;
+        cpu2_vector_table_address_ = FlashBase + offset;
     const std::size_t scan = std::min<std::size_t>(image.size(), 0x1000);
     for (std::size_t candidate = 0; candidate + 8 <= scan; candidate += 4) {
         const std::uint32_t initial_sp = get32(image.data() + candidate);
         const std::uint32_t reset_pc = get32(image.data() + candidate + 4);
-        if (initial_sp >= RamBase && initial_sp <= RamBase + RamSize &&
-            (initial_sp & 3u) == 0 && (reset_pc & 1u) &&
-            (reset_pc & ~1u) >= FlashBase + offset &&
-            (reset_pc & ~1u) < FlashBase + FlashSize) {
+        const std::uint32_t reset_address = reset_pc & ~1u;
+        const bool valid_stack =
+            (initial_sp >= RamBase && initial_sp <= RamBase + RamSize) ||
+            (initial_sp >= 0x10000000 && initial_sp <= 0x10010000);
+        const bool physical_flash_entry = reset_address >= FlashBase + offset &&
+                                          reset_address < FlashBase + FlashSize;
+        const bool cpu2_alias_entry = reset_address < image.size();
+        if (valid_stack && (initial_sp & 3u) == 0 && (reset_pc & 1u) &&
+            (physical_flash_entry || cpu2_alias_entry)) {
             if (!cpu2_vector_table_found_) {
-                cpu2_vector_table_offset_ = offset + static_cast<std::uint32_t>(candidate);
+                if (physical_flash_entry) {
+                    cpu2_vector_table_address_ = FlashBase + offset +
+                                                 static_cast<std::uint32_t>(candidate);
+                } else {
+                    // Wireless firmware is installed in secure flash at a high
+                    // physical offset, but CPU2 executes it through its 0-based
+                    // code alias. Map the installed bytes directly so both views
+                    // still refer to the same flash storage.
+                    if (!cpu2_code_alias_mapped_) {
+                        cpu2_core_->map_memory_alias(0, FlashSize - offset, false,
+                                                     flash_ + offset);
+                        cpu2_code_alias_mapped_ = true;
+                    }
+                    cpu2_vector_table_address_ = static_cast<std::uint32_t>(candidate);
+                }
+                cpu2_reset_vector_offset_ = offset + static_cast<std::uint32_t>(candidate);
                 cpu2_vector_table_found_ = true;
             }
             break;
@@ -398,6 +434,8 @@ void Stm32wb55::write_cpu2_mmio(std::uint32_t address, std::uint32_t value, unsi
 
 std::uint32_t Stm32wb55::read_mmio(std::uint32_t address, unsigned size) {
     cortexm::Core &bus_core = mmio_core_ ? *mmio_core_ : *core_;
+    if (address >= Apb3ReservedBase && address < Apb3ReservedEnd)
+        return lane_read(0, address, size);
     if (address >= RngBase && address < RngBase + 0x400) {
         rng_advance(core_time_ns(bus_core));
         const std::uint32_t base = address & ~3u;
@@ -463,8 +501,32 @@ std::uint32_t Stm32wb55::read_mmio(std::uint32_t address, unsigned size) {
         return lane_read(registers_[address & ~3u], address, size);
     if (address >= PwrBase && address < PwrBase + 0x100)
         return lane_read(registers_[address & ~3u], address, size);
-    if ((address & ~3u) == FlashControlBase + 0x3c)
-        return lane_read(0, address, size);
+    const std::uint32_t flash_register = address & ~3u;
+    if (flash_register == FlashControlBase + 0x20)
+        return lane_read(cpu2_image_loaded_ && cpu2_flash_offset_ != 0
+                             ? FlashOptionSecurityEnable
+                             : 0,
+                         address, size);
+    if (flash_register == FlashControlBase + 0x3c)
+        return lane_read(0, address, size); // IPCCDBA selects SRAM2A's base.
+    if (flash_register == FlashControlBase + 0x80) {
+        const std::uint32_t secure_page = cpu2_image_loaded_
+                                              ? std::min(cpu2_flash_offset_ >> 12, 0xffu)
+                                              : 0xffu;
+        return lane_read(secure_page, address, size);
+    }
+    if (flash_register == FlashControlBase + 0x84) {
+        const std::uint32_t boot_vector = (cpu2_reset_vector_offset_ >> 2) &
+                                          FlashSrrvrBootVectorMask;
+        const std::uint32_t secure_sram = cpu2_image_loaded_ && cpu2_flash_offset_ != 0
+                                              ? FlashSrrvrBackupSramSecure |
+                                                    FlashSrrvrNonBackupSramSecure
+                                              : 0;
+        const std::uint32_t boot_from_flash = cpu2_image_loaded_
+                                                  ? FlashSrrvrCpu2BootFromFlash
+                                                  : 0;
+        return lane_read(boot_vector | secure_sram | boot_from_flash, address, size);
+    }
 
     const std::uint32_t base = address & ~3u;
     std::uint32_t value = registers_[base];
@@ -487,6 +549,23 @@ void Stm32wb55::write_mmio(std::uint32_t address, std::uint32_t value, unsigned 
     cortexm::Core &bus_core = mmio_core_ ? *mmio_core_ : *core_;
     const bool from_cpu2 = mmio_core_ == cpu2_core_.get();
     const std::uint32_t base = address & ~3u;
+    if (address >= Apb3ReservedBase && address < Apb3ReservedEnd)
+        return;
+    if (base == FlashControlBase + 0x20 || base == FlashControlBase + 0x3c ||
+        base == FlashControlBase + 0x80 || base == FlashControlBase + 0x84)
+        return; // Option bytes and IPCCDBA are read-only at runtime.
+    if (from_cpu2 && base == Cpu2PhyCommand) {
+        std::uint32_t updated = lane_write(registers_[base], value, address, size);
+        if (updated & Cpu2PhyCommandBusy) {
+            execute_cpu2_phy_register_command(updated);
+            // PHY v1.25.0 polls this hardware busy bit after submitting the
+            // SRAM2 descriptor. Completion is functional here; RF bus latency
+            // is not yet characterized.
+            updated &= ~Cpu2PhyCommandBusy;
+        }
+        registers_[base] = updated;
+        return;
+    }
     if (address >= RngBase && address < RngBase + 0x400) {
         const std::uint64_t now_ns = core_time_ns(bus_core);
         rng_advance(now_ns);
@@ -661,6 +740,38 @@ void Stm32wb55::write_mmio(std::uint32_t address, std::uint32_t value, unsigned 
     if (base == 0x40021000) {
         // DMA status is sticky in hardware; an IFCR write clears matching flags.
         registers_[0x40021000] &= ~value;
+    }
+}
+
+void Stm32wb55::execute_cpu2_phy_register_command(std::uint32_t command) {
+    // INFERRED from the PHY v1.25.0 command helper: bits 0..15 point to a
+    // descriptor relative to SRAM2A (0x20030000), while bit 16 starts it.
+    constexpr std::size_t Sram2Size = 0x10000;
+    constexpr std::size_t RegisterCount = 0x7e;
+    const std::size_t offset = command & 0xffffu;
+    if (offset + 3 > Sram2Size)
+        return;
+
+    std::uint8_t *descriptor = ram_ + (Sram2aBase - RamBase) + offset;
+    const std::uint8_t header = descriptor[0];
+    const std::size_t encoded_length = header & 0x7fu;
+    const std::size_t first_register = descriptor[1];
+    if (encoded_length == 0)
+        return;
+
+    const std::size_t count = encoded_length - 1;
+    if (offset + count + 3 > Sram2Size || first_register >= 0x7d ||
+        first_register + count >= RegisterCount)
+        return;
+
+    // The helper sets header bit 7 for reads; writes carry the bytes directly
+    // after the register index. The trailing byte is a terminator.
+    if (header & 0x80u) {
+        std::copy_n(cpu2_phy_indirect_registers_.begin() + first_register,
+                    count, descriptor + 2);
+    } else {
+        std::copy_n(descriptor + 2, count,
+                    cpu2_phy_indirect_registers_.begin() + first_register);
     }
 }
 
@@ -875,7 +986,7 @@ void Stm32wb55::start_cpu2() {
     cpu2_stopped_ = false;
     cpu2_stop_result_ = {};
     if (cpu2_image_loaded_) {
-        cpu2_core_->reset(FlashBase + cpu2_vector_table_offset_);
+        cpu2_core_->reset(cpu2_vector_table_address_);
         signal_cpu2_rx(0);
         core_->request_service(core_->cycles() + 1);
         return;
