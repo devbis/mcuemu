@@ -124,16 +124,38 @@ void test_stm32wb55_thread_rcp_single_byte_rf_register_access() {
 }
 
 void test_stm32wb55_cpu2_ipcc_channel_directions() {
-    std::vector<std::uint8_t> image(0x20, 0);
+    std::vector<std::uint8_t> image(0x14c, 0);
     put32(image, 0, 0x2003d100); // CPU2 stack in SRAM2.
-    put32(image, 4, 0x00000009); // reset handler at CPU2 code alias address 0x8.
-    const auto code = words({0x4803, // ldr r0, [pc, #12] -> C2SCR
-                             0x4904, // ldr r1, [pc, #16] -> clear RX1 and set TX1
-                             0x6001, // str r1, [r0]
-                             0xe7fe}); // b .
-    std::memcpy(image.data() + 8, code.data(), code.size());
-    put32(image, 0x18, 0x58000c18);
-    put32(image, 0x1c, 0x00010001);
+    put32(image, 4, 0x00000101); // Reset handler at 0x100.
+    put32(image, (16 + 19) * 4, 0x00000131); // IPCC IRQ19 handler at 0x130.
+
+    const auto reset = words({0x4805, // ldr r0, [pc, #20] -> IPCC C2CR
+                              0x2101, // movs r1, #1: enable receive-channel IRQ
+                              0x6001, // str r1, [r0]
+                              0x4805, // ldr r0, [pc, #20] -> IPCC C2MR
+                              0x2100, // movs r1, #0: unmask channel IRQs
+                              0x6001, // str r1, [r0]
+                              0x4805, // ldr r0, [pc, #20] -> NVIC ISER
+                              0x4906, // ldr r1, [pc, #24] -> IRQ19 bit
+                              0x6001, // str r1, [r0]
+                              0xe7fe}); // b .
+    std::memcpy(image.data() + 0x100, reset.data(), reset.size());
+    put32(image, 0x118, 0x58000c10);
+    put32(image, 0x11c, 0x58000c14);
+    put32(image, 0x124, 0xe000e100);
+    put32(image, 0x128, 1u << 19);
+
+    const auto handler = words({0x4803, // ldr r0, [pc, #12] -> C2SCR
+                                0x4904, // ldr r1, [pc, #16] -> clear RX1 and set TX1
+                                0x6001, // str r1, [r0]
+                                0x4804, // ldr r0, [pc, #16] -> IRQ marker
+                                0x215a, // movs r1, #0x5a
+                                0x6001, // str r1, [r0]
+                                0x4770}); // bx lr
+    std::memcpy(image.data() + 0x130, handler.data(), handler.size());
+    put32(image, 0x140, 0x58000c18);
+    put32(image, 0x144, 0x00010001);
+    put32(image, 0x148, 0x20030120);
 
     stm32wb55emu::Stm32wb55 chip;
     chip.load_cpu2_firmware(image, 0x000da000);
@@ -145,6 +167,9 @@ void test_stm32wb55_cpu2_ipcc_channel_directions() {
     CHECK(result.reason == cortexm::StopReason::Deadline);
     CHECK((chip.read(0x58000c0c, 4) & 1u) == 0);
     CHECK((chip.read(0x58000c1c, 4) & 1u) != 0);
+    std::uint32_t marker = 0;
+    CHECK(chip.core().read_memory(0x20030120, &marker, sizeof(marker)));
+    CHECK(marker == 0x5a);
 }
 
 void test_stm32wb55_pwr_clear_registers_do_not_read_back_commands() {
