@@ -86,14 +86,19 @@ per simulation and execute using the M0 profile. A synthetic zero-based image
 is checked for C2BOOT startup and shared SRAM2 access. The
 chip model also provides basic RCC, PWR, HSEM, RNG, and LPTIM register behavior.
 The Thread RCP's IRQ19 handler reads `C1TOC2SR` and clears a received channel
-through `C2SCR`. Accordingly, a low-half `C2SCR` write clears `C1TOC2SR`, while
-its high half sets `C2TOC1SR`; the two status directions are kept independent.
-This receive-side clear is covered by a synthetic CPU2 firmware test.
+through `C2SCR`. A low-half `C2SCR` write clears `C1TOC2SR`, while its high
+half sets `C2TOC1SR`. CPU1's `C1SCR` performs the reciprocal operation: it
+clears `C2TOC1SR` and sets `C1TOC2SR`. The two status directions are kept
+independent, and synthetic firmware tests cover both receive-side clears.
 The PHY-used PWR clear registers are modeled as write-one-to-clear commands:
 `PWR_SCR` clears matching `PWR_SR1` flags, and `PWR_EXTSCR` clears CPU stop and
 standby flags or the critical-radio-phase flag. The status bits themselves are
 only raised by modeled hardware events; radio-originated PWR flags stay clear
 until the RF event model can produce them.
+RCC clock-prescaler writes set the corresponding `HPREF`, `C2HPREF`,
+`SHDHPREF`, `PPRE1F`, and `PPRE2F` applied flags. This lets the STM32WB HAL
+finish its clock setup; the model treats application as immediate and does not
+simulate prescaler transition latency.
 The CPU2 APB3 RF-control aperture is mapped. PHY v1.25.0's indirect register
 command through `0x6000000c` is also emulated: it reads or writes a byte register
 array using a descriptor in SRAM2 and clears the command busy bit. This command

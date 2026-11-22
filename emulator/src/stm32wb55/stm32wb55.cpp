@@ -697,7 +697,8 @@ void Stm32wb55::write_mmio(std::uint32_t address, std::uint32_t value, unsigned 
         const std::uint32_t clears = command & 0x3fu;
         const std::uint32_t sets = (command >> 16) & 0x3fu;
         if (cpu2_image_loaded_) {
-            c1toc2sr_ = (c1toc2sr_ & ~clears) | sets;
+            c2toc1sr_ &= ~clears;
+            c1toc2sr_ |= sets;
         } else {
             c2toc1sr_ &= ~clears;
             if (clears & (1u << 2)) {
@@ -777,7 +778,30 @@ void Stm32wb55::write_mmio(std::uint32_t address, std::uint32_t value, unsigned 
         if (updated & (1u << 24)) updated |= 1u << 25;
         if (updated & (1u << 12)) updated |= 1u << 13;
     } else if (base == RccBase + 0x08) {
-        updated = (updated & ~0xcu) | ((updated & 3u) << 2);
+        constexpr std::uint32_t SysclkStatusMask = 0xcu;
+        constexpr std::uint32_t PrescalerFlags = (1u << 16) | (1u << 17) | (1u << 18);
+        const std::uint32_t old_flags = registers_[base] & PrescalerFlags;
+        const unsigned shift = (address & 3u) * 8;
+        const std::uint32_t write_mask = size == 4
+                                             ? 0xffffffffu
+                                             : (size == 1 ? 0xffu : 0xffffu) << shift;
+        std::uint32_t applied_flags = 0;
+        if (write_mask & 0x000000f0u) applied_flags |= 1u << 16; // HPRE.
+        if (write_mask & 0x00000700u) applied_flags |= 1u << 17; // PPRE1.
+        if (write_mask & 0x00003800u) applied_flags |= 1u << 18; // PPRE2.
+        updated = (updated & ~(SysclkStatusMask | PrescalerFlags)) |
+                  ((updated & 3u) << 2) | old_flags | applied_flags;
+    } else if (base == RccBase + 0x108) {
+        constexpr std::uint32_t PrescalerFields = 0x000000ffu;
+        constexpr std::uint32_t PrescalerFlags = (1u << 16) | (1u << 17);
+        const std::uint32_t old_flags = registers_[base] & PrescalerFlags;
+        const unsigned shift = (address & 3u) * 8;
+        const std::uint32_t write_mask = size == 4
+                                             ? 0xffffffffu
+                                             : (size == 1 ? 0xffu : 0xffffu) << shift;
+        std::uint32_t applied_flags = 0;
+        if (write_mask & PrescalerFields) applied_flags |= PrescalerFlags;
+        updated = (updated & ~PrescalerFlags) | old_flags | applied_flags;
     } else if (base == RccBase + 0x90 || base == RccBase + 0x94) {
         if (updated & 1u) updated |= 2u;
     } else if (base == RccBase + 0x98) {
