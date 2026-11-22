@@ -57,6 +57,11 @@ request an earlier service. Different raw CPU2 firmware images can be loaded
 per simulation and execute using the M0 profile. A synthetic zero-based image
 is checked for C2BOOT startup and shared SRAM2 access. The
 chip model also provides basic RCC, PWR, HSEM, RNG, and LPTIM register behavior.
+The PHY-used PWR clear registers are modeled as write-one-to-clear commands:
+`PWR_SCR` clears matching `PWR_SR1` flags, and `PWR_EXTSCR` clears CPU stop and
+standby flags or the critical-radio-phase flag. The status bits themselves are
+only raised by modeled hardware events; radio-originated PWR flags stay clear
+until the RF event model can produce them.
 The CPU2 APB3 RF-control aperture is mapped. PHY v1.25.0's indirect register
 command through `0x6000000c` is also emulated: it reads or writes a byte register
 array using a descriptor in SRAM2 and clears the command busy bit. This command

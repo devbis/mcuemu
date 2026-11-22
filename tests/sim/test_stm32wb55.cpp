@@ -45,4 +45,15 @@ void test_stm32wb55_cpu2_zero_based_flash_and_sram_aliases() {
     CHECK(installed_word == 0x2003d100);
 }
 
+void test_stm32wb55_pwr_clear_registers_do_not_read_back_commands() {
+    stm32wb55emu::Stm32wb55 chip;
+    chip.write(0x58000418, 1u << 10, 4); // PWR_SCR clears the 802.15.4 wake flag.
+    chip.write(0x58000488, 1u << 2, 4);  // PWR_EXTSCR clears the critical radio phase flag.
+    chip.write(0x58000410, 1u << 10, 4); // PWR_SR1 is hardware status, not a software latch.
+
+    CHECK(chip.read(0x58000418, 4) == 0);
+    CHECK(chip.read(0x58000488, 4) == 0);
+    CHECK(chip.read(0x58000410, 4) == 0);
+}
+
 } // namespace mcuemu_tests

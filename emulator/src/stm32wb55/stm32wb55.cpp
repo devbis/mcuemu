@@ -15,6 +15,9 @@ constexpr std::uint32_t Cpu2ModelVector = SystemMemoryBase + 0xf000;
 constexpr std::uint32_t Cpu2ModelCode = SystemMemoryBase + 0xf100;
 constexpr std::uint32_t RccBase = 0x58000000;
 constexpr std::uint32_t PwrBase = 0x58000400;
+constexpr std::uint32_t PwrSr1 = PwrBase + 0x10;
+constexpr std::uint32_t PwrScr = PwrBase + 0x18;
+constexpr std::uint32_t PwrExtScr = PwrBase + 0x88;
 constexpr std::uint32_t IpccBase = 0x58000c00;
 constexpr std::uint32_t RngBase = 0x58001000;
 constexpr std::uint32_t HsemBase = 0x58001400;
@@ -500,7 +503,8 @@ std::uint32_t Stm32wb55::read_mmio(std::uint32_t address, unsigned size) {
     if (address >= RccBase && address < RccBase + 0x400)
         return lane_read(registers_[address & ~3u], address, size);
     if (address >= PwrBase && address < PwrBase + 0x100)
-        return lane_read(registers_[address & ~3u], address, size);
+        return lane_read((address & ~3u) == PwrScr ? 0 : registers_[address & ~3u],
+                         address, size);
     const std::uint32_t flash_register = address & ~3u;
     if (flash_register == FlashControlBase + 0x20)
         return lane_read(cpu2_image_loaded_ && cpu2_flash_offset_ != 0
@@ -715,6 +719,26 @@ void Stm32wb55::write_mmio(std::uint32_t address, std::uint32_t value, unsigned 
         signal_cpu1_tx(0);
         signal_cpu2_rx(0);
         signal_cpu2_tx(0);
+        return;
+    }
+
+    if (base == PwrSr1)
+        return; // Status flags are raised by modeled hardware events, not software writes.
+    if (base == PwrScr) {
+        // PWR_SCR is write-one-to-clear for the matching PWR_SR1 flags.
+        constexpr std::uint32_t ClearableFlags = 0x00007f9fu;
+        const std::uint32_t clear = lane_write(0, value, address, size) & ClearableFlags;
+        registers_[PwrSr1] &= ~clear;
+        return;
+    }
+    if (base == PwrExtScr) {
+        // The low bits are clear commands; status bits in EXTSCR are read-only.
+        const std::uint32_t command = lane_write(0, value, address, size);
+        std::uint32_t clear = 0;
+        if (command & (1u << 0)) clear |= (1u << 8) | (1u << 9); // C1 standby/stop.
+        if (command & (1u << 1)) clear |= (1u << 10) | (1u << 11); // C2 standby/stop.
+        if (command & (1u << 2)) clear |= 1u << 13; // Critical radio phase.
+        registers_[PwrExtScr] &= ~clear;
         return;
     }
 
