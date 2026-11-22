@@ -40,6 +40,9 @@ STM32WB5x PHY 802.15.4 firmware v1.25.0 for a 1 MiB device is installed at
 physical address `0x080DD000`, so configure `offset: 0xDD000`.
 That PHY image is a coprocessor firmware, not a standalone application: ST pairs
 it with STM32CubeMonitor-RF or a dedicated CPU1 application ([UM2288](https://www.st.com/resource/en/user_manual/dm00433646-stm32cubemonitorrf-software-tool-for-wireless-performance-measurements-stmicroelectronics.pdf)).
+The decrypted Thread RCP v1.13.0 image for a 1 MiB STM32WB5xxG is installed at
+`0x080DA000`, so configure `offset: 0xDA000`. Its reset vector uses CPU2's
+zero-based code alias, which the loader maps to the installed bytes.
 In a boot-only host experiment that merely sets C2BOOT, PHY v1.25.0 executes
 through startup and then parks at `0x90ae`: its pointer validator rejects entry 0
 of the empty shared reference table at `0x20030000` and writes the `0x3de96f61`
@@ -81,6 +84,10 @@ request an earlier service. Different raw CPU2 firmware images can be loaded
 per simulation and execute using the M0 profile. A synthetic zero-based image
 is checked for C2BOOT startup and shared SRAM2 access. The
 chip model also provides basic RCC, PWR, HSEM, RNG, and LPTIM register behavior.
+The Thread RCP's IRQ19 handler reads `C1TOC2SR` and clears a received channel
+through `C2SCR`. Accordingly, a low-half `C2SCR` write clears `C1TOC2SR`, while
+its high half sets `C2TOC1SR`; the two status directions are kept independent.
+This receive-side clear is covered by a synthetic CPU2 firmware test.
 The PHY-used PWR clear registers are modeled as write-one-to-clear commands:
 `PWR_SCR` clears matching `PWR_SR1` flags, and `PWR_EXTSCR` clears CPU stop and
 standby flags or the critical-radio-phase flag. The status bits themselves are
@@ -146,13 +153,19 @@ IPCC and Spinel behavior is serviced in CPU2's 32 MHz time domain while the M0
 core runs a wait loop; this mode lets the Zephyr CPU1 image join the example
 network and exchange Zigbee data. When a raw CPU2 image is configured, the
 built-in RCP model is disabled and that image executes on CPU2 instead. The
-official ST Thread RCP package was checked, but it is FUS-encrypted and is
-rejected by the raw-image loader. CPU2's BLE, radio, and 802.15.4 control windows
-are mapped at `0x60000000`; the inferred PHY indirect-register command is
-modeled as described above. Other direct registers currently retain ordinary
-writes and do not model RF timing or radio behavior. An arbitrary wireless
-stack running from a raw CPU2 image cannot perform on-air operations without a
-matching radio model.
+encrypted ST package remains unsupported by the raw-image loader, but a
+decrypted Thread RCP v1.13.0 image loads as executable CPU2 code. Its Ghidra
+decompilation confirms the same SRAM2 descriptor command used by PHY v1.25.0:
+bit 16 starts the command, bit 7 of the descriptor header selects reads, and
+the remaining bytes carry the register index and data. The model tests the
+RCP's one-byte write/read sequence as well as multi-byte PHY transfers.
+
+A 12-second simulation was run with this RCP image and the Zephyr CPU1 image;
+the run completed, but the capture had no WB55 association. With a raw
+CPU2 image configured, RF register writes are not yet connected to the virtual
+radio, so this run does not establish end-to-end radio behavior. The direct
+802.15.4 window retains ordinary writes and has no modeled RF timing or packet
+transfer yet.
 
 The Zephyr source used for the join run also needed a null-index guard in
 `subsys/zigbee/nwk/nwk_addr_map.c`: the end-device leave path calls

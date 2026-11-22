@@ -33,8 +33,8 @@ constexpr std::uint32_t FlashSrrvrBackupSramSecure = 1u << 23;
 constexpr std::uint32_t FlashSrrvrNonBackupSramSecure = 1u << 30;
 constexpr std::uint32_t FlashSrrvrCpu2BootFromFlash = 1u << 31;
 constexpr std::uint32_t FlashSrrvrBootVectorMask = 0x3ffffu;
-constexpr std::uint32_t Cpu2PhyCommand = 0x6000000c;
-constexpr std::uint32_t Cpu2PhyCommandBusy = 1u << 16;
+constexpr std::uint32_t Cpu2RfRegisterCommand = 0x6000000c;
+constexpr std::uint32_t Cpu2RfCommandBusy = 1u << 16;
 constexpr std::uint32_t Cpu2Apb3Base = 0x60000000;
 constexpr std::uint32_t Cpu2Apb3End = 0x60002000;
 constexpr std::uint32_t Cpu2Ieee802154Base = 0x60001000;
@@ -365,7 +365,7 @@ void Stm32wb55::reset() {
     rng_next_ready_ns_ = 0;
     rng_data_ready_ = false;
     registers_.clear();
-    cpu2_phy_indirect_registers_.fill(0);
+    cpu2_rf_indirect_registers_.fill(0);
     registers_[FlashControlBase + 0x3c] = 0;
     registers_[RccBase] = (1u << 1) | (1u << 10) | (1u << 17) | (1u << 25);
     registers_[RccBase + 0x98] = 1u << 1;
@@ -581,14 +581,14 @@ void Stm32wb55::write_mmio(std::uint32_t address, std::uint32_t value, unsigned 
     if (base == FlashControlBase + 0x20 || base == FlashControlBase + 0x3c ||
         base == FlashControlBase + 0x80 || base == FlashControlBase + 0x84)
         return; // Option bytes and IPCCDBA are read-only at runtime.
-    if (from_cpu2 && base == Cpu2PhyCommand) {
+    if (from_cpu2 && base == Cpu2RfRegisterCommand) {
         std::uint32_t updated = lane_write(registers_[base], value, address, size);
-        if (updated & Cpu2PhyCommandBusy) {
-            execute_cpu2_phy_register_command(updated);
-            // PHY v1.25.0 polls this hardware busy bit after submitting the
-            // SRAM2 descriptor. Completion is functional here; RF bus latency
-            // is not yet characterized.
-            updated &= ~Cpu2PhyCommandBusy;
+        if (updated & Cpu2RfCommandBusy) {
+            execute_cpu2_rf_register_command(updated);
+            // PHY v1.25.0 and Thread RCP v1.13.0 poll this hardware busy bit
+            // after submitting an SRAM2 descriptor. Completion is functional
+            // here; RF bus latency is not yet characterized.
+            updated &= ~Cpu2RfCommandBusy;
         }
         registers_[base] = updated;
         return;
@@ -737,7 +737,9 @@ void Stm32wb55::write_mmio(std::uint32_t address, std::uint32_t value, unsigned 
         const std::uint32_t command = lane_write(0, value, address, size);
         const std::uint32_t clears = command & 0x3fu;
         const std::uint32_t sets = (command >> 16) & 0x3fu;
-        c2toc1sr_ = (c2toc1sr_ & ~clears) | sets;
+        // C2SCR clears CPU2's receive flags and sets CPU2's transmit flags.
+        c1toc2sr_ &= ~clears;
+        c2toc1sr_ |= sets;
         signal_cpu1_rx(0);
         signal_cpu1_tx(0);
         signal_cpu2_rx(0);
@@ -785,7 +787,7 @@ void Stm32wb55::write_mmio(std::uint32_t address, std::uint32_t value, unsigned 
             auto reg = registers_.lower_bound(Cpu2Apb3Base);
             while (reg != registers_.end() && reg->first < Cpu2Apb3End)
                 reg = registers_.erase(reg);
-            cpu2_phy_indirect_registers_.fill(0);
+            cpu2_rf_indirect_registers_.fill(0);
         }
         if (in_reset)
             registers_[RccCsr] |= RccCsrRfResetStatus;
@@ -806,9 +808,10 @@ void Stm32wb55::write_mmio(std::uint32_t address, std::uint32_t value, unsigned 
     }
 }
 
-void Stm32wb55::execute_cpu2_phy_register_command(std::uint32_t command) {
-    // INFERRED from the PHY v1.25.0 command helper: bits 0..15 point to a
-    // descriptor relative to SRAM2A (0x20030000), while bit 16 starts it.
+void Stm32wb55::execute_cpu2_rf_register_command(std::uint32_t command) {
+    // INFERRED from the PHY v1.25.0 and Thread RCP v1.13.0 helpers: bits 0..15
+    // point to a descriptor relative to SRAM2A (0x20030000), while bit 16
+    // starts it.
     constexpr std::size_t Sram2Size = 0x10000;
     constexpr std::size_t RegisterCount = 0x7e;
     const std::size_t offset = command & 0xffffu;
@@ -830,11 +833,11 @@ void Stm32wb55::execute_cpu2_phy_register_command(std::uint32_t command) {
     // The helper sets header bit 7 for reads; writes carry the bytes directly
     // after the register index. The trailing byte is a terminator.
     if (header & 0x80u) {
-        std::copy_n(cpu2_phy_indirect_registers_.begin() + first_register,
+        std::copy_n(cpu2_rf_indirect_registers_.begin() + first_register,
                     count, descriptor + 2);
     } else {
         std::copy_n(descriptor + 2, count,
-                    cpu2_phy_indirect_registers_.begin() + first_register);
+                    cpu2_rf_indirect_registers_.begin() + first_register);
     }
 }
 

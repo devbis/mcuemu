@@ -77,7 +77,7 @@ private:
     void write_mmio(std::uint32_t address, std::uint32_t value, unsigned size);
     std::uint32_t read_cpu2_mmio(std::uint32_t address, unsigned size);
     void write_cpu2_mmio(std::uint32_t address, std::uint32_t value, unsigned size);
-    void execute_cpu2_phy_register_command(std::uint32_t command);
+    void execute_cpu2_rf_register_command(std::uint32_t command);
     void ipcc_command(unsigned channel);
     void complete_system_command();
     void start_cpu2();
@@ -122,7 +122,7 @@ private:
     std::uint32_t cpu2_flash_offset_{0};
     std::uint32_t cpu2_reset_vector_offset_{0};
     std::map<std::uint32_t, std::uint32_t> registers_;
-    std::array<std::uint8_t, 0x7e> cpu2_phy_indirect_registers_{};
+    std::array<std::uint8_t, 0x7e> cpu2_rf_indirect_registers_{};
     std::uint32_t ipcc_c1cr_{0};
     std::uint32_t ipcc_c1mr_{0xffffffffu};
     std::uint32_t ipcc_c2cr_{0};

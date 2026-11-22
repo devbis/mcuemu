@@ -50,7 +50,7 @@ void test_stm32wb55_cpu2_zero_based_flash_and_sram_aliases() {
     CHECK(installed_word == 0x2003d100);
 }
 
-void test_stm32wb55_cpu2_phy_indirect_register_transfer() {
+void test_stm32wb55_cpu2_rf_indirect_register_transfer() {
     std::vector<std::uint8_t> image(0x34, 0);
     put32(image, 0, 0x2003d100); // CPU2 stack in SRAM2.
     put32(image, 4, 0x00000009); // reset handler at CPU2 code alias address 0x8.
@@ -86,6 +86,65 @@ void test_stm32wb55_cpu2_phy_indirect_register_transfer() {
     CHECK(readback[0] == 0x12);
     CHECK(readback[1] == 0x34);
     CHECK((chip.read(0x6000000c, 4) & (1u << 16)) == 0);
+}
+
+void test_stm32wb55_thread_rcp_single_byte_rf_register_access() {
+    std::vector<std::uint8_t> image(0x34, 0);
+    put32(image, 0, 0x2003d100); // CPU2 stack in SRAM2.
+    put32(image, 4, 0x00000009); // reset handler at CPU2 code alias address 0x8.
+    const auto code = words({0x4806, // ldr r0, [pc, #24] -> descriptor at 0x10000100
+                             0x4907, // ldr r1, [pc, #28] -> RF command register
+                             0x4a07, // ldr r2, [pc, #28] -> busy + descriptor offset
+                             0x600a, // str r2, [r1]: write one RF register byte
+                             0x2382, // movs r3, #0x82: read one byte from RF register 0x2d
+                             0x7003, // strb r3, [r0]
+                             0x600a, // str r2, [r1]: submit read descriptor
+                             0x7883, // ldrb r3, [r0, #2]
+                             0x4c05, // ldr r4, [pc, #20] -> output at 0x10000120
+                             0x7023, // strb r3, [r4]
+                             0xe7fe}); // b .
+    std::memcpy(image.data() + 8, code.data(), code.size());
+    put32(image, 0x24, 0x10000100);
+    put32(image, 0x28, 0x6000000c);
+    put32(image, 0x2c, 0x00010100);
+    put32(image, 0x30, 0x10000120);
+
+    stm32wb55emu::Stm32wb55 chip;
+    chip.load_cpu2_firmware(image, 0x000da000);
+    const std::uint8_t descriptor[] = {2, 0x2d, 0x60, 0};
+    CHECK(chip.core().write_memory(0x20030100, descriptor, sizeof(descriptor)));
+    chip.write(0x5800040c, 1u << 15, 4); // CPU1 sets C2BOOT.
+
+    const auto result = chip.run_cpu2_until(5000);
+    CHECK(result.reason == cortexm::StopReason::Deadline);
+    std::uint8_t readback = 0;
+    CHECK(chip.core().read_memory(0x20030120, &readback, sizeof(readback)));
+    CHECK(readback == 0x60);
+    CHECK((chip.read(0x6000000c, 4) & (1u << 16)) == 0);
+}
+
+void test_stm32wb55_cpu2_ipcc_channel_directions() {
+    std::vector<std::uint8_t> image(0x20, 0);
+    put32(image, 0, 0x2003d100); // CPU2 stack in SRAM2.
+    put32(image, 4, 0x00000009); // reset handler at CPU2 code alias address 0x8.
+    const auto code = words({0x4803, // ldr r0, [pc, #12] -> C2SCR
+                             0x4904, // ldr r1, [pc, #16] -> clear RX1 and set TX1
+                             0x6001, // str r1, [r0]
+                             0xe7fe}); // b .
+    std::memcpy(image.data() + 8, code.data(), code.size());
+    put32(image, 0x18, 0x58000c18);
+    put32(image, 0x1c, 0x00010001);
+
+    stm32wb55emu::Stm32wb55 chip;
+    chip.load_cpu2_firmware(image, 0x000da000);
+    chip.write(0x58000c08, 1u << 16, 4); // CPU1 sets channel 1 for CPU2.
+    CHECK(chip.read(0x58000c0c, 4) & 1u);
+    chip.write(0x5800040c, 1u << 15, 4); // CPU1 sets C2BOOT.
+
+    const auto result = chip.run_cpu2_until(5000);
+    CHECK(result.reason == cortexm::StopReason::Deadline);
+    CHECK((chip.read(0x58000c0c, 4) & 1u) == 0);
+    CHECK((chip.read(0x58000c1c, 4) & 1u) != 0);
 }
 
 void test_stm32wb55_pwr_clear_registers_do_not_read_back_commands() {
