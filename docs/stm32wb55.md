@@ -40,6 +40,11 @@ STM32WB5x PHY 802.15.4 firmware v1.25.0 for a 1 MiB device is installed at
 physical address `0x080DD000`, so configure `offset: 0xDD000`.
 That PHY image is a coprocessor firmware, not a standalone application: ST pairs
 it with STM32CubeMonitor-RF or a dedicated CPU1 application ([UM2288](https://www.st.com/resource/en/user_manual/dm00433646-stm32cubemonitorrf-software-tool-for-wireless-performance-measurements-stmicroelectronics.pdf)).
+In a boot-only host experiment that merely sets C2BOOT, PHY v1.25.0 executes
+through startup and then parks at `0x90ae`: its pointer validator rejects entry 0
+of the empty shared reference table at `0x20030000` and writes the `0x3de96f61`
+failure sentinel there. This confirms CPU2 alias execution, but not PHY
+initialization; a compatible CPU1 host must populate the IPCC/mailbox table.
 
 The emulator expects executable bytes with a Cortex-M vector table. It does not
 unpack encrypted STM32 wireless-firmware packages distributed for the Firmware
