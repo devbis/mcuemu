@@ -50,6 +50,42 @@ void test_stm32wb55_cpu2_zero_based_flash_and_sram_aliases() {
     CHECK(installed_word == 0x2003d100);
 }
 
+void test_stm32wb55_cpu1_zero_based_vtor_flash_alias() {
+    std::vector<std::uint8_t> image(0x12c, 0);
+    put32(image, 0, 0x2003d100);
+    put32(image, 4, 0x08000101);
+    put32(image, (16 + 19) * 4, 0x08000121);
+
+    const auto reset = words({0x4804, // ldr r0, [pc, #16] -> VTOR
+                              0x2100, // movs r1, #0
+                              0x6001, // str r1, [r0]: relocate VTOR to zero
+                              0x4804, // ldr r0, [pc, #16] -> NVIC ISER
+                              0x4904, // ldr r1, [pc, #16] -> IRQ19 bit
+                              0x6001, // str r1, [r0]
+                              0xe7fe}); // b .
+    std::memcpy(image.data() + 0x100, reset.data(), reset.size());
+    put32(image, 0x114, 0xe000ed08);
+    put32(image, 0x118, 0xe000e100);
+    put32(image, 0x11c, 1u << 19);
+
+    const auto handler = words({0x4801, // ldr r0, [pc, #4] -> IRQ marker
+                                0x215a, // movs r1, #0x5a
+                                0x6001, // str r1, [r0]
+                                0xe7fe}); // b .
+    std::memcpy(image.data() + 0x120, handler.data(), handler.size());
+    put32(image, 0x128, 0x20030120);
+
+    stm32wb55emu::Stm32wb55 chip;
+    chip.load_firmware(image);
+    chip.reset();
+    chip.core().set_irq_line(19, true);
+    const auto result = chip.core().run(2000);
+    CHECK(result.reason == cortexm::StopReason::Deadline);
+    std::uint32_t marker = 0;
+    CHECK(chip.core().read_memory(0x20030120, &marker, sizeof(marker)));
+    CHECK(marker == 0x5a);
+}
+
 void test_stm32wb55_cpu2_rf_indirect_register_transfer() {
     std::vector<std::uint8_t> image(0x34, 0);
     put32(image, 0, 0x2003d100); // CPU2 stack in SRAM2.

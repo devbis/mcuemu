@@ -3,8 +3,9 @@
 `stm32wb55` models the STM32WB55's two application cores in `sim`: CPU1 uses
 the shared Cortex-M4 core at 64 MHz, and CPU2 executes with the emulator's
 Cortex-M0 profile at 32 MHz. The two cores have independent CPU state and cycle
-clocks, and map the same flash and SRAM storage. CPU1 starts CPU2 by setting
-C2BOOT. CPU2's vector
+clocks, and map the same flash and SRAM storage. CPU1 flash is also visible at
+address zero for the STM32WB boot remap used by firmware that sets `VTOR = 0`.
+CPU1 starts CPU2 by setting C2BOOT. CPU2's vector
 table is found in its configured raw image, including images that use the M0+
 zero-based code alias, or in the built-in model ROM when the modeled Thread RCP
 is selected.

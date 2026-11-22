@@ -132,6 +132,8 @@ Stm32wb55::Stm32wb55() {
     config_.priority_bits = 4;
     core_ = std::make_unique<cortexm::Core>(config_);
     flash_ = core_->map_memory(FlashBase, FlashSize, false);
+    // CPU1 startup code relocates VTOR to zero, where STM32WB remaps boot flash.
+    core_->map_memory_alias(0, FlashSize, false, flash_);
     ram_ = core_->map_memory(RamBase, RamSize, true);
     system_memory_ = core_->map_memory(SystemMemoryBase, SystemMemorySize, false);
     cortexm::Core::Config cpu2_config;
