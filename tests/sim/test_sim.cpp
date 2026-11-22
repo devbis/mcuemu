@@ -486,6 +486,7 @@ void test_nrf52_twim_talks_to_an_i2c_device();
 void test_nrf52_uart_bytes_through_the_mcu_interface();
 void test_stm32wb55_cpu2_zero_based_flash_and_sram_aliases();
 void test_stm32wb55_pwr_clear_registers_do_not_read_back_commands();
+void test_stm32wb55_cpu2_802154_window_clock_gate();
 }
 
 // Names each test on stderr before it runs, so a crash in CI shows where.
@@ -552,6 +553,7 @@ int main() {
     RUN(test_nrf52_uart_bytes_through_the_mcu_interface);
     RUN(test_stm32wb55_cpu2_zero_based_flash_and_sram_aliases);
     RUN(test_stm32wb55_pwr_clear_registers_do_not_read_back_commands);
+    RUN(test_stm32wb55_cpu2_802154_window_clock_gate);
     RUN(test_scheduler_order_and_cancel);
     RUN(test_net_push_pull_resolution);
     RUN(test_net_open_drain_is_wired_and);

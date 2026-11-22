@@ -14,6 +14,8 @@ constexpr std::uint32_t SystemMemorySize = 0x10000;
 constexpr std::uint32_t Cpu2ModelVector = SystemMemoryBase + 0xf000;
 constexpr std::uint32_t Cpu2ModelCode = SystemMemoryBase + 0xf100;
 constexpr std::uint32_t RccBase = 0x58000000;
+constexpr std::uint32_t RccCpu2Apb3Enable = RccBase + 0x164;
+constexpr std::uint32_t RccCpu2Apb3Ieee802154Enable = 1u << 1;
 constexpr std::uint32_t PwrBase = 0x58000400;
 constexpr std::uint32_t PwrSr1 = PwrBase + 0x10;
 constexpr std::uint32_t PwrScr = PwrBase + 0x18;
@@ -29,6 +31,8 @@ constexpr std::uint32_t FlashSrrvrCpu2BootFromFlash = 1u << 31;
 constexpr std::uint32_t FlashSrrvrBootVectorMask = 0x3ffffu;
 constexpr std::uint32_t Cpu2PhyCommand = 0x6000000c;
 constexpr std::uint32_t Cpu2PhyCommandBusy = 1u << 16;
+constexpr std::uint32_t Cpu2Ieee802154Base = 0x60001000;
+constexpr std::uint32_t Cpu2Ieee802154End = 0x60002000;
 constexpr std::uint32_t Apb3ReservedBase = 0x60000800;
 constexpr std::uint32_t Apb3ReservedEnd = 0x60001000;
 constexpr std::uint32_t IpccRxIrq = 44;
@@ -439,6 +443,9 @@ std::uint32_t Stm32wb55::read_mmio(std::uint32_t address, unsigned size) {
     cortexm::Core &bus_core = mmio_core_ ? *mmio_core_ : *core_;
     if (address >= Apb3ReservedBase && address < Apb3ReservedEnd)
         return lane_read(0, address, size);
+    if (address >= Cpu2Ieee802154Base && address < Cpu2Ieee802154End &&
+        !(registers_[RccCpu2Apb3Enable] & RccCpu2Apb3Ieee802154Enable))
+        return lane_read(0, address, size);
     if (address >= RngBase && address < RngBase + 0x400) {
         rng_advance(core_time_ns(bus_core));
         const std::uint32_t base = address & ~3u;
@@ -554,6 +561,9 @@ void Stm32wb55::write_mmio(std::uint32_t address, std::uint32_t value, unsigned 
     const bool from_cpu2 = mmio_core_ == cpu2_core_.get();
     const std::uint32_t base = address & ~3u;
     if (address >= Apb3ReservedBase && address < Apb3ReservedEnd)
+        return;
+    if (address >= Cpu2Ieee802154Base && address < Cpu2Ieee802154End &&
+        !(registers_[RccCpu2Apb3Enable] & RccCpu2Apb3Ieee802154Enable))
         return;
     if (base == FlashControlBase + 0x20 || base == FlashControlBase + 0x3c ||
         base == FlashControlBase + 0x80 || base == FlashControlBase + 0x84)

@@ -56,4 +56,20 @@ void test_stm32wb55_pwr_clear_registers_do_not_read_back_commands() {
     CHECK(chip.read(0x58000410, 4) == 0);
 }
 
+void test_stm32wb55_cpu2_802154_window_clock_gate() {
+    stm32wb55emu::Stm32wb55 chip;
+    chip.write(0x60001100, 0x12345678, 4);
+    CHECK(chip.read(0x60001100, 4) == 0);
+
+    chip.write(0x58000164, 1u << 1, 4); // RCC_C2APB3ENR.802EN.
+    CHECK(chip.read(0x60001100, 4) == 0); // The disabled write was ignored.
+    chip.write(0x60001100, 0x12345678, 4);
+    CHECK(chip.read(0x60001100, 4) == 0x12345678);
+
+    chip.write(0x58000164, 0, 4);
+    CHECK(chip.read(0x60001100, 4) == 0);
+    chip.write(0x58000164, 1u << 1, 4);
+    CHECK(chip.read(0x60001100, 4) == 0x12345678);
+}
+
 } // namespace mcuemu_tests

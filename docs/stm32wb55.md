@@ -66,9 +66,11 @@ The CPU2 APB3 RF-control aperture is mapped. PHY v1.25.0's indirect register
 command through `0x6000000c` is also emulated: it reads or writes a byte register
 array using a descriptor in SRAM2 and clears the command busy bit. This command
 completes synchronously because its hardware latency is unknown. Direct
-802.15.4 control registers still use generic readback; their radio side effects,
-RF timing, and packet transfer are not modeled. Unimplemented peripheral
-registers read as zero or retain writes.
+802.15.4 control registers at `0x60001000..0x60001fff` retain masked writes, but
+are accessible only while `RCC_C2APB3ENR.802EN` is set; disabling that clock hides
+the stored values and ignores writes, while preserving register contents. Their
+radio side effects, RF timing, and packet transfer are not modeled.
+Unimplemented peripheral registers read as zero or retain writes.
 
 ### Inferred PHY register transport
 
