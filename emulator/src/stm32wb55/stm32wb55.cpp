@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -55,6 +56,7 @@ constexpr std::uint32_t Cpu2MacRxFifo = 0x600013e8;
 constexpr std::uint32_t Cpu2MacTxCommand = 0x600013fc;
 constexpr std::uint64_t Cpu2MacSymbolNs = 16000;
 constexpr std::uint64_t Cpu2MacPollNs = 20000;
+constexpr int Cpu2RssiOffsetDbm = 100; // inferred from the RCP's raw RSSI conversion.
 constexpr std::uint32_t Apb3ReservedBase = 0x60000800;
 constexpr std::uint32_t Apb3ReservedEnd = 0x60001000;
 constexpr std::uint32_t IpccRxIrq = 44;
@@ -73,6 +75,11 @@ constexpr std::uint32_t RngEnable = 1u << 2;
 constexpr std::uint32_t RngInterruptEnable = 1u << 3;
 constexpr std::uint64_t RngReadyTimeNs = 1000; // modeled 64 cycles at the 64 MHz CPU1 clock.
 constexpr std::uint64_t Never = std::numeric_limits<std::uint64_t>::max();
+
+std::uint16_t cpu2_rssi_register_sample(int rssi_dbm) {
+    const int raw = std::clamp(rssi_dbm + Cpu2RssiOffsetDbm, 0, 0xff);
+    return static_cast<std::uint16_t>(raw << 4);
+}
 
 bool ipcc_tx_free_pending(std::uint32_t status, std::uint32_t mask) {
     const std::uint32_t free_channels = ~status & IpccChannelMask;
@@ -978,27 +985,44 @@ void Stm32wb55::execute_cpu2_rf_register_command(std::uint32_t command) {
     }
 }
 
+std::int8_t Stm32wb55::radio_rssi_dbm(std::uint8_t channel,
+                                      std::uint64_t at_ns) const {
+    constexpr double QuietRssiDbm = -100.0;
+    if (!air_)
+        return static_cast<std::int8_t>(QuietRssiDbm);
+
+    double power_mw = std::pow(10.0, air_->propagation().noise_floor_dbm / 10.0);
+    for (const mcuemu::RadioFrame &frame : air_->in_flight(
+             radio_node_, mcuemu::RadioProtocol::Zigbee802154, channel, at_ns, 0)) {
+        power_mw += std::pow(10.0, frame.rssi_dbm / 10.0);
+    }
+    const long rssi = std::clamp(std::lround(10.0 * std::log10(power_mw)), -128L, 127L);
+    return static_cast<std::int8_t>(rssi);
+}
+
 std::uint16_t Stm32wb55::cpu2_mac_read_register(unsigned index, std::uint64_t now_ns) {
     if (index >= cpu2_mac_registers_.size())
         return 0;
     switch (index) {
     case 0x00: return cpu2_mac_tx_pending_ || cpu2_mac_tx_active_ ? 1u : 0u;
     case 0x02: return static_cast<std::uint16_t>(cpu2_mac_registers_[index] & 0x7fu);
-    case 0x03:
-        return static_cast<std::uint16_t>(
-            (static_cast<std::uint8_t>(cpu2_mac_rssi_dbm_) & 0xffu) << 4);
+    case 0x03: return cpu2_rssi_register_sample(cpu2_mac_rssi_dbm_);
     case 0x12: return cpu2_mac_tx_fifo_busy_ || cpu2_mac_tx_active_ ? 0x8000u : 0u;
     case 0x14: return cpu2_mac_registers_[index];
     case 0x15: return cpu2_mac_registers_[index];
     case 0x1f: // R07c: last energy/RSSI sample.
-        return cpu2_mac_rssi_valid_
-                   ? static_cast<std::uint16_t>(
-                         (static_cast<std::uint8_t>(cpu2_mac_rssi_dbm_) & 0xffu) << 4)
-                   : 0;
-    case 0x20: // R080: instantaneous RSSI, valid bit plus signed raw sample.
+        return cpu2_mac_rssi_valid_ ? cpu2_rssi_register_sample(cpu2_mac_rssi_dbm_) : 0;
+    case 0x20: { // R080: instantaneous RSSI; raw sample is dBm plus the inferred offset.
+        const bool radio_on = (registers_[Cpu2RadioControl] & 1u) != 0;
+        const unsigned channel_code = cpu2_rf_indirect_registers_[0x04];
+        const std::uint8_t channel = static_cast<std::uint8_t>(
+            11u + std::min(channel_code / 2u, 15u));
+        const std::int8_t rssi = radio_on ? radio_rssi_dbm(channel, now_ns)
+                                          : cpu2_mac_rssi_dbm_;
         return static_cast<std::uint16_t>(
-            (cpu2_mac_rssi_valid_ ? 0x8000u : 0u) |
-            ((static_cast<std::uint8_t>(cpu2_mac_rssi_dbm_) & 0xffu) << 4));
+            ((radio_on || cpu2_mac_rssi_valid_) ? 0x8000u : 0u) |
+            cpu2_rssi_register_sample(rssi));
+    }
     case 0x24: return static_cast<std::uint16_t>(cpu2_mac_counter(now_ns));
     case 0x25: return static_cast<std::uint16_t>((cpu2_mac_counter(now_ns) >> 16) & 0xffu);
     case 0x2d: return cpu2_mac_registers_[index]; // E0 raw event flags.
@@ -1112,8 +1136,7 @@ void Stm32wb55::cpu2_mac_advance(std::uint64_t now_ns) {
         cpu2_mac_registers_[0x15] = frame.payload.size() >= 3 ? frame.payload[2] : 0;
         const std::uint8_t phr = static_cast<std::uint8_t>(frame.payload.size() + 2);
         cpu2_mac_registers_[0x02] = phr;
-        cpu2_mac_registers_[0x03] = static_cast<std::uint16_t>(
-            (static_cast<std::uint8_t>(frame.rssi_dbm) & 0xffu) << 4);
+        cpu2_mac_registers_[0x03] = cpu2_rssi_register_sample(frame.rssi_dbm);
         // R008 carries the PHR length. R3e8 exposes the PSDU and FCS, without
         // the PHY length byte, so the RCP consumes exactly that many bytes.
         cpu2_mac_rx_fifo_.insert(cpu2_mac_rx_fifo_.end(), frame.payload.begin(),
@@ -1823,7 +1846,7 @@ std::vector<std::uint8_t> Stm32wb55::spinel_value(std::uint32_t property) const 
     case 0x21: return {radio_channel_};
     case 0x24: return {static_cast<std::uint8_t>(cca_threshold_)};
     case 0x25: return {radio_tx_power_};
-    case 0x26: return {static_cast<std::uint8_t>(-50)};
+    case 0x26: return {static_cast<std::uint8_t>(radio_rssi_dbm(radio_channel_, time_ns()))};
     case 0x34: return std::vector<std::uint8_t>(8, 0);
     case 0x35: return {0xff, 0xff};
     case 0x36: return {0xff, 0xff};

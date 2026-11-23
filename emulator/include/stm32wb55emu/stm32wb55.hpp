@@ -109,6 +109,7 @@ private:
     void handle_spinel_request(const std::uint8_t *frame, std::size_t size);
     void handle_spinel_tx(const std::uint8_t *value, std::size_t size,
                           std::uint8_t tid);
+    std::int8_t radio_rssi_dbm(std::uint8_t channel, std::uint64_t at_ns) const;
     void poll_radio(std::uint64_t now_ns);
     void complete_radio_tx(std::uint64_t now_ns);
     void queue_rx_frame(const mcuemu::RadioFrame &frame);

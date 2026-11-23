@@ -117,9 +117,14 @@ places transmitted MPDUs on the shared `VirtualAir`, and delivers completed
 frames to the RX FIFO with calculated FCS, header fields, RSSI, event flags, and
 IRQ8/IRQ22 mask behavior. `R008` reports the PSDU length including FCS; the FIFO
 contains those PSDU/FCS bytes without the PHY length byte. The 16-us MAC counter
-and compare flags are also modeled. RF calibration, energy detection, CCA/CSMA
-behavior, collision feedback to this MAC, and hardware-accurate SFD/header/end
-timing are not yet modeled; RX event flags are raised together when a complete
+and compare flags are also modeled. `R080` and the built-in Spinel `PHY_RSSI`
+property estimate instantaneous RSSI from the air noise floor and frames
+currently in flight on the selected channel. CPU2 RSSI registers encode
+`dBm + 100` in bits 11:4, matching the RCP's inferred raw-sample conversion;
+`R07c` remains latched to the most recent received frame. This supports
+software RSSI-based CCA probes, but RF calibration, receiver settling, hardware
+CCA/CSMA, collision feedback to this MAC, and hardware-accurate SFD/header/end
+timing are not yet modeled. RX event flags are raised together when a complete
 air frame is polled.
 The direct register mapping, state values, and these behaviors are inferred from
 the decrypted firmware and `firmware-src/stm32wb55-cpu2/REGISTERS.md`, not from
