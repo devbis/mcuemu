@@ -209,6 +209,181 @@ void test_tlsr8258_sends_a_ble_advertisement() {
 
 namespace {
 
+// A TLSR8258 on the air with a peer node that the test plays itself
+struct BleRig {
+    std::unique_ptr<sim::System> system;
+    sim::World *world;
+    Tlsr8258 *device;
+    BleRig()
+        : system(sim::build_system(sim::parse_system_config(
+              "version: 1\nworld:\n  radio:\n    - id: air0\ndevices:\n  - id: d\n    mcus:\n"
+              "      - id: m\n        model: tlsr8258\n        firmware: " + idle_image_path() +
+              "\n        radio: { air: air0, protocols: [ble] }\n"))),
+          world(&system->world()),
+          device(&mcu_of(*system).device()) {
+        reg_write(*device, 0x40d, 37);
+        const std::uint8_t access_code[] = {0x8e, 0x89, 0xbe, 0xd6}; // the advertising one, swapped
+        for (unsigned i = 0; i < 4; ++i)
+            reg_write(*device, 0x408 + i, access_code[i]);
+        reg_write(*device, 0xc08, 0x00); // RX buffer of the DMA channel 2 at 0x841200
+        reg_write(*device, 0xc09, 0x12);
+    }
+    void sram(std::uint32_t offset, const std::vector<std::uint8_t> &bytes) {
+        for (std::size_t i = 0; i < bytes.size(); ++i)
+            device->write8(Tlsr8258::RetainedSramBase + offset + static_cast<std::uint32_t>(i), bytes[i]);
+    }
+    std::uint8_t sram(std::uint32_t offset) {
+        return device->read8(Tlsr8258::RetainedSramBase + offset);
+    }
+    void peer_sends(std::uint64_t start_ns, std::vector<std::uint8_t> pdu) {
+        mcuemu::BleLinkInfo link;
+        link.ll_framed = true;
+        world->radio("air0").transmit("peer", {}, mcuemu::RadioProtocol::Ble, 37, start_ns,
+                                      std::move(pdu), 0, link);
+    }
+};
+
+} // namespace
+
+// STX2RX: the packet goes out, the receiver opens 10 us after it, and the packet that a peer sends
+// 150 us after the end lands in the RX buffer in the format of the vendor stack
+void test_tlsr8258_receives_after_stx2rx() {
+    BleRig rig;
+    rig.sram(0x1000, {0x0c, 0x00, 0x00, 0x00, 0x00, 0x0a, 0xa4, 0xc1, 0x38, 1, 2, 3, 4, 5, 6, 7, 8});
+    reg_write(*rig.device, 0xf00, 0x87);
+    reg_write(*rig.device, 0xc0c, 0x00);
+    reg_write(*rig.device, 0xc0d, 0x10);
+    rig.world->run_until(rig.world->now() + 300000);
+    const auto &frames = rig.world->radio("air0").frames();
+    CHECK(frames.size() == 1);
+    const std::uint64_t tx_end = frames.at(0).end_ns;
+
+    // SCAN_REQ-like PDU: type 0x03, 12 bytes
+    const std::vector<std::uint8_t> request = {0x03, 0x0c, 1, 2, 3, 4, 5, 6, 6, 5, 4, 3, 2, 1};
+    rig.peer_sends(tx_end + 150000, request);
+    CHECK((reg_read(*rig.device, 0xf20) & 0x01) == 0);
+    rig.world->run_until(tx_end + 1000000);
+
+    CHECK((reg_read(*rig.device, 0xf20) & 0x01) != 0); // RX flag
+    CHECK(rig.sram(0x1200) == 12 + 13);                // DMA length: payload + 13
+    CHECK(rig.sram(0x1204) == 0x03);                   // PDU header
+    CHECK(rig.sram(0x1205) == 0x0c);                   // payload length
+    for (unsigned i = 0; i < 12; ++i)
+        CHECK(rig.sram(0x1206 + i) == request[2 + i]);
+    CHECK(rig.sram(0x1200 + 12 + 13 + 3) == 0);        // status: CRC good
+    CHECK(rig.sram(0x1200 + 12 + 13 + 2) == 60);       // RSSI byte: -50 dBm + 110
+    CHECK(frames.size() == 2);                         // no answer: STX2RX leaves it to the firmware
+}
+
+// BRX: the slave side of a connection event: it listens, and 150 us after a packet it sends the packet
+// of the DMA channel 3 by itself
+void test_tlsr8258_ble_slave_answers_a_packet() {
+    BleRig rig;
+    rig.sram(0x1000, {0x04, 0x00, 0x00, 0x00, 0x01, 0x00}); // an empty data PDU (LLID 1)
+    reg_write(*rig.device, 0xf00, 0x82);
+    reg_write(*rig.device, 0xc0c, 0x00);
+    reg_write(*rig.device, 0xc0d, 0x10);
+    rig.world->run_until(rig.world->now() + 100000);
+    CHECK(rig.world->radio("air0").frames().empty());
+
+    const std::uint64_t at = rig.world->now() + 50000;
+    rig.peer_sends(at, {0x02, 0x00}); // LLID 2, no payload
+    rig.world->run_until(at + 1000000);
+    const auto &frames = rig.world->radio("air0").frames();
+    CHECK(frames.size() == 2);
+    CHECK((reg_read(*rig.device, 0xf20) & 0x01) != 0); // received
+    if (frames.size() == 2) {
+        CHECK(frames[1].source != "peer");
+        CHECK(frames[1].start_ns == frames[0].end_ns + 150000); // T_IFS
+        // The radio puts SN and NESN into the header: the first packet of the master (SN 0, NESN 0)
+        // is new, so NESN becomes 1; it does not acknowledge anything of ours yet, so SN stays 0
+        CHECK(frames[1].payload == (std::vector<std::uint8_t>{0x05, 0x00}));
+    }
+    CHECK((reg_read(*rig.device, 0xf20) & 0x02) != 0); // sent
+
+    // The next event: the master acknowledged our packet (NESN 1) and sends new data (SN 1)
+    reg_write(*rig.device, 0xf20, 0x03);
+    reg_write(*rig.device, 0xf00, 0x82);
+    const std::uint64_t again = rig.world->now() + 50000;
+    rig.peer_sends(again, {0x0d, 0x00}); // LLID 1, SN 1, NESN 1
+    rig.world->run_until(again + 1000000);
+    const auto &all = rig.world->radio("air0").frames();
+    CHECK(all.size() == 4);
+    if (all.size() == 4) {
+        // our SN toggles (acknowledged), the master's SN is the expected one so NESN toggles back
+        CHECK(all[3].payload == (std::vector<std::uint8_t>{0x09, 0x00}));
+    }
+    // The master repeats its last packet (SN 1 again, NESN 1: it did not take ours as new): its SN is
+    // not the one we expect, so NESN stays, and it acknowledges nothing, so SN stays
+    reg_write(*rig.device, 0xf20, 0x03);
+    reg_write(*rig.device, 0xf00, 0x82);
+    const std::uint64_t retry = rig.world->now() + 50000;
+    rig.peer_sends(retry, {0x0d, 0x00}); // LLID 1, SN 1, NESN 1 as before
+    rig.world->run_until(retry + 1000000);
+    const auto &after = rig.world->radio("air0").frames();
+    CHECK(after.size() == 6);
+    if (after.size() == 6)
+        CHECK(after[5].payload == (std::vector<std::uint8_t>{0x09, 0x00}));
+}
+
+// The window of SRX with a timeout: the RX timeout flag comes when nothing arrives
+void test_tlsr8258_ble_receive_times_out() {
+    BleRig rig;
+    reg_write(*rig.device, 0xf03, 0x04); // RX timeout enabled
+    reg_write(*rig.device, 0xf0a, 0x2c); // 300 us
+    reg_write(*rig.device, 0xf0b, 0x01);
+    reg_write(*rig.device, 0xf00, 0x86);
+    rig.world->run_until(rig.world->now() + 200000);
+    CHECK((reg_read(*rig.device, 0xf20) & 0x04) == 0);
+    rig.world->run_until(rig.world->now() + 400000);
+    CHECK((reg_read(*rig.device, 0xf20) & 0x04) != 0);
+    // A packet after the window is not received
+    rig.peer_sends(rig.world->now() + 10000, {0x03, 0x00});
+    rig.world->run_until(rig.world->now() + 500000);
+    CHECK((reg_read(*rig.device, 0xf20) & 0x01) == 0);
+}
+
+// The vendor stack checks the CRC of every received packet in software, so the radio writes it behind
+// the PDU: 0x424 holds CRCInit (here the bytes 5e 55 32 of a CONNECT_IND) and the stack's own copy is
+// the bit-reversed value; for the empty data PDU 0d 00 the stack computes 7e 0b 55
+void test_tlsr8258_ble_receive_writes_the_crc() {
+    BleRig rig;
+    reg_write(*rig.device, 0x424, 0x5e);
+    reg_write(*rig.device, 0x425, 0x55);
+    reg_write(*rig.device, 0x426, 0x32);
+    reg_write(*rig.device, 0xf00, 0x86);
+    rig.world->run_until(rig.world->now() + 100000);
+    rig.peer_sends(rig.world->now() + 50000, {0x0d, 0x00});
+    rig.world->run_until(rig.world->now() + 1000000);
+    CHECK((reg_read(*rig.device, 0xf20) & 0x01) != 0);
+    CHECK(rig.sram(0x1206) == 0x7e);
+    CHECK(rig.sram(0x1207) == 0x0b);
+    CHECK(rig.sram(0x1208) == 0x55);
+}
+
+// 0x754 is two registers: with 0x74c = 0x2c it takes the compare value of the wakeup timer, and with 0x28 (read
+// mode) the command 0x08 of 0x74f latches the 32 kHz counter there, which the compare does not hide
+void test_tlsr8258_32k_counter_read_mode() {
+    BleRig rig;
+    reg_write(*rig.device, 0x74c, 0x2c);
+    reg_write(*rig.device, 0x754, 0x78);
+    reg_write(*rig.device, 0x755, 0x56);
+    reg_write(*rig.device, 0x756, 0x34);
+    reg_write(*rig.device, 0x757, 0x12);
+    CHECK(reg_read(*rig.device, 0x754) == 0x78);
+    rig.world->run_until(rig.world->now() + 10000000);
+    reg_write(*rig.device, 0x74c, 0x28);
+    reg_write(*rig.device, 0x74f, 0x08);
+    const std::uint32_t tick = reg_read(*rig.device, 0x754) | (reg_read(*rig.device, 0x755) << 8) |
+        (reg_read(*rig.device, 0x756) << 16) | (std::uint32_t{reg_read(*rig.device, 0x757)} << 24);
+    CHECK(tick != 0x12345678u);
+    CHECK(tick > 0);
+    reg_write(*rig.device, 0x74c, 0x2c);
+    CHECK(reg_read(*rig.device, 0x754) == 0x78); // the compare value is still there
+}
+
+namespace {
+
 struct SdkI2c {
     sim::World &world;
     Tlsr8258 &device;

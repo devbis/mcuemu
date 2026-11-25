@@ -513,6 +513,16 @@ if(MCUEMU_BUILD_TESTS)
                 TIMEOUT 600
                 LABELS "firmware;ble"
             )
+            add_test(
+                NAME firmware_tlsr8258_atc_connection
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_tlsr8258_atc_connection.py"
+                        "$<TARGET_FILE:mcuemu>"
+                        "${MCUEMU_ATC_FIRMWARE}")
+            set_tests_properties(firmware_tlsr8258_atc_connection PROPERTIES
+                TIMEOUT 120
+                LABELS "firmware;ble"
+            )
         else()
             message(STATUS
                 "Skipping firmware_tlsr8258_atc_beacon: Python 3 interpreter not found")

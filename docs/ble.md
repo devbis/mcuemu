@@ -8,7 +8,7 @@ Status: work in progress. The pieces that exist today:
 | pcap | `pcap:PATH,ble` | link type 256 (`LE_LL_WITH_PHDR`): channel, access address, PDU and CRC-24, de-whitened |
 | Link layer helpers | `emulator/include/ble/ll.hpp` (`bleemu`) | CRC-24, whitening, access address rules, advertising and data PDUs, CONNECT_IND, SN/NESN, channel selection #1, window widening, LL control PDUs |
 | nRF52840 RADIO | [nrf52840.md](nrf52840.md) | BLE 1M/2M at register level |
-| TLSR8258 RF | [tlsr8258-register-model.md](tlsr8258-register-model.md#ble-mode-of-the-rf) | BLE transmit from the link layer commands (advertising of the ATC firmware); receive and the reply window are not modeled |
+| TLSR8258 RF | [tlsr8258-register-model.md](tlsr8258-register-model.md#ble-mode-of-the-rf) | BLE transmit and receive from the link layer commands: advertising, scan response and connection events of the ATC firmware (the slave answers each event with an empty PDU; the transmit queue of the DMA channel 3 is not modeled) |
 | Virtual host | `sim::BleHost` (`sim/ble_host.hpp`) | HCI controller + central/scanner/initiator link layer (this page) |
 | `ble_host` part and HCI transports | `parts/ble_host_part.cpp` | HCI as the endpoint `<part>.hci` (H4 bytes); TCP through the `tcp:` sink, the control API and the browser build through `set`/`subscribe` |
 

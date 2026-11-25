@@ -298,6 +298,8 @@ private:
     Tlsr8258PowerState power_state_{Tlsr8258PowerState::Awake};
     bool deep_sleep_wakeup_pending_{false};
     bool wake_timer_armed_{false};
+    // The 32 kHz counter latched by the read command of 0x74f (0x74c = 0x28); 0x754 reads it back
+    std::uint32_t tick_32k_latched_{0};
     bool sleep_entry_pending_{false};
     std::uint32_t sleep_entry_cycles_remaining_{0};
     Tlsr8258PowerState pending_sleep_state_{Tlsr8258PowerState::Awake};
@@ -346,6 +348,25 @@ private:
     bool radio_ble_enabled_{false};
     bool ble_tx_pending_{false};
     std::uint64_t ble_tx_start_ns_{0};
+    std::uint8_t ble_tx_command_{0};
+    bool ble_tx_is_answer_{false}; // started by the radio after a packet: the stop command leaves it
+    // The sequence numbers of a connection, kept by the radio: the header of an answer carries them
+    bool ble_sn_{false}, ble_nesn_{false};
+    std::uint8_t ble_answer_bits_{0};
+    // The receive window of the BLE commands: it opens at ble_rx_start_ns_ and closes with a packet,
+    // the timeout or the stop command; BRX and SRX2TX answer a packet 150 us after it
+    bool ble_rx_pending_{false};
+    bool ble_rx_active_{false};
+    std::uint8_t ble_rx_command_{0};
+    std::uint64_t ble_rx_start_ns_{0};
+    std::uint64_t ble_rx_deadline_ns_{0};
+    // A packet whose header the radio has decoded: its buffer is fixed from then on
+    bool ble_rx_synced_{false};
+    std::uint32_t ble_rx_address_{0};
+    std::uint64_t ble_rx_frame_id_{0};
+    // The end of the last packet received, while a transmit may still answer it
+    bool ble_reply_armed_{false};
+    std::uint64_t ble_last_rx_end_ns_{0};
     std::vector<std::uint8_t> flash_;
     std::array<std::uint8_t, RegisterSize> registers_{};
     std::array<std::uint8_t, 256> analog_registers_{};
@@ -454,6 +475,9 @@ private:
     void start_radio_transmit();
     void start_ble_transmit(std::uint8_t command);
     void launch_ble_transmit();
+    void poll_ble_receive(std::uint64_t previous_poll_ns, std::uint64_t now_ns);
+    std::uint32_t ble_access_address() const noexcept;
+    std::uint64_t ble_start_time(std::uint64_t not_before_ns) const noexcept;
     void poll_radio();
     void update_radio_irq();
     std::uint64_t uart_frame_cycles() const;

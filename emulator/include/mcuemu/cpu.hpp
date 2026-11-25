@@ -86,6 +86,11 @@ public:
     // model that was checked against Zephyr's radio driver on a TB03F only.
     void set_flash_timing(bool enabled) noexcept { flash_timing_ = enabled; }
     void set_trace_limit(std::size_t limit) noexcept { trace_limit_ = limit; }
+    // The PC trace only runs while the network time is in [from, to]
+    void set_trace_window_ns(std::uint64_t from, std::uint64_t to) noexcept {
+        trace_from_ns_ = from;
+        trace_to_ns_ = to;
+    }
     void set_trace_after_step(std::size_t step) noexcept {
         trace_after_step_ = step;
     }
@@ -185,6 +190,8 @@ private:
     std::string trace_prefix_;
     std::optional<AddressRange> pc_trace_range_;
     std::optional<AddressRange> mmio_trace_range_;
+    std::uint64_t trace_from_ns_{0};
+    std::uint64_t trace_to_ns_{UINT64_MAX};
     std::size_t trace_limit_{10000};
     std::size_t trace_after_step_{0};
     std::vector<TraceSnapshot> recent_trace_;

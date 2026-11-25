@@ -97,25 +97,51 @@ slave mode and SPI master/slave are not modeled.
 
 ## BLE mode of the RF
 
-With `protocols: [ble]` on the MCU's radio the link layer commands send BLE packets. The register
-protocol is that of the vendor drivers (`rf_drv.h` of the SDK; `rf_start_stx2rx()`, `rf_start_stx()`
-and `rf_set_ble_channel()` of the ATC firmware's binary library were read from its ELF):
+With `protocols: [ble]` on the MCU's radio the link layer commands send and receive BLE packets. The
+register protocol is that of the vendor drivers (`rf_drv.h` of the SDK; `rf_start_stx2rx()`,
+`rf_start_brx()`, `rf_start_stx()` and `rf_set_ble_channel()` of the ATC firmware's binary library were
+read from its ELF, `irq_blc_ll_rx` and `cpu_sleep_wakeup_32k_rc` by disassembling it):
 
 | Register | Meaning in the model |
 |----------|----------------------|
-| `0xf00` | Command: `0x85` STX, `0x87` STX2RX start a transmit, `0x80` stops a start that is pending; others are ignored |
-| `0xf16` bit 2, `0xf18` (32 bit) | With the bit set the transmit starts when the 16 MHz system timer reaches the tick; the start is at least 5 us after the command |
-| `0xc0c` (16 bit) | Address of the packet, written **after** the command by `rf_start_stx2rx()`; the packet is read when the transmit starts. The high byte is `0xc43`, 0 meaning the SRAM at `0x840000` |
-| packet | 4-byte DMA length, the two PDU header bytes (the second is the payload length), the payload |
-| `0x40d` | Channel number 0..39 (`rf_set_ble_channel()` also writes the frequency index `(MHz - 2402) / 2` to `0x1228`) |
-| `0x408` | Access address, byte-swapped (`0xd6be898e` is the advertising `0x8e89bed6`) |
-| `0x424` | CRC seed, 24 bits |
-| `0xf20` bit 1 | TX done: cleared at the start, set when the frame ends on the air |
+| `0xf00` | Command: `0x85` STX, `0x87` STX2RX, `0x88` SRX2TX, `0x86` SRX, `0x82` BRX; `0x80` stops a start that is pending or a receive window |
+| `0xf16` bit 2, `0xf18` (32 bit) | With the bit set the command starts when the 16 MHz system timer reaches the tick; the start is at least 5 us after the command |
+| `0xc0c` (16 bit) | Address of the packet to transmit, read when the transmit starts (the firmware writes it after the command). The high byte is `0xc43`, 0 meaning the SRAM at `0x840000` |
+| `0xc08` (16 bit) | Address of the receive buffer; the high byte is `0xc42` |
+| `0x40d`, `0x408` | Channel number 0..39 (`rf_set_ble_channel()` also writes the frequency index to `0x1228`) and the access address, byte-swapped |
+| `0x424` | CRC init, 24 bits: the bytes of CRCInit of a CONNECT_IND for a connection, `0x555555` for advertising |
+| `0xf03`, `0xf0a`, `0xf28` | Timeout enables, the SRX/STX2RX timeout (us) and the first timeout of BRX (us): the window ends without a packet only when no packet has begun |
+| `0xf20` | Interrupt flags: bit 0 RX done, bit 1 TX done, bit 2 RX timeout, bit 10 (`0xf21` bit 2) first timeout |
+| `0x448` bit 5 | A packet is being received; set 56 us after the start of the packet, when the header is decoded |
 
-Not modeled: the receive window of STX2RX and BLE receive (the firmware's own timeout ends the
-window), the RX/TX register layout of connections, whitening and CRC in the registers (the air adds the
-framing), and the transmit power. The Zigbee TX path is unchanged and is used when no `ble` protocol is
-configured.
+A packet that starts in an open window, on the channel and with the access address the radio is set to,
+is written to the receive buffer in the vendor format: the 4-byte DMA length (payload + 13), the PDU header,
+the payload length, the payload, the CRC (3 bytes), the time stamp of the start of the packet (4 bytes,
+16 MHz system timer), the frequency offset (2), the RSSI + 110 and a status byte (bit 0 set: CRC error).
+The stack checks the CRC of every packet in software, so the radio writes the real one: the reflected
+CRC-24 of the PDU with `0x424` bit-reversed as the seed (`ble_radio_crc24()`), the bytes of the state,
+low first. A CRC that does not match makes the stack drop every packet of the connection and time it out
+after the supervision timeout. The length and the header are in the buffer when the header is decoded,
+the rest and the RX flag come with the last bit.
+
+BRX (the slave side of a connection event) and STX2RX answer by themselves, 150 us (T_IFS) after the end
+of the received packet, with the packet that DMA channel 3 points to at that moment; for BRX the radio
+keeps SN and NESN of the slave side and puts them into the header of the answer (the firmware only
+sets the LLID). A packet that arrives after the window ended, or on another channel or access address, is
+not received.
+
+The 32 kHz counter is read through the same address as the wake compare value: `0x74c = 0x28` and the
+command `0x08` in `0x74f` latch the counter into `0x754` (read back by `cpu_get_32k_tick()`), while
+`0x74c = 0x2c` makes the writes to `0x754` the compare value and the command arms the wakeup. Before
+the read mode existed the model returned the compare value of the last sleep as the current tick, the
+vendor sleep code (`cpu_sleep_wakeup_32k_rc`) computed the wakeup of the next connection event from it
+and asked for a wakeup in the past, so the firmware never woke up.
+
+Not modeled: the transmit queue of the DMA channel 3 (`0xc2a` write/read pointers, `0xc2c` packet
+address), through which the vendor stack hands a data packet to the radio, so a slave answers every
+event with an empty PDU and never with the ATT response it queued; encryption, whitening (the air adds
+the framing), the radio state machine of the BRX events, window widening, and the transmit power. The
+Zigbee path is unchanged and is used when no `ble` protocol is configured.
 
 ## Next accuracy steps
 

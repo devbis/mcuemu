@@ -29,7 +29,8 @@ Tlsr8258Mcu::Tlsr8258Mcu(std::string name, mcuemu::Tlsr8258Model model,
     : Mcu(std::move(name)), device_(model, clock_hz), cpu_(device_) {
     // Debug aid, like the PHY6252 adapter's: MCUEMU_TLSR8258_TRACE_PC="FIRST:LAST" prints every
     // executed instruction in that address range, MCUEMU_TLSR8258_TRACE_AFTER the first step to
-    // print and MCUEMU_TLSR8258_TRACE_LIMIT how many lines
+    // print, MCUEMU_TLSR8258_TRACE_FROM_NS and _TO_NS the network time window and
+    // MCUEMU_TLSR8258_TRACE_LIMIT how many lines
     if (const char *range = std::getenv("MCUEMU_TLSR8258_TRACE_PC")) {
         char *end = nullptr;
         const auto first = static_cast<std::uint32_t>(std::strtoull(range, &end, 0));
@@ -38,6 +39,11 @@ Tlsr8258Mcu::Tlsr8258Mcu(std::string name, mcuemu::Tlsr8258Model model,
         cpu_.set_pc_trace(&std::cerr, mcuemu::AddressRange{first, last});
         if (const char *after = std::getenv("MCUEMU_TLSR8258_TRACE_AFTER"))
             cpu_.set_trace_after_step(std::strtoull(after, nullptr, 0));
+        if (const char *from = std::getenv("MCUEMU_TLSR8258_TRACE_FROM_NS")) {
+            const char *to = std::getenv("MCUEMU_TLSR8258_TRACE_TO_NS");
+            cpu_.set_trace_window_ns(std::strtoull(from, nullptr, 0),
+                                     to ? std::strtoull(to, nullptr, 0) : UINT64_MAX);
+        }
         if (const char *limit = std::getenv("MCUEMU_TLSR8258_TRACE_LIMIT"))
             cpu_.set_trace_limit(std::strtoull(limit, nullptr, 0));
     }

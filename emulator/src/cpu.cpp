@@ -611,6 +611,8 @@ void Cpu::code_hook(uc_struct *opaque, std::uint64_t address,
         const auto trace_address = static_cast<std::uint32_t>(address);
         if (self->pc_trace_output_ &&
             self->executed_instructions_ >= self->trace_after_step_ &&
+            self->device_.network_time_ns() >= self->trace_from_ns_ &&
+            self->device_.network_time_ns() <= self->trace_to_ns_ &&
             (!self->pc_trace_range_ ||
              self->pc_trace_range_->contains(trace_address))) {
             std::string message;
