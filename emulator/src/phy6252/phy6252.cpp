@@ -118,6 +118,7 @@ constexpr std::uint32_t MuxPadEnable = 0x40003814;
 constexpr std::uint32_t MuxSelectBase = 0x40003818;
 constexpr std::uint32_t AonPullBase = 0x4000f008;
 constexpr std::uint32_t AonPullEnd = 0x4000f014;
+constexpr std::uint32_t AonPmctl0 = 0x4000f014;
 constexpr std::uint32_t AonPmctl1 = 0x4000f018;
 constexpr std::uint32_t AonPmctl2_0 = 0x4000f01c;
 constexpr std::uint32_t AonPowerSleep = 0x4000f004;
@@ -602,6 +603,54 @@ void Phy6252::reset() {
     notify_gpio(GpioMask);
 }
 
+// What the chip loses in a system sleep and keeps: the AON block (retained words, sleep flag, RTC,
+// pulls, wake enables) and the SRAM blocks that PMCTL2_0[21:17] retains survive; the core, the
+// peripherals, the pin multiplexer, the clock gates and the other SRAM blocks do not, and the clock
+// is the 16 MHz of the reset again. The ROM then starts from its vector: the first 0x100 bytes of
+// address zero are ROM, whatever the program wrote into the alias.
+void Phy6252::reset_after_sleep() {
+    if (!rom_dump_.empty()) {
+        std::copy_n(rom_dump_.begin(), 0x100, vector_alias_);
+        std::copy_n(rom_dump_.begin(), 0x100, core_.host_pointer(0x10000000, 0x100));
+    }
+    // SRAM retention: bit 0 is the 32 KiB block at 0x1fff0000, bits 1 and 2 the 16 KiB blocks
+    constexpr std::array<std::pair<std::uint32_t, std::uint32_t>, 3> blocks = {{
+        {0x00000u, 0x8000u}, {0x08000u, 0x4000u}, {0x0c000u, 0x4000u}}};
+    const std::uint32_t retention = (control_registers_[AonPmctl2_0] >> 17) & 0x1fu;
+    for (unsigned i = 0; i < blocks.size(); ++i) {
+        if ((retention & (1u << i)) == 0)
+            std::fill_n(ram_ + blocks[i].first, blocks[i].second, 0);
+    }
+    // Everything outside the AON block returns to its reset state
+    constexpr std::uint32_t AonFirst = 0x4000f000, AonLast = 0x4000f1ff;
+    for (auto it = control_registers_.begin(); it != control_registers_.end();) {
+        if (it->first >= AonFirst && it->first <= AonLast)
+            ++it;
+        else
+            it = control_registers_.erase(it);
+    }
+    lcr_ = ier_ = dll_ = dlm_ = mcr_ = scratch_ = 0;
+    timers_ = {};
+    for (TimerState &timer : timers_)
+        timer.last_cycle = core_.cycles();
+    gpio_data_ = gpio_direction_ = gpio_control_ = gpio_interrupt_enable_ = 0;
+    gpio_interrupt_mask_ = GpioMask;
+    gpio_interrupt_type_ = gpio_interrupt_polarity_ = 0;
+    gpio_interrupt_status_ = 0;
+    watchdog_deadline_ns_ = 0;
+    watchdog_interrupt_pending_ = false;
+    spif_config_ = FlashReady;
+    spif_command_ = 0;
+    spif_write_enabled_ = false;
+    dma_raw_transfer_status_ = dma_channel_enable_ = 0;
+    core_.set_clock_hz(16000000);
+    update_radio_irq();
+    update_gpio_irq();
+    core_.set_irq_line(WatchdogIrq, false);
+    for (unsigned timer = 0; timer < timers_.size(); ++timer)
+        update_timer_irq(timer);
+}
+
 cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
     for (;;) {
         if (rtc_wait_.active) {
@@ -644,6 +693,7 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             system_sleeping_ = false;
             // The captured ROM owns wake restoration. Resetting through its
             // vector lets it inspect the retained AON sleep flag and RTC state.
+            reset_after_sleep();
             core_.reset(0);
         }
         auto result = core_.run(until_cycle);
@@ -685,7 +735,14 @@ cortexm::RunResult Phy6252::run(std::uint64_t until_cycle) {
             const std::uint32_t rtc_control = control_registers_[AonRtcControl];
             constexpr std::uint32_t RtcCompare0Interrupt = 1u << 15;
             constexpr std::uint32_t RtcCompare0Event = 1u << 20;
-            if ((rtc_control & (RtcCompare0Interrupt | RtcCompare0Event)) ==
+            // The RC oscillator of the RTC keeps running in the sleep only when the SDK's
+            // hal_rtc_clock_config() has set PMCTL0[28:27] ("for rc32k wakeup"); on the PB-03F the
+            // chip never woke from a sleep with the reset value of the field (observed), and bit
+            // 28 is the one the SDK names. Which bit is required is inferred.
+            constexpr std::uint32_t Rc32kWakeup = 1u << 28;
+            const bool rc32k_awake = (control_registers_[AonPmctl0] & Rc32kWakeup) != 0;
+            if (rc32k_awake &&
+                (rtc_control & (RtcCompare0Interrupt | RtcCompare0Event)) ==
                 (RtcCompare0Interrupt | RtcCompare0Event)) {
                 const std::uint64_t now_ns = core_.cycles_to_ns(core_.cycles());
                 const std::uint32_t current = rtc_count(now_ns);

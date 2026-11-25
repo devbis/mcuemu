@@ -165,6 +165,7 @@ private:
     std::ostream *mmio_trace_{nullptr};
     std::uint32_t mmio_trace_first_{0}, mmio_trace_last_{0};
     void set_system_clock(std::uint32_t hz);
+    void reset_after_sleep();
     std::uint32_t read_register(std::uint32_t address, unsigned size);
     std::uint32_t read_register_impl(std::uint32_t address, unsigned size);
     void write_register(std::uint32_t address, std::uint32_t value, unsigned size);
