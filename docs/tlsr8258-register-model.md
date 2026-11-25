@@ -95,6 +95,28 @@ the upper half of an entry is written as 0, its content is not known); the 1.2 V
 left/right channels, PGA and the temperature sensor are not modeled. The I2C
 slave mode and SPI master/slave are not modeled.
 
+## BLE mode of the RF
+
+With `protocols: [ble]` on the MCU's radio the link layer commands send BLE packets. The register
+protocol is that of the vendor drivers (`rf_drv.h` of the SDK; `rf_start_stx2rx()`, `rf_start_stx()`
+and `rf_set_ble_channel()` of the ATC firmware's binary library were read from its ELF):
+
+| Register | Meaning in the model |
+|----------|----------------------|
+| `0xf00` | Command: `0x85` STX, `0x87` STX2RX start a transmit, `0x80` stops a start that is pending; others are ignored |
+| `0xf16` bit 2, `0xf18` (32 bit) | With the bit set the transmit starts when the 16 MHz system timer reaches the tick; the start is at least 5 us after the command |
+| `0xc0c` (16 bit) | Address of the packet, written **after** the command by `rf_start_stx2rx()`; the packet is read when the transmit starts. The high byte is `0xc43`, 0 meaning the SRAM at `0x840000` |
+| packet | 4-byte DMA length, the two PDU header bytes (the second is the payload length), the payload |
+| `0x40d` | Channel number 0..39 (`rf_set_ble_channel()` also writes the frequency index `(MHz - 2402) / 2` to `0x1228`) |
+| `0x408` | Access address, byte-swapped (`0xd6be898e` is the advertising `0x8e89bed6`) |
+| `0x424` | CRC seed, 24 bits |
+| `0xf20` bit 1 | TX done: cleared at the start, set when the frame ends on the air |
+
+Not modeled: the receive window of STX2RX and BLE receive (the firmware's own timeout ends the
+window), the RX/TX register layout of connections, whitening and CRC in the registers (the air adds the
+framing), and the transmit power. The Zigbee TX path is unchanged and is used when no `ble` protocol is
+configured.
+
 ## Next accuracy steps
 
 1. Compare the decoded AREG sequence and virtual timestamps against a captured
