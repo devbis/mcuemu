@@ -96,14 +96,16 @@ def run_host(port: int, emulator: subprocess.Popen) -> str | None:
     connected_at = None
     handle = None
     requested = False
-    answered = False
+    answered = 0
     buffer = b""
     while True:
         now = time.time()
         if connected_at is None and now - started > CONNECT_TIMEOUT_S:
             return "the connection did not come up"
         if connected_at is not None and now - connected_at > HOLD_S:
-            return None if answered else "no ATT Exchange MTU Response"
+            if answered != 1:
+                return f"{answered} ATT Exchange MTU Responses, expected one"
+            return None
         if handle is not None and not requested and now - connected_at > 0.05:
             att = bytes([0x02, 0x17, 0x00])
             sock.sendall(bytes([2]) + struct.pack("<HH", handle | 0x2000, len(att) + 4)
@@ -129,7 +131,7 @@ def run_host(port: int, emulator: subprocess.Popen) -> str | None:
             data = buffer[5 : 5 + size]
             buffer = buffer[5 + size :]
             if data[2:4] == b"\x04\x00" and data[4:5] == b"\x03":  # ATT Exchange MTU Response
-                answered = True
+                answered += 1
         if emulator.poll() is not None:
             return "the emulator exited"
 

@@ -137,13 +137,21 @@ the read mode existed the model returned the compare value of the last sleep as 
 vendor sleep code (`cpu_sleep_wakeup_32k_rc`) computed the wakeup of the next connection event from it
 and asked for a wakeup in the past, so the firmware never woke up.
 
-The vendor stack hands data to the radio through a queue: it clears it with `0xc2a` bit 6 at the start
-of an event and writes the address of the packet it sent last and then that of the next one to `0xc2c`
-(an empty PDU is the usual first entry). The model sends the next entry when the NESN of the packet
-just received acknowledged the last one and the first otherwise (a repeat); with an empty queue the
-packet of `0xc0c` goes. The ATC firmware then answers an ATT Exchange MTU Request. The queue depth,
-the pointer registers `0xc2a`/`0xc2b` as read back, and the exact retransmission rules are inferred
-from the ATC firmware only.
+The vendor stack hands data to the radio through a queue of 16 packet addresses (read from
+`blt_push_fifo_hw`, `blt_brx_start` and `blt_brx_post` of the ATC firmware). A write to `0xc2c` (16 bit,
+high byte `0xc43`) pushes an address and moves the write pointer, read back at `0xc2b`. The read pointer
+is `0xc2a`; the stack restores it at the start of each event by writing the value it read at the end
+of the last one with bit 6 set (bit 4 resets both pointers). The answer of a BRX event is the entry at
+the read pointer when the queue is not empty (else the packet of `0xc0c`), and the pointer moves on
+when the next packet of the master acknowledges it. The stack frees its own software queue when it
+pushes, so a data packet is pushed once, behind an empty PDU, and goes out in the event after the one
+that acknowledged the empty one; if the master does not acknowledge it, it is repeated.
+
+SN and NESN of the slave side persist between events through the stack: at BRX start the radio loads
+them from bits 4 (SN) and 5 (NESN) of `0xf03`, and after a received packet it shows them in bit 0 of
+`0xf22` (SN) and bit 4 of `0xf23` (NESN), which the stack copies to `0xf03` for the next event. The
+assignment of the bits follows from the stack's copy and from the result (a response that is neither
+lost nor repeated); there is no hardware trace.
 
 Not modeled: encryption, whitening (the air adds the framing), the radio state machine of the BRX events,
 window widening, and the transmit power. The Zigbee path is unchanged and is used when no `ble`

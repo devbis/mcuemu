@@ -300,8 +300,13 @@ private:
     bool wake_timer_armed_{false};
     // The 32 kHz counter latched by the read command of 0x74f (0x74c = 0x28); 0x754 reads it back
     std::uint32_t tick_32k_latched_{0};
-    // Packet addresses pushed through 0xc2c (the transmit queue of DMA channel 3), cleared by 0xc2a bit 6
-    std::vector<std::uint32_t> ble_tx_queue_;
+    // The transmit queue of DMA channel 3: 16 packet addresses pushed through 0xc2c, the write pointer
+    // (0xc2b) follows the pushes, the read pointer (0xc2a, set by writing it with bit 6) moves when the
+    // master acknowledges a packet that came from the queue
+    std::array<std::uint32_t, 16> ble_tx_queue_{};
+    std::uint8_t ble_tx_rptr_{0};
+    std::uint8_t ble_tx_wptr_{0};
+    bool ble_sent_from_queue_{false};
     bool ble_last_acked_{false};
     bool sleep_entry_pending_{false};
     std::uint32_t sleep_entry_cycles_remaining_{0};

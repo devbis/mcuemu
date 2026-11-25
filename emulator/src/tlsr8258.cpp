@@ -1075,8 +1075,11 @@ void Tlsr8258::start_ble_transmit(std::uint8_t command) {
             ble_tx_start_ns_ = std::max(ble_tx_start_ns_, ble_last_rx_end_ns_ + 150000u);
         ble_reply_armed_ = false;
     } else if (command == 0x86u || command == 0x88u || command == 0x82u) {
-        if (command == 0x82u && (registers_[0xf03] & 0x30u) != 0) // BRX_SN_INIT, BRX_NESN_INIT
-            ble_sn_ = ble_nesn_ = false;
+        if (command == 0x82u) {
+            // BRX_SN_INIT and BRX_NESN_INIT: the stack loads the state it saved after the last event
+            ble_sn_ = (registers_[0xf03] & 0x10u) != 0;
+            ble_nesn_ = (registers_[0xf03] & 0x20u) != 0;
+        }
         ble_rx_pending_ = true;
         ble_rx_active_ = false;
         ble_rx_command_ = command;
@@ -1094,10 +1097,9 @@ void Tlsr8258::launch_ble_transmit() {
     ble_tx_is_answer_ = false;
     const std::uint8_t channel = registers_[0x40d];
     std::uint32_t address = dma_address(0x0c0c, 0x0c43);
-    if (ble_tx_is_answer_was && !ble_tx_queue_.empty()) {
-        // The stack queues the packet that was sent last and, behind it, the next one. The master's
-        // NESN says which of them goes: the next one when it acknowledged the last
-        address = ble_tx_queue_.size() > 1 && ble_last_acked_ ? ble_tx_queue_[1] : ble_tx_queue_[0];
+    if (ble_tx_is_answer_was && ble_tx_command_ == 0x85u && ble_tx_rptr_ != ble_tx_wptr_) {
+        address = ble_tx_queue_[ble_tx_rptr_];
+        ble_sent_from_queue_ = true;
     }
     const std::size_t length = read8(address + 5u);
     std::vector<std::uint8_t> pdu;
@@ -1239,11 +1241,16 @@ void Tlsr8258::poll_ble_receive(std::uint64_t previous_poll_ns, std::uint64_t no
             // carries both in its header (the firmware puts only the LLID there)
             const bool rx_sn = (frame.payload[0] & 0x08u) != 0;
             const bool rx_nesn = (frame.payload[0] & 0x04u) != 0;
-            ble_last_acked_ = rx_nesn != ble_sn_;
-            if (ble_last_acked_)
+            if (rx_nesn != ble_sn_ && ble_sent_from_queue_) {
+                ble_tx_rptr_ = (ble_tx_rptr_ + 1u) & 0x0fu;
+                ble_sent_from_queue_ = false;
+            }
+            if (rx_nesn != ble_sn_)
                 ble_sn_ = !ble_sn_;
             if (rx_sn == ble_nesn_)
                 ble_nesn_ = !ble_nesn_;
+            registers_[0xf22] = static_cast<std::uint8_t>((registers_[0xf22] & ~0x01u) | (ble_sn_ ? 0x01u : 0u));
+            registers_[0xf23] = static_cast<std::uint8_t>((registers_[0xf23] & ~0x10u) | (ble_nesn_ ? 0x10u : 0u));
             ble_answer_bits_ = static_cast<std::uint8_t>((ble_nesn_ ? 0x04u : 0u) | (ble_sn_ ? 0x08u : 0u));
         }
         if (ble_rx_command_ == 0x82u || ble_rx_command_ == 0x88u) {
@@ -1624,6 +1631,10 @@ void Tlsr8258::flash_erase(std::uint32_t address, std::uint32_t size) {
 }
 
 std::uint8_t Tlsr8258::read_register(std::uint32_t offset) {
+    if (offset == 0xc2a)
+        return ble_tx_rptr_;
+    if (offset == 0xc2b)
+        return ble_tx_wptr_;
     if (offset == 0x002)
         return i2c_status();
     if (offset == 0xb1e)
@@ -1719,11 +1730,17 @@ void Tlsr8258::update_system_timer_calibration() noexcept {
 }
 
 void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
-    if (offset == 0xc2a && (value & 0x40u) != 0)
-        ble_tx_queue_.clear();
+    if (offset == 0xc2a) {
+        if ((value & 0x40u) != 0)
+            ble_tx_rptr_ = value & 0x0fu;
+        if ((value & 0x10u) != 0)
+            ble_tx_rptr_ = ble_tx_wptr_ = 0;
+        return;
+    }
     if (offset == 0xc2d) {
         registers_[offset] = value;
-        ble_tx_queue_.push_back(dma_address(0x0c2c, 0x0c43));
+        ble_tx_queue_[ble_tx_wptr_] = dma_address(0x0c2c, 0x0c43);
+        ble_tx_wptr_ = (ble_tx_wptr_ + 1u) & 0x0fu;
         return;
     }
     if (offset == 0x007) {

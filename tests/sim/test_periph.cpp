@@ -382,30 +382,46 @@ void test_tlsr8258_32k_counter_read_mode() {
     CHECK(reg_read(*rig.device, 0x754) == 0x78); // the compare value is still there
 }
 
-// The stack hands data to the radio through the queue of DMA channel 3: it clears it with 0xc2a bit 6
-// and pushes the packet sent last and the next one to 0xc2c. The next one goes when the master
-// acknowledged the last
+// The stack hands data to the radio through the queue of DMA channel 3: the packets go to 0xc2c, the
+// write pointer 0xc2b follows, and the read pointer 0xc2a moves when the master acknowledges the packet
+// that was sent from it. The first entry is an empty PDU, the second carries data
 void test_tlsr8258_ble_slave_sends_from_the_queue() {
     BleRig rig;
-    rig.sram(0x1000, {0x02, 0x00, 0x00, 0x00, 0x01, 0x00});                          // empty, sent before
-    rig.sram(0x1100, {0x09, 0x00, 0x00, 0x00, 0x02, 0x03, 0xaa, 0xbb, 0xcc});       // data, 3 bytes
-    reg_write(*rig.device, 0xc2a, 0x40);
+    rig.sram(0x1000, {0x02, 0x00, 0x00, 0x00, 0x01, 0x00});                    // empty
+    rig.sram(0x1100, {0x09, 0x00, 0x00, 0x00, 0x02, 0x03, 0xaa, 0xbb, 0xcc}); // data, 3 bytes
     for (std::uint16_t address : {std::uint16_t{0x1000}, std::uint16_t{0x1100}}) {
         reg_write(*rig.device, 0xc2c, static_cast<std::uint8_t>(address));
         reg_write(*rig.device, 0xc2d, static_cast<std::uint8_t>(address >> 8));
     }
-    reg_write(*rig.device, 0xf00, 0x82);
-    rig.world->run_until(rig.world->now() + 100000);
-    // The master's NESN 1 acknowledges our last packet
-    const std::uint64_t at = rig.world->now() + 50000;
-    rig.peer_sends(at, {0x06, 0x00});
-    rig.world->run_until(at + 1000000);
+    CHECK(reg_read(*rig.device, 0xc2b) == 2);
+    CHECK(reg_read(*rig.device, 0xc2a) == 0);
+    const auto event = [&](std::uint8_t header) {
+        reg_write(*rig.device, 0xf20, 0x03);
+        // The stack loads the SN and NESN it read after the last event, bit 0 of 0xf22 and bit 4 of 0xf23
+        reg_write(*rig.device, 0xf03, static_cast<std::uint8_t>(((reg_read(*rig.device, 0xf22) & 1u) << 4) |
+                                                                 ((reg_read(*rig.device, 0xf23) & 0x10u) << 1)));
+        reg_write(*rig.device, 0xf00, 0x82);
+        const std::uint64_t at = rig.world->now() + 50000;
+        rig.peer_sends(at, {header, 0x00});
+        rig.world->run_until(at + 1000000);
+    };
+    event(0x02); // new data of the master, acknowledges nothing: our first packet goes
+    event(0x0d); // SN 1, NESN 1: acknowledged, the empty PDU is done and the data goes
     const auto &frames = rig.world->radio("air0").frames();
-    CHECK(frames.size() == 2);
-    if (frames.size() == 2) {
-        CHECK(frames[1].payload.size() == 5);
-        CHECK(frames[1].payload.size() < 5 || frames[1].payload[2] == 0xaa);
+    CHECK(frames.size() == 4);
+    if (frames.size() == 4) {
+        CHECK(frames[1].payload.size() == 2);
+        CHECK(frames[3].payload.size() == 5);
+        CHECK(frames[3].payload.size() < 5 || frames[3].payload[2] == 0xaa);
     }
+    CHECK(reg_read(*rig.device, 0xc2a) == 1);
+    // The master repeats itself and acknowledges nothing: the data goes again
+    event(0x0d);
+    const auto &after = rig.world->radio("air0").frames();
+    CHECK(after.size() == 6);
+    if (after.size() == 6)
+        CHECK(after[5].payload.size() == 5);
+    CHECK(reg_read(*rig.device, 0xc2a) == 1);
 }
 
 namespace {
