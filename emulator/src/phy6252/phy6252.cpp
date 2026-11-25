@@ -3446,10 +3446,16 @@ void Phy6252::sync_timer(unsigned timer, std::uint64_t now) {
         } else {
             state.current -= static_cast<std::uint32_t>(ticks);
         }
+    } else if (state.current == 0) {
+        // Free-running mode at zero: the next tick reloads 0xffffffff and the count goes on from
+        // there. The interrupt fired when the counter reached zero. The boot ROM enables timer 1
+        // with LoadCount 0 and measures time with its current count (the window of its UART
+        // loader), and the scheduler syncs the timer every tick, so a counter that stayed at zero
+        // would never show that time passes.
+        state.current = 0xffffffffu - static_cast<std::uint32_t>(ticks - 1);
     } else {
-        const std::uint64_t until_zero = state.current == 0 ? 1 : state.current;
-        if (ticks >= until_zero) {
-            const std::uint64_t after_zero = ticks - until_zero;
+        if (ticks >= state.current) {
+            const std::uint64_t after_zero = ticks - state.current;
             state.current = after_zero == 0 ? 0 :
                 0xffffffffu - static_cast<std::uint32_t>(after_zero - 1);
             state.interrupt_pending = true;
