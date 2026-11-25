@@ -155,9 +155,14 @@ lost nor repeated); there is no hardware trace.
 
 With these the ATC firmware serves ATT over the model: Exchange MTU, Read By Group Type (the services
 GAP, GATT, Device Information and others), Read By Type (the characteristics) and Read (the Device
-Name `ATC_023460`) all answer through the HCI of the `ble_host` part, and its L2CAP request to update
-the connection parameters (it comes seconds after the connection) can be answered by the host. The
-`firmware_tlsr8258_atc_connection` test reads the Device Name.
+Name `ATC_023460`) all answer through the HCI of the `ble_host` part. The firmware also asks for new
+connection parameters with an L2CAP request seconds after the connection (interval 20 ms, latency 49,
+timeout 4 s); the host answers it and sends LE Connection Update, `ble_host` sends
+LL_CONNECTION_UPDATE_IND with an instant a few events ahead, and the slave follows the new schedule
+(the interval measured on the air goes from 30 to 20 ms and the connection lasts). The model has no
+window widening and the slave answers every event, also with latency 49, as the stack does not skip
+events while the link is busy. `firmware_tlsr8258_atc_connection` reads the Device Name before and after
+a change of the interval.
 
 Not modeled: encryption, whitening (the air adds the framing), the radio state machine of the BRX events,
 window widening, and the transmit power. The Zigbee path is unchanged and is used when no `ble`

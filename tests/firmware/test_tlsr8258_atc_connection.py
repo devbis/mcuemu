@@ -9,7 +9,10 @@ timeout of 2 s that the test asks for: the stack drops a connection when it sees
 which it did while the radio model wrote no CRC behind the received PDUs and returned a stale 32 kHz
 counter to the sleep code. The test also sends an ATT Exchange MTU Request and expects the response,
 which the firmware hands to the radio through the transmit queue of DMA channel 3, and then reads the
-Device Name (handle 3) and expects the name of the advertisement.
+Device Name (handle 3) and expects the name of the advertisement. Then it changes the interval from 30
+to 20 ms with LE Connection Update (the host sends LL_CONNECTION_UPDATE_IND), expects the Update Complete
+event, reads the name again and waits longer than the supervision timeout: the slave must have followed
+the new schedule.
 
 The emulator runs at the speed of the wall clock (--speed 1) because the host is a program outside.
 """
@@ -52,6 +55,8 @@ attach:
 PEER = bytes.fromhex("a4c138023460")[::-1]
 CONNECT_TIMEOUT_S = 12.0
 HOLD_S = 3.5  # longer than the supervision timeout of 2 s
+UPDATE_TIMEOUT_S = 6.0
+HOLD_AFTER_UPDATE_S = 2.5
 
 
 def fail(message: str, output: str = "") -> int:
@@ -99,20 +104,29 @@ def run_host(port: int, emulator: subprocess.Popen) -> str | None:
     requested = False
     read_sent = False
     name = None
+    update_sent = False
+    updated_at = None
+    name_after = None
+    after_sent = False
     answered = 0
     buffer = b""
     while True:
         now = time.time()
         if connected_at is None and now - started > CONNECT_TIMEOUT_S:
             return "the connection did not come up"
-        if connected_at is not None and now - connected_at > HOLD_S:
+        if (connected_at is not None and now - connected_at > HOLD_S and updated_at is not None
+                and now - updated_at > HOLD_AFTER_UPDATE_S):
             if answered != 1:
                 return f"{answered} ATT Exchange MTU Responses, expected one"
             if name is None:
                 return "no answer to the read of the Device Name"
             if name != b"ATC_023460":
                 return f"the Device Name is {name!r}"
+            if name_after != b"ATC_023460":
+                return f"the Device Name after the update is {name_after!r}"
             return None
+        if connected_at is not None and now - connected_at > UPDATE_TIMEOUT_S and updated_at is None:
+            return "no LE Connection Update Complete"
         if handle is not None and not requested and now - connected_at > 0.05:
             att = bytes([0x02, 0x17, 0x00])
             sock.sendall(bytes([2]) + struct.pack("<HH", handle | 0x2000, len(att) + 4)
@@ -123,6 +137,15 @@ def run_host(port: int, emulator: subprocess.Popen) -> str | None:
             sock.sendall(bytes([2]) + struct.pack("<HH", handle | 0x2000, len(att) + 4)
                          + struct.pack("<HH", len(att), 4) + att)
             read_sent = True
+        if read_sent and not update_sent and now - connected_at > 0.9:
+            # interval 16 * 1.25 = 20 ms, latency 0, supervision timeout 2 s
+            hci_command(sock, 0x2013, struct.pack("<HHHHHHH", handle, 16, 16, 0, 0xC8, 0, 0))
+            update_sent = True
+        if updated_at is not None and not after_sent and now - updated_at > 0.3:
+            att = bytes([0x0A, 0x03, 0x00])
+            sock.sendall(bytes([2]) + struct.pack("<HH", handle | 0x2000, len(att) + 4)
+                         + struct.pack("<HH", len(att), 4) + att)
+            after_sent = True
         try:
             buffer += sock.recv(4096)
         except socket.timeout:
@@ -136,6 +159,10 @@ def run_host(port: int, emulator: subprocess.Popen) -> str | None:
                     return f"LE Connection Complete with status {payload[1]:#04x}"
                 connected_at = time.time()
                 handle = struct.unpack("<H", payload[2:4])[0]
+            elif event == 0x3E and payload[0] == 3:  # LE Connection Update Complete
+                if payload[1] != 0 or struct.unpack("<H", payload[4:6])[0] != 16:
+                    return f"LE Connection Update Complete {payload.hex()}"
+                updated_at = time.time()
             elif event == 0x05:  # Disconnection Complete
                 return f"disconnected with reason {payload[3]:#04x} after {now - (connected_at or now):.1f} s"
         while len(buffer) >= 5 and buffer[0] == 2 and len(buffer) >= 5 + struct.unpack("<H", buffer[3:5])[0]:
@@ -145,7 +172,10 @@ def run_host(port: int, emulator: subprocess.Popen) -> str | None:
             if data[2:4] == b"\x04\x00" and data[4:5] == b"\x03":  # ATT Exchange MTU Response
                 answered += 1
             if data[2:4] == b"\x04\x00" and data[4:5] == b"\x0b":  # ATT Read Response
-                name = data[5:]
+                if updated_at is None:
+                    name = data[5:]
+                else:
+                    name_after = data[5:]
         if emulator.poll() is not None:
             return "the emulator exited"
 
