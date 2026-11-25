@@ -1,5 +1,8 @@
-#include <limits>
 #include "sim/tlsr8258_mcu.hpp"
+
+#include <cstdlib>
+#include <iostream>
+#include <limits>
 
 #include <fstream>
 #include <iterator>
@@ -24,6 +27,20 @@ bool parse_pad(std::string_view pad, unsigned &port, unsigned &bit) {
 Tlsr8258Mcu::Tlsr8258Mcu(std::string name, mcuemu::Tlsr8258Model model,
                          std::uint32_t clock_hz)
     : Mcu(std::move(name)), device_(model, clock_hz), cpu_(device_) {
+    // Debug aid, like the PHY6252 adapter's: MCUEMU_TLSR8258_TRACE_PC="FIRST:LAST" prints every
+    // executed instruction in that address range, MCUEMU_TLSR8258_TRACE_AFTER the first step to
+    // print and MCUEMU_TLSR8258_TRACE_LIMIT how many lines
+    if (const char *range = std::getenv("MCUEMU_TLSR8258_TRACE_PC")) {
+        char *end = nullptr;
+        const auto first = static_cast<std::uint32_t>(std::strtoull(range, &end, 0));
+        const auto last = *end == ':' ? static_cast<std::uint32_t>(std::strtoull(end + 1, nullptr, 0))
+                                      : first;
+        cpu_.set_pc_trace(&std::cerr, mcuemu::AddressRange{first, last});
+        if (const char *after = std::getenv("MCUEMU_TLSR8258_TRACE_AFTER"))
+            cpu_.set_trace_after_step(std::strtoull(after, nullptr, 0));
+        if (const char *limit = std::getenv("MCUEMU_TLSR8258_TRACE_LIMIT"))
+            cpu_.set_trace_limit(std::strtoull(limit, nullptr, 0));
+    }
     device_.set_gpio_pad_observer([this](unsigned port) { drive_port(port); });
     device_.set_i2c_pad_observer(
         [this](const mcuemu::I2cPads &pads, bool sda_low, bool scl_low) {
@@ -42,6 +59,7 @@ Tlsr8258Mcu::Tlsr8258Mcu(std::string name, mcuemu::Tlsr8258Model model,
 }
 
 void Tlsr8258Mcu::load_firmware(const std::string &path) {
+
     load_images({{path, 0}});
 }
 
