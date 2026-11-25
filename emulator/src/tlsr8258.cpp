@@ -774,6 +774,10 @@ std::uint64_t Tlsr8258::cycles_until_event() const noexcept {
         const std::uint64_t now_ns = network_time_ns();
         limit(radio_tx_finish_ns_ > now_ns ? ns_to_cycles(radio_tx_finish_ns_ - now_ns) : 0);
     }
+    if (ble_tx_pending_) {
+        const std::uint64_t now_ns = network_time_ns();
+        limit(ble_tx_start_ns_ > now_ns ? ns_to_cycles(ble_tx_start_ns_ - now_ns) : 0);
+    }
     if (radio_air_)
         limit(radio_next_poll_ns_ > time_ns_ ? ns_to_cycles(radio_next_poll_ns_ - time_ns_) : 0);
     return bound;
@@ -974,7 +978,78 @@ void Tlsr8258::start_radio_transmit() {
     radio_tx_busy_ = true;
 }
 
+// BLE transmit, started by a command in the link layer register 0xf00 (STX 0x85, STX2RX 0x87; 0x80
+// stops). The command comes before the address of the packet: rf_start_stx2rx() writes 0xf00 and then
+// the DMA channel 3 address, so the packet is read when the transmit starts, not when the command is
+// written. With the schedule bit of 0xf16 that is when the system timer reaches the tick in 0xf18.
+// Receiving the reply of STX2RX is not modeled: the receive window ends in the firmware's timeout.
+void Tlsr8258::start_ble_transmit(std::uint8_t command) {
+    if (command == 0x80u) {
+        ble_tx_pending_ = false;
+        return;
+    }
+    if (command != 0x85u && command != 0x87u)
+        return;
+    std::uint64_t start_ns = network_time_ns();
+    if ((registers_[0xf16] & 0x04u) != 0) {
+        const std::uint32_t tick = static_cast<std::uint32_t>(registers_[0xf18]) |
+            (static_cast<std::uint32_t>(registers_[0xf19]) << 8) |
+            (static_cast<std::uint32_t>(registers_[0xf1a]) << 16) |
+            (static_cast<std::uint32_t>(registers_[0xf1b]) << 24);
+        const std::uint32_t ahead = tick - system_timer_count_;
+        if (ahead < 0x80000000u)
+            start_ns += static_cast<std::uint64_t>(ahead) * 1000u / 16u; // 16 MHz system timer
+    }
+    // The transmit settle time of the radio: the firmware writes the address of the packet in the next
+    // few instructions, also when the tick is already behind the system timer
+    constexpr std::uint64_t SettleNs = 5000;
+    start_ns = std::max(start_ns, network_time_ns() + SettleNs);
+    ble_tx_pending_ = true;
+    ble_tx_start_ns_ = start_ns;
+}
+
+// The packet is the one of DMA channel 3: a 4-byte length, the two header bytes of the PDU (the second
+// is the payload length) and the payload. The access address is stored byte-swapped in 0x408 and the
+// CRC seed in 0x424 (rf_set_ble_access_code_value(), rf_set_ble_crc_value()). rf_set_ble_channel()
+// stores the channel number (0..36 data, 37..39 advertising) in 0x40d, the initial value of the
+// whitening, and the frequency index (MHz - 2402) / 2 in 0x1228.
+void Tlsr8258::launch_ble_transmit() {
+    ble_tx_pending_ = false;
+    const std::uint8_t channel = registers_[0x40d];
+    const std::uint32_t address = dma_address(0x0c0c, 0x0c43);
+    const std::size_t length = read8(address + 5u);
+    std::vector<std::uint8_t> pdu;
+    pdu.reserve(length + 2u);
+    for (std::size_t i = 0; i != length + 2u; ++i)
+        pdu.push_back(read8(address + 4u + static_cast<std::uint32_t>(i)));
+
+    registers_[0xf20] &= static_cast<std::uint8_t>(~0x02u);
+    if (radio_air_ && channel <= 39u) {
+        const std::uint32_t swapped = static_cast<std::uint32_t>(registers_[0x408]) |
+            (static_cast<std::uint32_t>(registers_[0x409]) << 8) |
+            (static_cast<std::uint32_t>(registers_[0x40a]) << 16) |
+            (static_cast<std::uint32_t>(registers_[0x40b]) << 24);
+        BleLinkInfo link;
+        link.access_address = ((swapped & 0xffu) << 24) | ((swapped & 0xff00u) << 8) |
+            ((swapped >> 8) & 0xff00u) | (swapped >> 24);
+        link.crc_init = static_cast<std::uint32_t>(registers_[0x424]) |
+            (static_cast<std::uint32_t>(registers_[0x425]) << 8) |
+            (static_cast<std::uint32_t>(registers_[0x426]) << 16);
+        link.ll_framed = true;
+        const std::uint64_t id = radio_air_->transmit(
+            radio_node_name_, {}, RadioProtocol::Ble, channel, ble_tx_start_ns_, std::move(pdu), 0,
+            link);
+        radio_tx_finish_ns_ = radio_air_->frames()[id - 1].end_ns;
+    } else {
+        // No medium or no valid channel: complete at once, so that the firmware does not wait
+        radio_tx_finish_ns_ = ble_tx_start_ns_;
+    }
+    radio_tx_busy_ = true;
+}
+
 void Tlsr8258::poll_radio() {
+    if (ble_tx_pending_ && network_time_ns() >= ble_tx_start_ns_)
+        launch_ble_transmit();
     if (radio_tx_busy_ && network_time_ns() >= radio_tx_finish_ns_) {
         radio_tx_busy_ = false;
         registers_[0xc24] &= static_cast<std::uint8_t>(~0x08u);
@@ -1507,6 +1582,11 @@ void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
     if (offset == 0x0c21) {
         registers_[offset] = value;
         update_dma_irq();
+        return;
+    }
+    if (offset == 0x0f00 && radio_ble_enabled_) {
+        registers_[offset] = value;
+        start_ble_transmit(value);
         return;
     }
     if (offset == 0x0f20 || offset == 0x0f21) {

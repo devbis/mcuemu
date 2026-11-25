@@ -265,8 +265,14 @@ void test_radio_system_config() {
     CHECK(contains(build_yaml(head + "world: { radio: [ {id: a} ] }\n" + device +
                               "{air: a, protocols: [lora]}}\n"),
                    "zigbee or ble"));
-    CHECK(contains(build_yaml(head + "world: { radio: [ {id: a} ] }\n" + device +
-                              "{air: a, protocols: [zigbee, ble]}}\n"),
+    // The TLSR8258 sends BLE packets from its link layer registers; the TLSR826x does not yet
+    CHECK(build_yaml(head + "world: { radio: [ {id: a} ] }\n" + device +
+                     "{air: a, protocols: [zigbee, ble]}}\n")
+              .empty());
+    CHECK(contains(build_yaml(head + "world: { radio: [ {id: a} ] }\n"
+                              "devices:\n  - id: d\n    mcus:\n"
+                              "      - {id: m, model: tlsr8269, firmware: " + idle() +
+                              ", radio: {air: a, protocols: [zigbee, ble]}}\n"),
                    "'ble' is not connected to the chip's RF registers"));
     CHECK(contains(build_yaml(head + "world: { radio: [ {id: a} ] }\n"
                               "devices:\n  - id: d\n    mcus:\n"

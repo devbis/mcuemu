@@ -209,12 +209,15 @@ void Tlsr8258Mcu::on_i2c_pads(const mcuemu::I2cPads &pads, bool sda_low,
 
 void Tlsr8258Mcu::attach_radio(mcuemu::VirtualAir &air, const std::string &node,
                                const std::vector<std::string> &protocols) {
-    for (const std::string &protocol : protocols)
-        if (protocol != "zigbee")
-            throw std::invalid_argument(
-                "tlsr8258: '" + protocol +
-                "' is not connected to the chip's RF registers yet (only zigbee)");
+    bool ble = false;
+    for (const std::string &protocol : protocols) {
+        if (protocol == "ble")
+            ble = true;
+        else if (protocol != "zigbee")
+            throw std::invalid_argument("tlsr8258: unknown radio protocol '" + protocol + "'");
+    }
     device_.connect_radio(air, node);
+    device_.enable_radio_ble(ble);
 }
 
 void Tlsr8258Mcu::read_memory(std::uint32_t address, std::uint8_t *out,

@@ -255,6 +255,9 @@ public:
         return analog_register_event_count_;
     }
     void connect_radio(VirtualAir &air, std::string node_name);
+    // The firmware may use the RF in BLE mode: the commands STX and STX2RX in the link layer
+    // register 0xf00 then send the packet of DMA channel 3 as a BLE PDU
+    void enable_radio_ble(bool enabled) noexcept { radio_ble_enabled_ = enabled; }
     void set_radio_time_offset(std::uint64_t offset_ns) noexcept {
         radio_time_offset_ns_ = offset_ns;
     }
@@ -340,6 +343,9 @@ private:
     std::uint64_t radio_time_offset_ns_{0};
     std::uint64_t radio_tx_finish_ns_{0};
     bool radio_tx_busy_{false};
+    bool radio_ble_enabled_{false};
+    bool ble_tx_pending_{false};
+    std::uint64_t ble_tx_start_ns_{0};
     std::vector<std::uint8_t> flash_;
     std::array<std::uint8_t, RegisterSize> registers_{};
     std::array<std::uint8_t, 256> analog_registers_{};
@@ -446,6 +452,8 @@ private:
     std::uint32_t dma_address(std::uint32_t low_offset,
                               std::uint32_t high_offset) const noexcept;
     void start_radio_transmit();
+    void start_ble_transmit(std::uint8_t command);
+    void launch_ble_transmit();
     void poll_radio();
     void update_radio_irq();
     std::uint64_t uart_frame_cycles() const;

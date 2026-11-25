@@ -488,6 +488,7 @@ void test_i2c_register_device();
 void test_part_errors_and_events();
 void test_pad_pulls_and_functions();
 void test_adc_reads_net_voltage();
+void test_tlsr8258_sends_a_ble_advertisement();
 void test_i2c_master_with_sensor();
 void test_efr32_pads_follow_nets();
 void test_efr32_config_rules();
@@ -581,6 +582,7 @@ int main() {
     RUN(test_part_errors_and_events);
     RUN(test_pad_pulls_and_functions);
     RUN(test_adc_reads_net_voltage);
+    RUN(test_tlsr8258_sends_a_ble_advertisement);
     RUN(test_i2c_master_with_sensor);
     RUN(test_efr32_pads_follow_nets);
     RUN(test_bl702_runs_an_image_and_prints_on_uart);

@@ -155,6 +155,58 @@ void test_adc_reads_net_voltage() {
     CHECK(sample(0) + 1 >= code8 && sample(0) <= code8 + 1);
 }
 
+// The link layer command of the BLE mode: rf_start_stx2rx() of the vendor SDK writes the command to
+// 0xf00 and then the address of the packet to the DMA channel 3, so the packet is read after the
+// command; rf_set_ble_channel() leaves the channel number in 0x40d and the access address and the CRC
+// seed are in 0x408 and 0x424.
+void test_tlsr8258_sends_a_ble_advertisement() {
+    const auto system = sim::build_system(sim::parse_system_config(
+        "version: 1\nworld:\n  radio:\n    - id: air0\ndevices:\n  - id: d\n    mcus:\n"
+        "      - id: m\n        model: tlsr8258\n        firmware: " + idle_image_path() + "\n"
+        "        radio: { air: air0, protocols: [ble] }\n"));
+    sim::World &world = system->world();
+    Tlsr8258 &device = mcu_of(*system).device();
+
+    // ADV_NONCONN_IND, 8 bytes: the advertiser address and two bytes of data
+    const std::uint8_t packet[] = {0x0a, 0x00, 0x00, 0x00, 0x02, 0x08, 0xa4, 0xc1, 0x38, 0x01,
+                                   0x02, 0x03, 0x02, 0x01};
+    for (std::size_t i = 0; i < sizeof packet; ++i)
+        device.write8(Tlsr8258::RetainedSramBase + 0x1000 + static_cast<std::uint32_t>(i), packet[i]);
+    reg_write(device, 0x40d, 38);
+    const std::uint8_t access_code[] = {0x8e, 0x89, 0xbe, 0xd6}; // rf_set_ble_access_code_adv()
+    for (unsigned i = 0; i < 4; ++i)
+        reg_write(device, 0x408 + i, access_code[i]);
+    reg_write(device, 0x424, 0x55);
+    reg_write(device, 0x425, 0x55);
+    reg_write(device, 0x426, 0x55);
+
+    // The command first, the address of the packet after it
+    reg_write(device, 0xf00, 0x85);
+    reg_write(device, 0xc0c, 0x00);
+    reg_write(device, 0xc0d, 0x10);
+    CHECK((reg_read(device, 0xf20) & 0x02) == 0);
+    world.run_until(world.now() + 1000000);
+
+    const auto &frames = world.radio("air0").frames();
+    CHECK(frames.size() == 1);
+    if (frames.size() == 1) {
+        CHECK(frames[0].protocol == mcuemu::RadioProtocol::Ble);
+        CHECK(frames[0].channel == 38);
+        CHECK(frames[0].ble.access_address == 0x8e89bed6u);
+        CHECK(frames[0].ble.crc_init == 0x555555u);
+        CHECK(frames[0].ble.ll_framed);
+        CHECK(frames[0].payload ==
+              std::vector<std::uint8_t>(packet + 4, packet + sizeof packet));
+    }
+    CHECK((reg_read(device, 0xf20) & 0x02) != 0); // TX done
+
+    // The stop command cancels a start that has not happened
+    reg_write(device, 0xf00, 0x85);
+    reg_write(device, 0xf00, 0x80);
+    world.run_until(world.now() + 1000000);
+    CHECK(world.radio("air0").frames().size() == 1);
+}
+
 namespace {
 
 struct SdkI2c {
