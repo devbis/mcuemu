@@ -153,6 +153,12 @@ them from bits 4 (SN) and 5 (NESN) of `0xf03`, and after a received packet it sh
 assignment of the bits follows from the stack's copy and from the result (a response that is neither
 lost nor repeated); there is no hardware trace.
 
+With these the ATC firmware serves ATT over the model: Exchange MTU, Read By Group Type (the services
+GAP, GATT, Device Information and others), Read By Type (the characteristics) and Read (the Device
+Name `ATC_023460`) all answer through the HCI of the `ble_host` part, and its L2CAP request to update
+the connection parameters (it comes seconds after the connection) can be answered by the host. The
+`firmware_tlsr8258_atc_connection` test reads the Device Name.
+
 Not modeled: encryption, whitening (the air adds the framing), the radio state machine of the BRX events,
 window widening, and the transmit power. The Zigbee path is unchanged and is used when no `ble`
 protocol is configured.

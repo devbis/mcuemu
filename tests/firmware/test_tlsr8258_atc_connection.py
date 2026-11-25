@@ -8,7 +8,8 @@ between them. The connection must come up and must still be there well after the
 timeout of 2 s that the test asks for: the stack drops a connection when it sees no valid packet,
 which it did while the radio model wrote no CRC behind the received PDUs and returned a stale 32 kHz
 counter to the sleep code. The test also sends an ATT Exchange MTU Request and expects the response,
-which the firmware hands to the radio through the transmit queue of DMA channel 3.
+which the firmware hands to the radio through the transmit queue of DMA channel 3, and then reads the
+Device Name (handle 3) and expects the name of the advertisement.
 
 The emulator runs at the speed of the wall clock (--speed 1) because the host is a program outside.
 """
@@ -96,6 +97,8 @@ def run_host(port: int, emulator: subprocess.Popen) -> str | None:
     connected_at = None
     handle = None
     requested = False
+    read_sent = False
+    name = None
     answered = 0
     buffer = b""
     while True:
@@ -105,12 +108,21 @@ def run_host(port: int, emulator: subprocess.Popen) -> str | None:
         if connected_at is not None and now - connected_at > HOLD_S:
             if answered != 1:
                 return f"{answered} ATT Exchange MTU Responses, expected one"
+            if name is None:
+                return "no answer to the read of the Device Name"
+            if name != b"ATC_023460":
+                return f"the Device Name is {name!r}"
             return None
         if handle is not None and not requested and now - connected_at > 0.05:
             att = bytes([0x02, 0x17, 0x00])
             sock.sendall(bytes([2]) + struct.pack("<HH", handle | 0x2000, len(att) + 4)
                          + struct.pack("<HH", len(att), 4) + att)
             requested = True
+        if requested and not read_sent and now - connected_at > 0.6:
+            att = bytes([0x0A, 0x03, 0x00])  # Read Request, handle 3: the Device Name
+            sock.sendall(bytes([2]) + struct.pack("<HH", handle | 0x2000, len(att) + 4)
+                         + struct.pack("<HH", len(att), 4) + att)
+            read_sent = True
         try:
             buffer += sock.recv(4096)
         except socket.timeout:
@@ -132,6 +144,8 @@ def run_host(port: int, emulator: subprocess.Popen) -> str | None:
             buffer = buffer[5 + size :]
             if data[2:4] == b"\x04\x00" and data[4:5] == b"\x03":  # ATT Exchange MTU Response
                 answered += 1
+            if data[2:4] == b"\x04\x00" and data[4:5] == b"\x0b":  # ATT Read Response
+                name = data[5:]
         if emulator.poll() is not None:
             return "the emulator exited"
 
