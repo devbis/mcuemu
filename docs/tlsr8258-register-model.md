@@ -137,11 +137,17 @@ the read mode existed the model returned the compare value of the last sleep as 
 vendor sleep code (`cpu_sleep_wakeup_32k_rc`) computed the wakeup of the next connection event from it
 and asked for a wakeup in the past, so the firmware never woke up.
 
-Not modeled: the transmit queue of the DMA channel 3 (`0xc2a` write/read pointers, `0xc2c` packet
-address), through which the vendor stack hands a data packet to the radio, so a slave answers every
-event with an empty PDU and never with the ATT response it queued; encryption, whitening (the air adds
-the framing), the radio state machine of the BRX events, window widening, and the transmit power. The
-Zigbee path is unchanged and is used when no `ble` protocol is configured.
+The vendor stack hands data to the radio through a queue: it clears it with `0xc2a` bit 6 at the start
+of an event and writes the address of the packet it sent last and then that of the next one to `0xc2c`
+(an empty PDU is the usual first entry). The model sends the next entry when the NESN of the packet
+just received acknowledged the last one and the first otherwise (a repeat); with an empty queue the
+packet of `0xc0c` goes. The ATC firmware then answers an ATT Exchange MTU Request. The queue depth,
+the pointer registers `0xc2a`/`0xc2b` as read back, and the exact retransmission rules are inferred
+from the ATC firmware only.
+
+Not modeled: encryption, whitening (the air adds the framing), the radio state machine of the BRX events,
+window widening, and the transmit power. The Zigbee path is unchanged and is used when no `ble`
+protocol is configured.
 
 ## Next accuracy steps
 
