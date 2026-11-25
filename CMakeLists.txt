@@ -499,6 +499,29 @@ if(MCUEMU_BUILD_TESTS)
             "Skipping firmware_phy6252_zephyr_join: local PB-03F Zephyr, PHY6222 ROM/calibration or sampleGW inputs not found in firmware/")
     endif()
 
+    set(MCUEMU_ATC_FIRMWARE "${CMAKE_CURRENT_SOURCE_DIR}/firmware/atc_v59.bin")
+    if(EXISTS "${MCUEMU_ATC_FIRMWARE}")
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            add_test(
+                NAME firmware_tlsr8258_atc_beacon
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_tlsr8258_atc_beacon.py"
+                        "$<TARGET_FILE:mcuemu>"
+                        "${MCUEMU_ATC_FIRMWARE}")
+            set_tests_properties(firmware_tlsr8258_atc_beacon PROPERTIES
+                TIMEOUT 600
+                LABELS "firmware;ble"
+            )
+        else()
+            message(STATUS
+                "Skipping firmware_tlsr8258_atc_beacon: Python 3 interpreter not found")
+        endif()
+    else()
+        message(STATUS
+            "Skipping firmware_tlsr8258_atc_beacon: firmware/atc_v59.bin (pvvx ATC_MiThermometer) not found")
+    endif()
+
     set(MCUEMU_PHY62XX_SLEEP_FIRMWARE
         "${CMAKE_CURRENT_SOURCE_DIR}/firmware/phy62x2-sleepselftest.bin")
     set(MCUEMU_PHY62XX_SLEEP_NORC_FIRMWARE

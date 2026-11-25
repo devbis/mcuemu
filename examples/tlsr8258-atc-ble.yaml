@@ -1,0 +1,25 @@
+# The BLE firmware ATC_v59.bin of pvvx's ATC_MiThermometer (the LYWSD03MMC image) on a TLSR8258 model:
+# it advertises on the channels 37, 38 and 39. The capture is a BLE link-layer pcap (Wireshark:
+# LE_LL_WITH_PHDR); BTHome service data 0xFCD2 is in the advertisement.
+# Put the image at firmware/atc_v59.bin (https://github.com/pvvx/ATC_MiThermometer/raw/refs/heads/master/bin/ATC_v59.bin).
+#
+#   mkdir -p /tmp/atc && cd /tmp/atc && /path/to/build/mcuemu sim /path/to/examples/tlsr8258-atc-ble.yaml
+version: 1
+
+world:
+  seed: 1
+  duration: 12s
+  radio:
+    - id: air0
+
+devices:
+  - id: atc
+    mcus:
+      - id: mcu
+        model: tlsr8258
+        variant: F512
+        firmware: ../firmware/atc_v59.bin
+        radio: { air: air0, position: [0, 0, 1], tx_power_dbm: 4, protocols: [ble] }
+
+attach:
+  - { endpoint: air0, sink: "pcap:atc-ble.pcap,ble" }
