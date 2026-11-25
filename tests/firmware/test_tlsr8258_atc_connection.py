@@ -7,8 +7,8 @@ A4:C1:38:02:34:60), so the firmware receives a CONNECT_IND, answers the connecti
 between them. The connection must come up and must still be there well after the supervision
 timeout of 2 s that the test asks for: the stack drops a connection when it sees no valid packet,
 which it did while the radio model wrote no CRC behind the received PDUs and returned a stale 32 kHz
-counter to the sleep code. The model has no transmit queue yet, so the test does not expect an answer
-to an ATT request.
+counter to the sleep code. The test also sends an ATT Exchange MTU Request and expects the response,
+which the firmware hands to the radio through the transmit queue of DMA channel 3.
 
 The emulator runs at the speed of the wall clock (--speed 1) because the host is a program outside.
 """
@@ -94,13 +94,21 @@ def run_host(port: int, emulator: subprocess.Popen) -> str | None:
     )
     started = time.time()
     connected_at = None
+    handle = None
+    requested = False
+    answered = False
     buffer = b""
     while True:
         now = time.time()
         if connected_at is None and now - started > CONNECT_TIMEOUT_S:
             return "the connection did not come up"
         if connected_at is not None and now - connected_at > HOLD_S:
-            return None
+            return None if answered else "no ATT Exchange MTU Response"
+        if handle is not None and not requested and now - connected_at > 0.05:
+            att = bytes([0x02, 0x17, 0x00])
+            sock.sendall(bytes([2]) + struct.pack("<HH", handle | 0x2000, len(att) + 4)
+                         + struct.pack("<HH", len(att), 4) + att)
+            requested = True
         try:
             buffer += sock.recv(4096)
         except socket.timeout:
@@ -113,8 +121,15 @@ def run_host(port: int, emulator: subprocess.Popen) -> str | None:
                 if payload[1] != 0:
                     return f"LE Connection Complete with status {payload[1]:#04x}"
                 connected_at = time.time()
+                handle = struct.unpack("<H", payload[2:4])[0]
             elif event == 0x05:  # Disconnection Complete
                 return f"disconnected with reason {payload[3]:#04x} after {now - (connected_at or now):.1f} s"
+        while len(buffer) >= 5 and buffer[0] == 2 and len(buffer) >= 5 + struct.unpack("<H", buffer[3:5])[0]:
+            size = struct.unpack("<H", buffer[3:5])[0]
+            data = buffer[5 : 5 + size]
+            buffer = buffer[5 + size :]
+            if data[2:4] == b"\x04\x00" and data[4:5] == b"\x03":  # ATT Exchange MTU Response
+                answered = True
         if emulator.poll() is not None:
             return "the emulator exited"
 

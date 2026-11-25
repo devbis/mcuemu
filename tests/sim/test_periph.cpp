@@ -382,6 +382,32 @@ void test_tlsr8258_32k_counter_read_mode() {
     CHECK(reg_read(*rig.device, 0x754) == 0x78); // the compare value is still there
 }
 
+// The stack hands data to the radio through the queue of DMA channel 3: it clears it with 0xc2a bit 6
+// and pushes the packet sent last and the next one to 0xc2c. The next one goes when the master
+// acknowledged the last
+void test_tlsr8258_ble_slave_sends_from_the_queue() {
+    BleRig rig;
+    rig.sram(0x1000, {0x02, 0x00, 0x00, 0x00, 0x01, 0x00});                          // empty, sent before
+    rig.sram(0x1100, {0x09, 0x00, 0x00, 0x00, 0x02, 0x03, 0xaa, 0xbb, 0xcc});       // data, 3 bytes
+    reg_write(*rig.device, 0xc2a, 0x40);
+    for (std::uint16_t address : {std::uint16_t{0x1000}, std::uint16_t{0x1100}}) {
+        reg_write(*rig.device, 0xc2c, static_cast<std::uint8_t>(address));
+        reg_write(*rig.device, 0xc2d, static_cast<std::uint8_t>(address >> 8));
+    }
+    reg_write(*rig.device, 0xf00, 0x82);
+    rig.world->run_until(rig.world->now() + 100000);
+    // The master's NESN 1 acknowledges our last packet
+    const std::uint64_t at = rig.world->now() + 50000;
+    rig.peer_sends(at, {0x06, 0x00});
+    rig.world->run_until(at + 1000000);
+    const auto &frames = rig.world->radio("air0").frames();
+    CHECK(frames.size() == 2);
+    if (frames.size() == 2) {
+        CHECK(frames[1].payload.size() == 5);
+        CHECK(frames[1].payload.size() < 5 || frames[1].payload[2] == 0xaa);
+    }
+}
+
 namespace {
 
 struct SdkI2c {

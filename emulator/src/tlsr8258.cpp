@@ -1093,7 +1093,12 @@ void Tlsr8258::launch_ble_transmit() {
     const bool ble_tx_is_answer_was = ble_tx_is_answer_;
     ble_tx_is_answer_ = false;
     const std::uint8_t channel = registers_[0x40d];
-    const std::uint32_t address = dma_address(0x0c0c, 0x0c43);
+    std::uint32_t address = dma_address(0x0c0c, 0x0c43);
+    if (ble_tx_is_answer_was && !ble_tx_queue_.empty()) {
+        // The stack queues the packet that was sent last and, behind it, the next one. The master's
+        // NESN says which of them goes: the next one when it acknowledged the last
+        address = ble_tx_queue_.size() > 1 && ble_last_acked_ ? ble_tx_queue_[1] : ble_tx_queue_[0];
+    }
     const std::size_t length = read8(address + 5u);
     std::vector<std::uint8_t> pdu;
     pdu.reserve(length + 2u);
@@ -1234,7 +1239,8 @@ void Tlsr8258::poll_ble_receive(std::uint64_t previous_poll_ns, std::uint64_t no
             // carries both in its header (the firmware puts only the LLID there)
             const bool rx_sn = (frame.payload[0] & 0x08u) != 0;
             const bool rx_nesn = (frame.payload[0] & 0x04u) != 0;
-            if (rx_nesn != ble_sn_)
+            ble_last_acked_ = rx_nesn != ble_sn_;
+            if (ble_last_acked_)
                 ble_sn_ = !ble_sn_;
             if (rx_sn == ble_nesn_)
                 ble_nesn_ = !ble_nesn_;
@@ -1713,6 +1719,13 @@ void Tlsr8258::update_system_timer_calibration() noexcept {
 }
 
 void Tlsr8258::write_register(std::uint32_t offset, std::uint8_t value) {
+    if (offset == 0xc2a && (value & 0x40u) != 0)
+        ble_tx_queue_.clear();
+    if (offset == 0xc2d) {
+        registers_[offset] = value;
+        ble_tx_queue_.push_back(dma_address(0x0c2c, 0x0c43));
+        return;
+    }
     if (offset == 0x007) {
         registers_[offset] = value;
         i2c_start_command(value);

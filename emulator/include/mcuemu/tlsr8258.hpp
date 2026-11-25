@@ -300,6 +300,9 @@ private:
     bool wake_timer_armed_{false};
     // The 32 kHz counter latched by the read command of 0x74f (0x74c = 0x28); 0x754 reads it back
     std::uint32_t tick_32k_latched_{0};
+    // Packet addresses pushed through 0xc2c (the transmit queue of DMA channel 3), cleared by 0xc2a bit 6
+    std::vector<std::uint32_t> ble_tx_queue_;
+    bool ble_last_acked_{false};
     bool sleep_entry_pending_{false};
     std::uint32_t sleep_entry_cycles_remaining_{0};
     Tlsr8258PowerState pending_sleep_state_{Tlsr8258PowerState::Awake};

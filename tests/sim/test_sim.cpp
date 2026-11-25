@@ -492,6 +492,7 @@ void test_tlsr8258_sends_a_ble_advertisement();
 void test_tlsr8258_receives_after_stx2rx();
 void test_tlsr8258_ble_slave_answers_a_packet();
 void test_tlsr8258_ble_receive_times_out();
+void test_tlsr8258_ble_slave_sends_from_the_queue();
 void test_tlsr8258_ble_receive_writes_the_crc();
 void test_tlsr8258_32k_counter_read_mode();
 void test_i2c_master_with_sensor();
@@ -591,6 +592,7 @@ int main() {
     RUN(test_tlsr8258_receives_after_stx2rx);
     RUN(test_tlsr8258_ble_slave_answers_a_packet);
     RUN(test_tlsr8258_ble_receive_times_out);
+    RUN(test_tlsr8258_ble_slave_sends_from_the_queue);
     RUN(test_tlsr8258_ble_receive_writes_the_crc);
     RUN(test_tlsr8258_32k_counter_read_mode);
     RUN(test_i2c_master_with_sensor);
