@@ -108,16 +108,16 @@ void test_adc_reads_net_voltage() {
     analog_write(device, 0xec, 0x43); // differential, 14-bit
     analog_write(device, 0xef, 0xff); // R_max_mc = 1023, R_max_s = 15 (~23 kHz)
     analog_write(device, 0xf1, 0xcf);
-    // 32-byte ring buffer at 0x841000 (size register counts 16-byte units).
+    // 64-byte ring buffer of 16 entries at 0x841000 (size register counts 16-byte units).
     reg_write(device, 0xb08, 0x00);
     reg_write(device, 0xb09, 0x10);
-    reg_write(device, 0xb0a, 0x01);
+    reg_write(device, 0xb0a, 0x03);
     reg_write(device, 0xb1e, 0x00);
     reg_write(device, 0xb1f, 0x00);
     reg_write(device, 0xb10, 0x04); // DFIFO2 input enable
 
     auto sample = [&](unsigned index) {
-        return static_cast<unsigned>(device.read16(Tlsr8258::RetainedSramBase + 0x1000 + index * 2));
+        return static_cast<unsigned>(device.read16(Tlsr8258::RetainedSramBase + 0x1000 + index * 4));
     };
 
     world.run_until(world.now() + 500000);

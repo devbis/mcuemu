@@ -13,11 +13,14 @@
 // inverts the SDK's mv = code * prescale * vref >> 13 for the differential
 // P-N voltage with the 1.2 V reference at a calibrated 1175 mV.
 //
-// Inferred, not documented: samples are stored as 16-bit entries (the SDK
-// reads the buffer as 32-bit words and uses only the low 13 bits plus the sign
-// at bit 13, which works with either layout); the first sample lands one
-// period after the channel is enabled; the left/right channels, PGA and the
-// temperature sensor are not modeled (they read as 0 mV).
+// Each sample takes a 32-bit entry of the buffer, the code in the low 16 bits
+// (13 bits plus the sign at bit 13) and the write pointer 0xb0e advances by 4:
+// the ATC firmware of the LYWSD03MMC, which runs on the real chip, reads the
+// buffer as an array of 32-bit words, waits for the pointer to move before it
+// reads a word and notes the pointer as 0, 4, 8, c, 10... What the upper half
+// of an entry holds is not known and is written as 0. Inferred: the first
+// sample lands one period after the channel is enabled; the left/right
+// channels, PGA and the temperature sensor are not modeled (they read as 0 mV).
 
 #include "mcuemu/tlsr8258.hpp"
 
@@ -101,21 +104,24 @@ void Tlsr8258::adc_advance() {
         (static_cast<std::uint32_t>(registers_[Dfifo2Size]) + 1u) * 16u;
     // After a long jump (sleep) only the newest buffer's worth of samples is
     // observable, so do not replay the whole gap.
+    const std::uint32_t entries = size / 4u;
     const std::uint64_t pending = (time_ns_ - adc_next_sample_ns_) / period_ns;
-    if (time_ns_ >= adc_next_sample_ns_ && pending > size / 2u)
-        adc_next_sample_ns_ = time_ns_ - (size / 2u) * period_ns;
+    if (time_ns_ >= adc_next_sample_ns_ && pending > entries)
+        adc_next_sample_ns_ = time_ns_ - entries * period_ns;
     while (adc_next_sample_ns_ <= time_ns_) {
         const std::uint16_t sample = adc_sample();
         const std::uint32_t at = base + dfifo2_write_pointer_;
         try {
             write8(at, static_cast<std::uint8_t>(sample & 0xff));
             write8(at + 1, static_cast<std::uint8_t>(sample >> 8));
+            write8(at + 2, 0);
+            write8(at + 3, 0);
         } catch (const BusFault &) {
             // A buffer address outside mapped memory: the hardware would write
             // into the void, so the sample is dropped.
         }
         dfifo2_write_pointer_ = static_cast<std::uint16_t>(
-            (dfifo2_write_pointer_ + 2u) % size);
+            (dfifo2_write_pointer_ + 4u) % size);
         adc_next_sample_ns_ += period_ns;
     }
 }

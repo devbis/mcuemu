@@ -87,9 +87,11 @@ Inferred, not documented: the I2C `ACK` command bit makes the master release
 SDA (NACK) after a received byte, as the SDK sets it on the last byte; `NAK`
 reports a missing slave ACK on any written byte of the command and the
 remaining phases still run; clock stretching is not modeled. ADC samples are
-stored as 16-bit entries (the SDK reads the buffer through 32-bit words and
-uses only the low 13 bits plus the sign at bit 13, which works for either
-layout); the 1.2 V reference is `1175 mV` like the SDK's default calibration;
+stored as 32-bit entries, the code in the low 16 bits and the DFIFO2 write
+pointer moving by 4 (the ATC firmware of the LYWSD03MMC waits for the pointer
+to move and then reads the buffer as 32-bit words; with 2-byte entries it
+read words that were not written yet and took a full battery for an empty one;
+the upper half of an entry is written as 0, its content is not known); the 1.2 V reference is `1175 mV` like the SDK's default calibration;
 left/right channels, PGA and the temperature sensor are not modeled. The I2C
 slave mode and SPI master/slave are not modeled.
 
