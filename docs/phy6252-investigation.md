@@ -423,10 +423,13 @@ The supplied ROM dump (`rom_10000000_20000.bin`, SHA-256
 as executable PHY62xx ROM for direct-image runs:
 its bytes are mapped at zero and `0x10000000`, and the Zephyr driver exercises
 its flash and wake paths. A separate experiment started the CPU at the ROM's
-reset vector for cold boot. That run remained alive for 10 seconds but produced
-only 596 bytes of coordinator-side pcap traffic and did not associate. The
-model therefore keeps direct image entry as the default; ROM reset startup
-still needs its missing board and retained-state initialization modeled.
+reset vector for cold boot. That run stayed in the ROM's UART loader window,
+because the model's free-running timer stuck at zero when the ROM enabled
+timer 1 with `LoadCount` 0 and measured the window with its current count
+(`0x40001004`). With that fixed (see "Cold start and system sleep through the ROM"
+below) `boot_from_rom` starts both the PB-03F sleep self test and the closed
+TS0001 image after the ROM's window of about 50 ms. Direct image entry is still
+the default.
 
 Using the same external ROM with the PB-03F Zephyr image reaches the Zephyr
 boot banner and Zigbee thread. Its first flash update exposed a CPU store at
@@ -1383,10 +1386,11 @@ bidirectional NWK traffic in the pcap. The binaries remain external local test
 inputs and are not included in the repository.
 
 `--boot-from-rom` or YAML `boot_from_rom: true` starts at the external ROM's
-reset vector instead. This is an experimental ROM-analysis mode: with the
-supplied dump and TS0001 image it remains in ROM (PC `0xac52`) for a one-second
-run and emits no UART output. It does not yet hand off to the image, so use the
-default direct-image path for the verified Zephyr compatibility scenario.
+reset vector instead: the ROM waits its UART loader window of about 50 ms (the
+count of timer 1), copies the SRAM segments of the image table, and runs the
+image. The PB-03F sleep self test (`examples/phy6252-sleepselftest.yaml`) and the
+TS0001 image both start this way. The default direct-image path stays the one
+of the Zephyr join tests.
 Firmware inputs can be the package beginning at physical flash offset `0x2000`
 or a 512 KiB full flash dump; keep local images outside the repository.
 For the TS0001 capture setup, place the full dump at
@@ -1422,3 +1426,38 @@ is `MiF=0x1918`, `Tim=131`, and `lMac=210`, compared with
 remains zero, and no `On/Off` line appears. This offline replay checks the UART
 and local GPIO path. `firmware_phy6252_ts0001_join` checks the radio path and the join with
 the coordinator.
+
+## Cold start and system sleep through the ROM
+
+`boot_from_rom` makes the model run the dumped ROM's reset path, which is what the
+PHY62x2 does, so the reset cause, the loader window and the wake path are the ROM's own
+code. The facts about the chip are in [`phy62xx.md`](phy62xx.md); what the model does:
+
+- **Cold start.** The ROM reads `SLEEP_R[0]` (the ROM writes `1` back), enters its UART loader
+  window (a state machine on the count of timer 1: 2 ms, then 50 ms) and runs the image. The
+  self test prints `rom cause 0 SLEEP_R0 0x1` for it, as the board does.
+- **System sleep.** The write of `0xa5a55a5a` to `PWRSLP` stops the chip. It wakes at the
+  RTC compare 0 (interrupt and event enabled) or on a configured wake pad, and **only when
+  `PMCTL0` bit 28 is set**, the RC32K bit that the SDK's `hal_rtc_clock_config()` sets for
+  "rc32k wakeup". On the board a chip with the reset value of `PMCTL0` never woke from any sleep;
+  which bit is required is inferred from the SDK comment and from the failed run with
+  `PMCTL0[29:27]` clear.
+- **What the wake keeps and loses.** The AON block survives. Of the SRAM only the blocks that
+  `PMCTL2_0[21:17]` retains survive (bit 0: 32 KiB at `0x1fff0000`, bits 1 and 2: the 16 KiB blocks);
+  the others are cleared. The core, the UART, the timers, the GPIO, the SPIF state, the clock gates
+  and the pin multiplexer return to their reset state, the core clock to 16 MHz. The ROM then
+  starts from its vector: the first `0x100` bytes of address zero are ROM again, although the model
+  lets a program write that alias (Zephyr relocates its vectors there; on the chip the write
+  is ignored).
+- **Wake path of the ROM.** With the sleep flag (AON `0xa8` bit 0, set by the ROM's
+  `set_sleep_flag(1)`) the ROM calls `jump[62]`; with `SLEEP_R[0] = 4` (the deep sleep) it
+  starts the image with the reset cause 5. Both run as ROM code.
+- **Timers.** A free-running timer (not user mode) at zero reloads `0xffffffff` on the next tick;
+  before, the scheduler's sync every tick left it at zero for ever.
+- **Pin multiplexer.** The IOMUX window `0x40003800..0x40003850` reads back every word; the Zephyr
+  suspend saves and restores all of them.
+
+Tests: `firmware_phy62xx_sleep` runs the sleep self test (`firmware-src/phy62x2-sleepselftest`:
+three suspends to RAM, a deep sleep with a retained counter, expected reset causes and RTC times)
+and a variant that clears `PMCTL0` bit 28 before its first sleep, which must stay asleep.
+The model encodes what was learned on the board; it is not an independent check of it.
