@@ -1,0 +1,26 @@
+/ {
+	chosen {
+		/delete-property/ zephyr,code-partition;
+	};
+
+	sram_retained: memory@1ffffc00 {
+		compatible = "zephyr,memory-region", "mmio-sram";
+		reg = <0x1ffffc00 0x400>;
+		zephyr,memory-region = "RetainedMem";
+
+		retained_ram: retainedmem {
+			compatible = "zephyr,retained-ram";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			retention0: retention@0 {
+				compatible = "zephyr,retention";
+				reg = <0x0 0x100>;
+			};
+		};
+	};
+};
+
+&sram0 {
+	reg = <0x1fff1840 0xe3c0>;
+};

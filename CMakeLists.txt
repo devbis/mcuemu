@@ -483,6 +483,40 @@ if(MCUEMU_BUILD_TESTS)
             "Skipping firmware_phy6252_zephyr_join: local PB-03F Zephyr, PHY6222 ROM/calibration or sampleGW inputs not found in firmware/")
     endif()
 
+    set(MCUEMU_PHY62XX_SLEEP_FIRMWARE
+        "${CMAKE_CURRENT_SOURCE_DIR}/firmware/phy62x2-sleepselftest.bin")
+    set(MCUEMU_PHY62XX_SLEEP_NORC_FIRMWARE
+        "${CMAKE_CURRENT_SOURCE_DIR}/firmware/phy62x2-sleepselftest-norc.bin")
+    if(EXISTS "${MCUEMU_PHY62XX_SLEEP_FIRMWARE}" AND
+       EXISTS "${MCUEMU_PHY62XX_SLEEP_NORC_FIRMWARE}" AND
+       EXISTS "${MCUEMU_PHY6252_ROM}" AND
+       EXISTS "${MCUEMU_PHY6252_EFUSE}" AND
+       EXISTS "${MCUEMU_PHY6252_RF_CALIBRATION}")
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            add_test(
+                NAME firmware_phy62xx_sleep
+                COMMAND "${Python3_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tests/firmware/test_phy62xx_sleep.py"
+                        "$<TARGET_FILE:mcuemu>"
+                        "${MCUEMU_PHY62XX_SLEEP_FIRMWARE}"
+                        "${MCUEMU_PHY62XX_SLEEP_NORC_FIRMWARE}"
+                        "${MCUEMU_PHY6252_ROM}"
+                        "${MCUEMU_PHY6252_EFUSE}"
+                        "${MCUEMU_PHY6252_RF_CALIBRATION}")
+            set_tests_properties(firmware_phy62xx_sleep PROPERTIES
+                TIMEOUT 600
+                LABELS "firmware;phy6252"
+            )
+        else()
+            message(STATUS
+                "Skipping firmware_phy62xx_sleep: Python 3 interpreter not found")
+        endif()
+    else()
+        message(STATUS
+            "Skipping firmware_phy62xx_sleep: local sleep self test images or PHY6222 ROM inputs not found in firmware/")
+    endif()
+
     set(MCUEMU_PHY6252_TS0001_FIRMWARE
         "${CMAKE_CURRENT_SOURCE_DIR}/firmware/phy6252-ts0001.bin")
     if(EXISTS "${MCUEMU_PHY6252_TS0001_FIRMWARE}" AND

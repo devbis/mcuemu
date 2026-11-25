@@ -1,0 +1,23 @@
+# Self test of the sleeps of the PHY62x2 (three suspends to RAM and a deep sleep with the retained RAM).
+# Build the sleep self test for pb_03f (zephyr.phy62x2.bin, 16 MHz core, no MCUboot) and keep it at
+# firmware/phy62x2-sleepselftest.bin; the ROM, eFuse and RF calibration dumps stay local too. The ROM boots
+# the image itself (boot_from_rom), so the reset cause and the wake path are the ROM's.
+version: 1
+
+world:
+  seed: 1
+  duration: 6s
+
+devices:
+  - id: pb03f
+    mcus:
+      - id: mcu
+        model: phy6252
+        firmware: ../firmware/phy62x2-sleepselftest.bin
+        boot_from_rom: true
+        rom: ../firmware/phy6222-rom.bin
+        efuse: ../firmware/phy6222-efuse.bin
+        rf_calibration: ../firmware/phy6222-rfcal.bin
+
+attach:
+  - { endpoint: pb03f.mcu.uart0, sink: "text" }
