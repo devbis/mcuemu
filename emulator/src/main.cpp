@@ -456,6 +456,14 @@ int run_command(int argc, char **argv) {
     mcuemu::Tlsr8258 device(parse_run_model(model));
     device.set_rc32k_characteristics(rc32k_hz, rc32k_calibration);
     device.set_analog_trace_enabled(trace_analog, trace_limit);
+    // No board: a pad that the chip drives sits at the rail or at ground, which is how a firmware
+    // measures the supply through a pad driven high (the ATC firmware of the LYWSD03MMC does)
+    device.set_adc_input_provider([&device](unsigned port, unsigned bit) {
+        const std::uint8_t mask = static_cast<std::uint8_t>(1u << bit);
+        if (device.gpio_is_gpio(port, bit) && (device.gpio_oen(port) & mask) == 0)
+            return (device.gpio_output(port) & mask) ? device.supply_mv() : 0u;
+        return 0u;
+    });
     std::ifstream input(firmware, std::ios::binary);
     if (!input)
         throw std::runtime_error("cannot open firmware image: " + firmware);
