@@ -190,9 +190,13 @@ std::uint64_t timer_cycles_per_tick(std::uint32_t core_clock_hz) {
     return std::max<std::uint64_t>(1, core_clock_hz / TimerClockHz);
 }
 
+// The pin multiplexer (IOMUX) is a block of word registers at 0x40003800..0x40003850: the analog
+// enable, the full-mux enable, the pad enable, the gpio_sel bytes and the pad selection of the ADC.
+// The Zephyr suspend to RAM saves and restores the whole block, so every word reads back.
+constexpr std::uint32_t MuxLast = 0x40003850;
+
 bool mux_select_register(std::uint32_t address) {
-    return address >= MuxSelectBase && address <= MuxSelectBase + 5 * 4 &&
-           ((address - MuxSelectBase) & 3u) == 0;
+    return address >= MuxAnalog && address <= MuxLast && (address & 3u) == 0;
 }
 
 constexpr std::array<std::uint8_t, 23> GpioPullRegister = {
