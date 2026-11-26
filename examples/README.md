@@ -25,6 +25,8 @@
 | `parts/shtc3.lua`, `parts/sht4x.lua`, `parts/lcd_lywsd03mmc.lua` | The two sensors and the I2C segment display of the LYWSD03MMC. |
 | `parts/bl0937.lua` | The BL0937 as a scripted part (CF / CF1 pulse outputs, SEL input). |
 | `ble_host.yaml` | The virtual BLE host scanning a scripted advertiser (`parts/ble_beacon.lua`): the host's HCI stream is served on TCP port 9000 for a host stack such as Bumble (`scripts/ble_scan.py`). Run with `--speed 1`. |
+| `tlsr8258-atc-ble.yaml` | The BLE firmware ATC_v59.bin of pvvx's ATC_MiThermometer on a TLSR8258 model: it advertises on 37/38/39 (BLE link-layer pcap). The image goes to `firmware/atc_v59.bin`. |
+| `tlsr8258-atc-gatt.yaml`, `tlsr8258-atc-gatt.py` | The same firmware next to a `ble_host` part: the program connects over HCI (TCP port 9011, `--speed 1`), reads the services, the characteristics and the Device Name over ATT, and passes the firmware's request for new connection parameters on with LE Connection Update. |
 | `parts/ble_beacon.lua` | A scannable BLE advertiser as a script part (ADV_IND on 37/38/39 and a SCAN_RSP). |
 | `parts/ds18b20.lua`, `parts/sht3x.lua` | Reference sensor scripts (see `docs/scripting.md`). |
 
