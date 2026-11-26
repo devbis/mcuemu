@@ -71,6 +71,17 @@ any H4-over-TCP bridge such as `btproxy`.
 Scripted parts can advertise to the host: `radio.transmit{..., ll = true}` sends
 a whole link-layer PDU (see [scripting.md](scripting.md)).
 
+### A firmware as the peripheral: the ATC thermometer
+
+`examples/tlsr8258-atc-gatt.yaml` puts the pvvx ATC firmware (TLSR8258, image in `firmware/atc_v59.bin`)
+and a `ble_host` on one air, and `examples/tlsr8258-atc-gatt.py` is a small host program over HCI/TCP:
+it connects, exchanges the MTU, discovers the services and characteristics, reads the Device Name
+(`ATC_023460`), and passes the firmware's request for new connection parameters (20 ms, latency 49,
+4 s) on with LE Connection Update, after which the interval on the air changes from 30 to 20 ms. The
+firmware sleeps between events and wakes on the 32 kHz timer. The register-level details are in
+[tlsr8258-register-model.md](tlsr8258-register-model.md#ble-mode-of-the-rf). Only this one firmware has
+been run, and nothing here was compared with a trace from the silicon.
+
 ### What it does
 
 - **HCI**: Reset, event masks (accepted), Read Local Version/Commands/Features/
@@ -115,4 +126,6 @@ scanning pauses while connected; frames from Lua parts that do not set the
 of `T_IFS` (the specification allows 2 us).
 
 Tests: `tests/ble/` (link layer), `tests/sim/test_ble_host.cpp` (host against a
-scripted peripheral and against an nRF52840 RADIO driven through registers).
+scripted peripheral and against an nRF52840 RADIO driven through registers),
+`tests/sim/test_periph.cpp` (the TLSR8258 BLE registers) and the firmware tests
+`firmware_tlsr8258_atc_beacon` and `firmware_tlsr8258_atc_connection` (need the ATC image).

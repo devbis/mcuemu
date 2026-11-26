@@ -142,8 +142,10 @@ synthesizer offsets `0x1244` and `0x1245` then select the nearest Zigbee
 5 MHz channel center. In the local vendor binary, `rf_set_channel` writes
 quarter-MHz frequency units there (for example, `2450.25 MHz` selects channel
 20). The `0x29` write to offset `0x0f16` is a separate RF control constant.
-The medium does not parse Zigbee MAC/APS or BLE link-layer packets, and BLE is
-not connected to TLSR8258 RF registers yet.
+The medium does not parse Zigbee MAC/APS or BLE link-layer packets. With
+`protocols: [ble]` the TLSR8258 RF registers send and receive BLE PDUs instead
+(link layer commands in `0xf00`, the transmit queue of DMA3, the receive buffer of
+DMA2; see `tlsr8258-register-model.md` and [`ble.md`](ble.md)).
 
 ## Simulation core (`simcore`)
 

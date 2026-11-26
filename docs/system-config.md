@@ -465,10 +465,10 @@ Interference is counted for the whole frame once any overlap exists
 can be missed for MCU-driven receivers (parts decide at the frame end).
 TX power comes from the node's `tx_power_dbm`, not from the chip's registers.
 
-`protocols` lists what the node uses. The TLSR8258 model connects only the
-Zigbee RF path; `ble` on it is rejected (its BLE registers are not modeled),
-so BLE traffic comes from scripted parts, which can use the `radio` API in
-[scripting.md](scripting.md). `nrf52840` connects both `zigbee` (MODE 15) and `ble` (MODE 3/4, see [nrf52840.md](nrf52840.md)); `efr32mg21`, `esp32c6` and `bl702` connect an 802.15.4 radio (`zigbee`)
+`protocols` lists what the node uses. The TLSR8258 (F512/F1K) connects both the
+Zigbee RF path and BLE (`ble`, the link layer commands of its RF registers, see
+[ble.md](ble.md)); the TLSR8269 family rejects `ble`. Scripted parts can send BLE
+traffic through the `radio` API in [scripting.md](scripting.md). `nrf52840` connects both `zigbee` (MODE 15) and `ble` (MODE 3/4, see [nrf52840.md](nrf52840.md)); `efr32mg21`, `esp32c6` and `bl702` connect an 802.15.4 radio (`zigbee`)
 and reject `ble`. `cc2530f256` connects its IEEE 802.15.4 radio (`zigbee`
 only, default 32 MHz clock). `stm32wb55` connects the built-in Thread RCP
 compatibility radio when `cpu2_firmware` is absent. With a raw CPU2 image, the

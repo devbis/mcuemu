@@ -6,7 +6,7 @@ into whole systems: you describe devices, wiring, peripherals, and a shared
 radio medium in YAML, and mcuemu runs them on one virtual timeline.
 
 - **System layer (`sim`).** YAML-described systems of devices, nets, parts
-  (built-in and Lua), a shared radio medium (Zigbee-style frames), endpoints and
+  (built-in and Lua), a shared radio medium (IEEE 802.15.4 and Bluetooth LE frames), endpoints and
   sinks (UART, VCD, pcap, files, TCP), and a scenario runner.
 - **Control API.** `mcuemu serve` exposes a JSON-RPC 2.0 API over WebSocket for
   driving and inspecting a running system, with optional realtime pacing.
@@ -19,12 +19,12 @@ radio medium in YAML, and mcuemu runs them on one virtual timeline.
 
 | MCU | Core | Status |
 | --- | --- | --- |
-| Telink TLSR8258 (`TLSR8258F512`, `TLSR8258F1K`) | TC32 | GPIO, timers, UART (incl. DMA), ADC, AES, sleep/wake, Zigbee RF; vendor Zigbee and Zephyr firmware tested |
+| Telink TLSR8258 (`TLSR8258F512`, `TLSR8258F1K`) | TC32 | GPIO, timers, UART (incl. DMA), ADC, AES, sleep/wake, Zigbee RF, BLE RF (advertising, scan response, connection events, ATT); vendor Zigbee and Zephyr firmware and the pvvx ATC BLE firmware tested (`docs/ble.md`) |
 | Telink TLSR8269 / TLSR8267 (`TLSR8269`, `TLSR8267`) | TC32 | GPIO, timers, system timer, DMA UART, MSPI flash, suspend, AES, divider, Zigbee RF; no deep sleep, ADC, I2C; the vendor SDK end device joins the 8258 coordinator (`docs/tlsr826x.md`) |
 | Cmsemicron CA51F253L3 | MCS-51 | CPU, Timer0, UART1, PWM; no GPIO, ADC or radio |
 | TI CC2530F256 | MCS-51 | CPU, FMAP code banks, XBANK/XMAP, SRAM aliases, MPAGE, dual DPTR, interrupt controller (priorities, nesting), PM0-PM3, resets; I/O ports, Timers 1-4, sleep timer, watchdog, DMA, flash controller, AES, ADC/RNG/op-amp/comparator, USART UART/SPI, 802.15.4 radio, two-wire debug interface (DBGLOCK, programming through it); Table 2-3 best-case timing, not cycle accurate |
 | Silicon Labs EFR32MG21 (BRD4181A) | Cortex-M33 | NVIC, SysTick, FPU, WFE; CMU/HFXO, GPIO/EXTI, MSC; a radio with the interface of the zigbee-rs driver (not the silicon's); the zigbee-rs sensor image joins a TLSR8258 coordinator |
-| Nordic nRF52840 (Pro Micro / nice!nano board) | Cortex-M4F | NVIC, SysTick, FPU, WFE; clocks, GPIO/GPIOTE, UARTE, TWIM, SAADC, TIMER, RTC, RNG, ECB, WDT, NVMC, PPI; 802.15.4 RADIO; the Embassy Zigbee sensor image joins a TLSR8258 coordinator; no BLE yet |
+| Nordic nRF52840 (Pro Micro / nice!nano board) | Cortex-M4F | NVIC, SysTick, FPU, WFE; clocks, GPIO/GPIOTE, UARTE, TWIM, SAADC, TIMER, RTC, RNG, ECB, WDT, NVMC, PPI; 802.15.4 RADIO and BLE 1M/2M at register level (`docs/ble.md`); the Embassy Zigbee sensor image joins a TLSR8258 coordinator |
 | STM32WB55 | Cortex-M4F + Cortex-M0+ | Experimental dual-core model with shared flash/SRAM; the official Thread RCP CPU2 image associates and exchanges initial NWK frames over the modeled radio path, then the current Zephyr CPU1 image faults during later operation |
 | PHY6252 (Ai-Thinker PB-03F) | Cortex-M0 | Experimental 512 KiB flash model, polling UART, GPIO, timers, AON and inferred 802.15.4 path; the Zephyr ED joins a TLSR8258 coordinator and exchanges NWK data in `sim`; the closed TS0001 relay firmware joins the TLSR8258 sample coordinator and exchanges NWK data |
 
